@@ -1,0 +1,6 @@
+{
+  "name": "Thủy_Trắc nghiệm App",
+  "description": "Quiz Master Hub is a web application for teachers to create and administer online quizzes from Word documents.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

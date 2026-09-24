@@ -1,0 +1,1 @@
+ALTER TABLE public.exams ADD COLUMN IF NOT EXISTS allow_review boolean NOT NULL DEFAULT false;
