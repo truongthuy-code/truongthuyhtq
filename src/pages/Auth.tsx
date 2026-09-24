@@ -265,8 +265,11 @@ export default function AuthPage() {
             <FileText className="size-6" />
           </div>
           <h1 className="text-xl sm:text-2xl font-black uppercase tracking-tight">
-            Hệ thống Tạo đề trắc nghiệm
+            Hệ thống Tạo đề trắc nghiệm Online
           </h1>
+          <p className="text-xs font-semibold text-primary mt-1 uppercase tracking-wide">
+            Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
+          </p>
           <p className="text-xs text-muted-foreground mt-0.5">
             Đăng nhập phân quyền theo 3 vai trò: Giáo viên, Học sinh, Quản trị viên
           </p>

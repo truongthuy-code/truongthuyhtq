@@ -329,6 +329,9 @@ export default function Take() {
     return (
       <div className="min-h-screen bg-gradient-soft grid place-items-center p-4">
         <Card className="p-8 max-w-md w-full">
+          <div className="text-xs text-primary font-semibold uppercase tracking-wide mb-1">
+            Hệ thống tạo đề trắc nghiệm Online • Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
+          </div>
           <h1 className="text-2xl font-bold">{exam.title}</h1>
           <div className="mt-2 text-sm text-muted-foreground">
             Thời gian: {exam.duration_minutes} phút •{" "}

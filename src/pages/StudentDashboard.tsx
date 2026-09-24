@@ -194,7 +194,9 @@ export default function StudentDashboard() {
             </div>
             <div>
               <div className="font-bold text-base leading-tight">Cổng Học Sinh</div>
-              <div className="text-xs text-muted-foreground">QuizCheck Platform</div>
+              <div className="text-[11px] text-muted-foreground font-medium">
+                Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
+              </div>
             </div>
           </div>
 
@@ -227,7 +229,7 @@ export default function StudentDashboard() {
           <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <span className="text-xs uppercase tracking-wider font-semibold opacity-85">
-                Trang cá nhân học sinh
+                Trang cá nhân học sinh • Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
               </span>
               <h1 className="text-2xl sm:text-3xl font-extrabold mt-0.5">
                 Xin chào, {student.fullName}!

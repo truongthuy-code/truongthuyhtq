@@ -328,7 +328,10 @@ export default function AdminDashboard() {
               Hệ thống Quản trị Toàn quyền (Admin)
               <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-semibold">Tối cao</Badge>
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs font-semibold text-primary mt-0.5 uppercase tracking-wide">
+              Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
               Toàn quyền quản lý tài khoản giáo viên, tất cả đề thi và kết quả kiểm tra trong toàn bộ hệ thống
             </p>
           </div>

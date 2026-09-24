@@ -138,6 +138,9 @@ export default function StudentAuth() {
             <GraduationCap className="size-6" />
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight">Tài Khoản Học Sinh</h1>
+          <p className="text-xs font-semibold text-primary mt-1 uppercase tracking-wide">
+            Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
+          </p>
           <p className="text-xs text-muted-foreground mt-1 flex items-center justify-center gap-1">
             <ShieldCheck className="size-3.5 text-success inline" />
             Đăng ký & đăng nhập ngay — Không cần xác minh email

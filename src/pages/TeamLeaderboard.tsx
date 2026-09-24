@@ -389,6 +389,11 @@ export default function TeamLeaderboard({
             </span>
           </div>
 
+          <div className="hidden lg:flex items-center gap-1 text-[11px] font-semibold text-indigo-200 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
+            <span>Tác giả:</span>
+            <span className="text-amber-300 font-bold">Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng</span>
+          </div>
+
           {total > 0 && (
             <div className="hidden sm:flex items-center gap-1 text-[11px] sm:text-xs font-bold text-indigo-200 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
               <span>TỔNG SỐ:</span>

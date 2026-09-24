@@ -38,8 +38,8 @@ export default function AppSidebar() {
           {!collapsed && (
             <div className="min-w-0">
               <div className="font-bold text-sm leading-tight text-primary uppercase truncate">Tạo đề trắc nghiệm</div>
-              <div className="text-[11px] text-muted-foreground truncate">
-                {profile?.full_name || user?.email} {profile?.school_name ? `– ${profile.school_name}` : ""}
+              <div className="text-[10px] text-muted-foreground truncate font-medium">
+                Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
               </div>
             </div>
           )}
