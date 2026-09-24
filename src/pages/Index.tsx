@@ -178,11 +178,11 @@ export default function Index() {
               <GraduationCap className="size-7" />
             </div>
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight uppercase">
-              Hệ thống tạo đề trắc nghiệm Online
+              HỆ THỐNG TẠO ĐỀ TRẮC NGHIỆM ONLINE
             </h1>
           </div>
-          <p className="text-sm md:text-base text-white/90">
-            {profile?.full_name || "Giáo viên"} {profile?.school_name ? `– ${profile.school_name}` : ""}
+          <p className="text-sm md:text-base text-white/95 font-semibold tracking-wide uppercase">
+            TRƯƠNG THỊ BÍCH THỦY – THPT PHAN BỘI CHÂU - TP ĐÀ NẴNG
           </p>
         </div>
       </section>
