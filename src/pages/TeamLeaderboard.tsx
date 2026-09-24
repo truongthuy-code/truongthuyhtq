@@ -18,6 +18,7 @@ import {
   Crown,
   Star,
   CheckCircle2,
+  X,
 } from "lucide-react";
 import { useBattleMusic } from "@/hooks/useBattleMusic";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
@@ -163,8 +164,15 @@ function Confetti({ run }: { run: boolean }) {
 /**
  * MÀN HÌNH TRÌNH CHIẾU BẢNG XẾP HẠNG CHO GIÁO VIÊN / MÁY CHIẾU LỚP HỌC
  */
-export default function TeamLeaderboard() {
-  const { id } = useParams();
+export default function TeamLeaderboard({
+  examId: propExamId,
+  onClose,
+}: {
+  examId?: string;
+  onClose?: () => void;
+} = {}) {
+  const { id: paramId } = useParams();
+  const id = propExamId || paramId;
   const navigate = useNavigate();
   const { user } = useAuth();
 
@@ -181,14 +189,27 @@ export default function TeamLeaderboard() {
 
   // Tải dữ liệu bảng xếp hạng
   const load = useCallback(async () => {
-    const { data: lb, error } = await supabase.rpc("get_team_leaderboard", { p_exam_id: id! } as any);
-    if (error) return;
+    if (!id) return;
+    const { data: lb, error } = await supabase.rpc("get_team_leaderboard", { p_exam_id: id } as any);
+    if (error) {
+      // Fallback: nếu RPC lỗi thì đọc trực tiếp từ bảng exams và exam_teams
+      const { data: ex } = await supabase.from("exams").select("id,title,team_config,team_activity_ended").eq("id", id).maybeSingle();
+      const { data: tms } = await supabase.from("exam_teams").select("*").eq("exam_id", id);
+      if (ex) {
+        setData({
+          exam: { id: ex.id, title: ex.title, team_config: ex.team_config, ended: !!(ex as any).team_activity_ended },
+          teams: tms || [],
+        });
+      }
+      return;
+    }
     setData(lb);
   }, [id]);
 
   useEffect(() => {
+    if (!id) return;
     load();
-    supabase.rpc("get_exam_for_student", { p_exam_id: id! }).then(({ data: e }) => {
+    supabase.rpc("get_exam_for_student", { p_exam_id: id }).then(({ data: e }) => {
       const q = (e as any)?.questions;
       if (q) {
         setTotal((q.partI?.length || 0) + (q.partII?.length || 0) + (q.partIII?.length || 0));
@@ -198,6 +219,7 @@ export default function TeamLeaderboard() {
 
   // Đăng ký realtime Supabase + polling 4s
   useEffect(() => {
+    if (!id) return;
     const ch = supabase
       .channel(`lb-stage-${id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "exam_teams", filter: `exam_id=eq.${id}` }, () => load())
@@ -231,12 +253,39 @@ export default function TeamLeaderboard() {
   }, [enterFs]);
 
   useEffect(() => {
-    // Tự động kích hoạt toàn màn hình khi mở trang
-    enterFs();
+    // Tự động kích hoạt toàn màn hình khi mở trang trực tiếp (không ở chế độ nhúng modal)
+    if (!propExamId) {
+      enterFs();
+    }
     const onFs = () => setIsFs(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
-  }, [enterFs]);
+  }, [enterFs, propExamId]);
+
+  // Đóng bảng xếp hạng
+  const handleClose = useCallback(() => {
+    try {
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
+    } catch {}
+    if (onClose) {
+      onClose();
+    } else {
+      navigate("/");
+    }
+  }, [onClose, navigate]);
+
+  // Lắng nghe phím ESC để đóng khi mở trong modal
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.fullscreenElement) {
+        handleClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleClose]);
 
   // Dữ liệu xếp hạng
   const teams: LbTeam[] = useMemo(() => (data?.teams || []) as LbTeam[], [data?.teams]);
@@ -282,7 +331,7 @@ export default function TeamLeaderboard() {
   // Tương tác ban đầu để bật âm thanh & fullscreen nếu trình duyệt chặn tự động
   const handleUserStart = () => {
     setHasInteracted(true);
-    enterFs();
+    if (!propExamId) enterFs();
     if (cfg.music.enabled && !music.playing) {
       music.start();
     }
@@ -320,10 +369,10 @@ export default function TeamLeaderboard() {
       <Confetti run={ended || showWinnerModal || (!!champion && Number(champion.score) > 0)} />
 
       {/* THANH CÔNG CỤ ĐIỀU KHIỂN (GÓC PHẢI TRÊN) */}
-      <header className="w-full px-6 py-3.5 flex items-center justify-between z-50 bg-[#070e28]/70 backdrop-blur-md border-b-2 border-indigo-950/60 shadow-lg">
+      <header className="w-full px-4 sm:px-6 py-3 flex items-center justify-between z-50 bg-[#070e28]/85 backdrop-blur-md border-b-2 border-indigo-950/60 shadow-lg sticky top-0">
         {/* Nhãn trạng thái phát trực tiếp */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-950/90 border-2 border-indigo-700/60 shadow-inner">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-950/90 border-2 border-indigo-700/60 shadow-inner">
             <span className="relative flex size-3">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${ended ? "bg-amber-400" : "bg-emerald-400"} opacity-75`} />
               <span className={`relative inline-flex rounded-full size-3 ${ended ? "bg-amber-500" : "bg-emerald-500"}`} />
@@ -342,7 +391,7 @@ export default function TeamLeaderboard() {
         </div>
 
         {/* Các nút bấm thao tác của giáo viên */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2 sm:gap-2.5">
           {/* Nút bật/tắt nhạc nền */}
           {cfg.music.enabled && (
             <div className="flex items-center gap-2 bg-indigo-950/80 border-2 border-indigo-700/60 rounded-full px-3 py-1">
@@ -386,7 +435,7 @@ export default function TeamLeaderboard() {
                 setShowWinnerModal(true);
                 music.playVictory();
               }}
-              className="bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black text-xs sm:text-sm shadow-[0_4px_0_#78350f] border-2 border-amber-300 rounded-full px-3.5 h-9 active:translate-y-0.5"
+              className="bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black text-xs sm:text-sm shadow-[0_3px_0_#78350f] border-2 border-amber-300 rounded-full px-3.5 h-9 active:translate-y-0.5"
             >
               <Trophy className="size-4 mr-1 text-indigo-950" />
               {showWinnerModal ? "Xem cúp" : "Vinh danh"}
@@ -407,20 +456,18 @@ export default function TeamLeaderboard() {
             {isFs ? "Thu nhỏ" : "Toàn màn hình"}
           </Button>
 
-          {/* Nút Về trang chủ giáo viên */}
-          {user && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate("/");
-              }}
-              className="text-white/70 hover:text-white hover:bg-white/10 rounded-full text-xs h-9 px-2.5 hidden lg:flex"
-            >
-              <Home className="size-4 mr-1" /> Trang chủ
-            </Button>
-          )}
+          {/* Nút ĐÓNG bảng xếp hạng */}
+          <Button
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClose();
+            }}
+            className="bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs sm:text-sm rounded-full px-4 h-9 shadow-[0_3px_0_#881337] border-2 border-rose-400 active:translate-y-0.5 flex items-center gap-1.5"
+            title="Đóng bảng xếp hạng quay lại giao diện bài thi"
+          >
+            <X className="size-4" /> ĐÓNG
+          </Button>
         </div>
       </header>
 
@@ -720,3 +767,4 @@ export default function TeamLeaderboard() {
     </div>
   );
 }
+

@@ -6,13 +6,14 @@ import { Input } from "@/components/ui/input";
 import {
   FileText, Users, BarChart3, Upload, Copy, Download, Share2, Trash2, FileDown,
   Settings, Plus, GraduationCap, ClipboardCheck, ShieldAlert, Activity, Star, Search,
-  Lock, Unlock, CalendarClock,
+  Lock, Unlock, CalendarClock, Trophy,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
+import TeamLeaderboard from "./TeamLeaderboard";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -25,11 +26,12 @@ export default function Index() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<Stats>({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
   const [query, setQuery] = useState("");
+  const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       const { data: ex } = await supabase.from("exams")
-        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close")
+        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
         .order("created_at", { ascending: false }).limit(200);
       setExams(ex || []);
       const { data: subs } = await supabase.from("submissions").select("student_name,student_class,score,violation_count");
@@ -226,18 +228,29 @@ export default function Index() {
                 style={{ animationDelay: `${idx * 30}ms` }}
               >
                 <div className="flex items-start gap-3">
-                  <div className="size-10 rounded-xl bg-primary/10 text-primary grid place-items-center shrink-0">
+                  <div className="size-10 rounded-xl bg-primary/10 text-primary grid place-items-center shrink-0 mt-0.5">
                     <FileText className="size-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="font-semibold truncate" title={e.title}>{e.title}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">
+                    <div className="flex items-start justify-between gap-2 flex-wrap">
+                      <h3 className="font-semibold text-base leading-snug break-words flex-1 text-foreground" title={e.title}>
+                        {e.title}
+                      </h3>
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium whitespace-nowrap ${statusInfo.cls}`}>
+                          {statusInfo.label}
+                        </span>
+                        {e.display_mode === "team" && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-bold whitespace-nowrap flex items-center gap-1">
+                            <Trophy className="size-3 text-amber-500" /> Đội/Nhóm
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
                       {countQs(e.questions)} câu • {e.duration_minutes} phút
                     </div>
                   </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium whitespace-nowrap ${statusInfo.cls}`}>
-                    {statusInfo.label}
-                  </span>
                 </div>
 
                 <div className="mt-3 rounded-lg bg-muted/40 p-2.5 text-xs space-y-1">
@@ -256,6 +269,16 @@ export default function Index() {
                   <div className="text-[10px] mt-2 px-1.5 py-0.5 rounded bg-muted inline-block w-fit">GV khác</div>
                 )}
                 <div className="mt-4 grid grid-cols-2 gap-2">
+                  {e.display_mode === "team" && (
+                    <Button
+                      size="sm"
+                      className="rounded-xl col-span-2 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black shadow-md border-2 border-amber-300 py-2.5 h-11 text-sm sm:text-base flex items-center justify-center gap-2 active:translate-y-0.5 transition-all"
+                      onClick={() => setViewingLeaderboardExamId(e.id)}
+                    >
+                      <Trophy className="size-5 fill-indigo-950 text-indigo-950" />
+                      <span>MỞ BẢNG XẾP HẠNG 🏆</span>
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e.id)}>
                     <Copy className="size-3.5 mr-1" /> Copy link
                   </Button>
@@ -295,6 +318,20 @@ export default function Index() {
           </div>
         )}
       </section>
+
+      {/* MODAL BẢNG XẾP HẠNG ĐỘI/NHÓM KHI GIÁO VIÊN BẤM XEM */}
+      {viewingLeaderboardExamId && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-[#0a1538] animate-fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <TeamLeaderboard
+            examId={viewingLeaderboardExamId}
+            onClose={() => setViewingLeaderboardExamId(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }

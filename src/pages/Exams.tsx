@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   FileText, Plus, Search, Copy, Share2, Trash2, Settings, FileDown, BarChart3,
-  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock,
+  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock, Trophy,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { publishExamClosed } from "@/lib/studentStorage";
+import TeamLeaderboard from "./TeamLeaderboard";
 
 const PAGE_SIZE = 10;
 
@@ -21,11 +22,12 @@ export default function Exams() {
   const [query, setQuery] = useState("");
   const [klass, setKlass] = useState("all");
   const [page, setPage] = useState(1);
+  const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     const { data: ex } = await supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review")
+      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config")
       .order("created_at", { ascending: false });
     setExams(ex || []);
     const { data: subs } = await supabase.from("submissions").select("exam_id,student_class");
@@ -165,39 +167,50 @@ export default function Exams() {
             return (
               <Card key={e.id} className="p-5 rounded-2xl border-border/70 card-hover animate-slide-up flex flex-col" style={{ animationDelay: `${idx * 30}ms` }}>
                 <div className="flex items-start gap-3">
-                  <div className="size-11 rounded-xl bg-primary/10 text-primary grid place-items-center shrink-0">
+                  <div className="size-11 rounded-xl bg-primary/10 text-primary grid place-items-center shrink-0 mt-0.5">
                     <FileText className="size-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="font-semibold truncate" title={e.title}>{e.title}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+                    <div className="flex items-start justify-between gap-2 flex-wrap">
+                      <h3 className="font-semibold text-base leading-snug break-words flex-1 text-foreground" title={e.title}>
+                        {e.title}
+                      </h3>
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                        {(() => {
+                          const st = getStatus(e);
+                          if (st === "closed") {
+                            return (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium inline-flex items-center gap-1">
+                                <Lock className="size-3" /> Đã đóng
+                              </span>
+                            );
+                          }
+                          if (st === "not_open") {
+                            return (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 font-medium inline-flex items-center gap-1">
+                                <Activity className="size-3" /> Chưa mở
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success font-medium inline-flex items-center gap-1">
+                              <Activity className="size-3" /> Đang mở
+                            </span>
+                          );
+                        })()}
+                        {e.display_mode === "team" && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 font-bold border border-amber-500/30 inline-flex items-center gap-1">
+                            <Trophy className="size-3 text-amber-500" /> Đội/Nhóm
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
                       <span>Môn: <b>{subject}</b></span>
                       <span>•</span>
                       <span>Lớp: <b>{cls}</b></span>
                     </div>
                   </div>
-                  {(() => {
-                    const st = getStatus(e);
-                    if (st === "closed") {
-                      return (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium inline-flex items-center gap-1">
-                          <Lock className="size-3" /> Đã đóng
-                        </span>
-                      );
-                    }
-                    if (st === "not_open") {
-                      return (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 font-medium inline-flex items-center gap-1">
-                          <Activity className="size-3" /> Chưa mở
-                        </span>
-                      );
-                    }
-                    return (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success font-medium inline-flex items-center gap-1">
-                        <Activity className="size-3" /> Đang mở
-                      </span>
-                    );
-                  })()}
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mt-4 text-center">
@@ -216,6 +229,16 @@ export default function Exams() {
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
+                  {e.display_mode === "team" && (
+                    <Button
+                      size="sm"
+                      className="rounded-xl col-span-2 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black shadow-md border-2 border-amber-300 py-2.5 h-11 text-sm flex items-center justify-center gap-2 active:translate-y-0.5 transition-all"
+                      onClick={() => setViewingLeaderboardExamId(e.id)}
+                    >
+                      <Trophy className="size-5 fill-indigo-950 text-indigo-950" />
+                      <span>MỞ BẢNG XẾP HẠNG 🏆</span>
+                    </Button>
+                  )}
                   <Button size="sm" className="rounded-lg bg-gradient-primary text-primary-foreground" asChild>
                     <Link to={`/take/${e.id}`} target="_blank"><Play className="size-3.5 mr-1" /> Thi</Link>
                   </Button>
@@ -264,6 +287,20 @@ export default function Exams() {
           <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>Trước</Button>
           <span className="text-sm text-muted-foreground">Trang {page} / {totalPages}</span>
           <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage(page + 1)}>Sau</Button>
+        </div>
+      )}
+
+      {/* MODAL BẢNG XẾP HẠNG ĐỘI/NHÓM */}
+      {viewingLeaderboardExamId && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-[#0a1538] animate-fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <TeamLeaderboard
+            examId={viewingLeaderboardExamId}
+            onClose={() => setViewingLeaderboardExamId(null)}
+          />
         </div>
       )}
     </div>
