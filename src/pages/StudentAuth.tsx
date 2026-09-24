@@ -110,6 +110,29 @@ export default function StudentAuth() {
           </span>
         </div>
 
+        {/* 3 Role buttons */}
+        <div className="mb-4">
+          <div className="grid grid-cols-3 gap-1.5 p-1 bg-muted/60 rounded-xl">
+            <Link
+              to="/auth?role=teacher"
+              className="py-1.5 px-2 rounded-lg font-bold text-xs text-center text-muted-foreground hover:text-foreground transition-all"
+            >
+              GIÁO VIÊN
+            </Link>
+            <span
+              className="py-1.5 px-2 rounded-lg font-bold text-xs text-center bg-white text-primary shadow-sm ring-1 ring-primary/20"
+            >
+              HỌC SINH
+            </span>
+            <Link
+              to="/auth?role=admin"
+              className="py-1.5 px-2 rounded-lg font-bold text-xs text-center text-muted-foreground hover:text-foreground transition-all"
+            >
+              ADMIN
+            </Link>
+          </div>
+        </div>
+
         <div className="text-center mb-6">
           <div className="size-12 rounded-xl bg-gradient-primary text-primary-foreground grid place-items-center mx-auto mb-3 shadow-soft">
             <GraduationCap className="size-6" />

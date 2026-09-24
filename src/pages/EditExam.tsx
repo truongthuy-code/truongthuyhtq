@@ -14,11 +14,12 @@ import LockModeSettings from "@/components/LockModeSettings";
 import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
-import ExamMusicManager from "@/components/ExamMusicManager";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function EditExam() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState("");
@@ -38,6 +39,11 @@ export default function EditExam() {
     if (!id) return;
     supabase.from("exams").select("*").eq("id", id).single().then(({ data, error }) => {
       if (error || !data) { toast.error("Không tải được đề"); navigate("/"); return; }
+      if (!isAdmin && user && data.created_by && data.created_by !== user.id) {
+        toast.error("Bạn không có quyền chỉnh sửa đề thi của giáo viên khác");
+        navigate("/");
+        return;
+      }
       setTitle(data.title);
       setDuration(data.duration_minutes);
       setMaxAttempts(data.max_attempts);
@@ -186,18 +192,9 @@ export default function EditExam() {
               Quizizz: mỗi lần 1 câu, không quay lại, tự lưu tiến độ.
             </div>
 
-            {displayMode === "team" ? (
+            {displayMode === "team" && (
               <div className="mt-3">
-                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId={id} examTitle={title} />
-              </div>
-            ) : (
-              <div className="mt-3">
-                <ExamMusicManager
-                  value={teamConfig.music}
-                  onChange={(music) => setTeamConfig({ ...teamConfig, music })}
-                  examId={id}
-                  examTitle={title}
-                />
+                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId={id} />
               </div>
             )}
 

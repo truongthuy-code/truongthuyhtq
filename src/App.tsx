@@ -24,6 +24,7 @@ import TeamTake from "./pages/TeamTake.tsx";
 import TeamLeaderboard from "./pages/TeamLeaderboard.tsx";
 import StudentAuth from "./pages/StudentAuth.tsx";
 import StudentDashboard from "./pages/StudentDashboard.tsx";
+import AdminDashboard from "./pages/AdminDashboard.tsx";
 
 const queryClient = new QueryClient();
 
@@ -43,6 +44,9 @@ const App = () => (
             <Route path="/result/:id" element={<Result />} />
             <Route path="/team/:id" element={<TeamTake />} />
             <Route path="/leaderboard/:id" element={<TeamLeaderboard />} />
+            {/* admin routes */}
+            <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/admin/*" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
             {/* teacher routes */}
             <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/teacher" element={<ProtectedRoute><Teacher /></ProtectedRoute>} />

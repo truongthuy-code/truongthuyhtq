@@ -13,8 +13,10 @@ import { parseDocx, stripRich, type ParsedExam } from "@/lib/docxParser";
 import { generateVariants, estimateMaxVariants } from "@/lib/shuffleEngine";
 import { generateExamCodes } from "@/lib/examCodeGenerator";
 import { exportExams, exportAnswerKey, exportExamsAndKey, type ExamMeta, type ExportOptions } from "@/lib/examExporter";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function Shuffle() {
+  const { user, isAdmin } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [sourceMode, setSourceMode] = useState<"exam" | "file">("exam");
   const [selectedExamId, setSelectedExamId] = useState<string>("");
@@ -56,10 +58,14 @@ export default function Shuffle() {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("exams").select("id,title,questions,subject_name,duration_minutes").order("created_at", { ascending: false });
+      let q = supabase.from("exams").select("id,title,questions,subject_name,duration_minutes,created_by").order("created_at", { ascending: false });
+      if (!isAdmin && user) {
+        q = q.eq("created_by", user.id);
+      }
+      const { data } = await q;
       setExams(data || []);
     })();
-  }, []);
+  }, [isAdmin, user]);
 
   const loadFromExam = async (id: string) => {
     setSelectedExamId(id);

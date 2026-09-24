@@ -1,11 +1,11 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { GraduationCap, LayoutDashboard, FileText, Users, BarChart3, BookOpen, FolderTree, Shuffle, LogOut } from "lucide-react";
+import { GraduationCap, LayoutDashboard, FileText, Users, BarChart3, BookOpen, FolderTree, Shuffle, ShieldCheck } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter, useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/hooks/useAuth";
-import { Button } from "@/components/ui/button";
+import { UserAvatarMenu } from "./UserAvatarMenu";
 
 const items = [
   { title: "Trang chủ", url: "/", icon: LayoutDashboard },
@@ -21,8 +21,12 @@ const items = [
 export default function AppSidebar() {
   const { state } = useSidebar();
   const { pathname } = useLocation();
-  const { user, profile, isAdmin, signOut } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const collapsed = state === "collapsed";
+
+  const allMenuItems = isAdmin
+    ? [{ title: "Quản trị Admin", url: "/admin", icon: ShieldCheck }, ...items]
+    : items;
 
   return (
     <Sidebar collapsible="icon" className="border-r">
@@ -47,7 +51,7 @@ export default function AppSidebar() {
           {!collapsed && <SidebarGroupLabel>Menu</SidebarGroupLabel>}
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map((it) => {
+              {allMenuItems.map((it) => {
                 const active = pathname === it.url || (it.url !== "/" && pathname.startsWith(it.url));
                 return (
                   <SidebarMenuItem key={it.title}>
@@ -74,23 +78,8 @@ export default function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t">
-        <div className="flex items-center gap-2 px-2 py-2">
-          <div className="size-9 rounded-full bg-gradient-primary grid place-items-center text-primary-foreground text-sm font-semibold shrink-0">
-            {(profile?.full_name?.[0] || user?.email?.[0] || "U").toUpperCase()}
-          </div>
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium truncate">{profile?.full_name || user?.email}</div>
-              <div className="text-[10px] text-muted-foreground">{isAdmin ? "Quản trị viên" : (profile?.subject_name || "Giáo viên")}</div>
-            </div>
-          )}
-          {!collapsed && (
-            <Button variant="ghost" size="icon" onClick={signOut} title="Đăng xuất">
-              <LogOut className="size-4" />
-            </Button>
-          )}
-        </div>
+      <SidebarFooter className="border-t p-2">
+        <UserAvatarMenu collapsed={collapsed} />
       </SidebarFooter>
     </Sidebar>
   );

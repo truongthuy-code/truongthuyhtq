@@ -14,6 +14,7 @@ import { Search, Upload, UserPlus, Eye, Pencil, KeyRound, Lock, Trash2, Users } 
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { useAuth } from "@/hooks/useAuth";
 
 type Student = {
   id: string;
@@ -40,6 +41,7 @@ const SAMPLE: Student[] = [
 ];
 
 export default function Students() {
+  const { user, isAdmin } = useAuth();
   const [manual, setManual] = useState<Student[]>([]);
   const [fromSubs, setFromSubs] = useState<Student[]>([]);
   const [query, setQuery] = useState("");
@@ -54,7 +56,20 @@ export default function Students() {
     setManual(m.length ? m : SAMPLE);
     if (!m.length) saveManual(SAMPLE);
     (async () => {
-      const { data } = await supabase.from("submissions").select("student_name,student_class,submitted_at");
+      let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,submitted_at");
+
+      if (!isAdmin && user) {
+        const { data: myExams } = await supabase.from("exams").select("id").eq("created_by", user.id);
+        const myExamIds = (myExams || []).map((e) => e.id);
+        if (myExamIds.length > 0) {
+          subQ = subQ.in("exam_id", myExamIds);
+        } else {
+          setFromSubs([]);
+          return;
+        }
+      }
+
+      const { data } = await subQ;
       const seen = new Map<string, Student>();
       (data || []).forEach((s: any) => {
         const key = `${s.student_name}__${s.student_class}`;
@@ -68,7 +83,7 @@ export default function Students() {
       });
       setFromSubs(Array.from(seen.values()));
     })();
-  }, []);
+  }, [isAdmin, user]);
 
   const all = useMemo(() => {
     const merged = [...manual, ...fromSubs.filter(s => !manual.some(m => m.name === s.name && m.klass === s.klass))];

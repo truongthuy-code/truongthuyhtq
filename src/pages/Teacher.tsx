@@ -21,7 +21,7 @@ import LockModeSettings from "@/components/LockModeSettings";
 import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
-import ExamMusicManager from "@/components/ExamMusicManager";
+import { useAuth } from "@/hooks/useAuth";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -52,6 +52,7 @@ function validateExam(exam: ParsedExam): Issue[] {
 }
 
 export default function Teacher() {
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const docxInputRef = useRef<HTMLInputElement | null>(null);
   const docxReadSeq = useRef(0);
@@ -181,14 +182,14 @@ export default function Teacher() {
 
   const onCreate = async () => {
     if (!exam || !title) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
+    const currentUser = user;
+    if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
     setSaving(true);
     let original_file_url: string | null = null;
     let original_file_name: string | null = null;
     let original_file_path: string | null = null;
     if (originalFile) {
-      const path = `${user.id}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
+      const path = `${currentUser.id}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
       const up = await supabase.storage.from("exam-files").upload(path, originalFile, {
         contentType: originalFile.type || "application/octet-stream",
         upsert: false,
@@ -223,7 +224,10 @@ export default function Teacher() {
         original_file_url,
         original_file_name,
         original_file_path,
-        created_by: user.id,
+        created_by: currentUser.id,
+        teacher_name: profile?.full_name || "Giáo viên",
+        school_name: profile?.school_name || "",
+        subject_name: profile?.subject_name || "",
       } as any)
       .select("id")
       .single();
@@ -407,20 +411,11 @@ export default function Teacher() {
                 Quizizz: mỗi lần 1 câu, không quay lại, tự lưu tiến độ.
               </div>
 
-              {displayMode === "team" ? (
-                <div className="mt-3">
-                  <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId="new-exam" examTitle={title} />
-                </div>
-              ) : (
-                <div className="mt-3">
-                  <ExamMusicManager
-                    value={teamConfig.music}
-                    onChange={(music) => setTeamConfig({ ...teamConfig, music })}
-                    examId="new-exam"
-                    examTitle={title}
-                  />
-                </div>
-              )}
+              {displayMode === "team" && (
+              <div className="mt-3">
+                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId="new-exam" />
+              </div>
+            )}
 
             {displayMode === "quizizz" && (
                 <div className="flex items-center justify-between rounded-lg border p-3 mt-3 bg-background">

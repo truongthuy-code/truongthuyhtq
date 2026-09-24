@@ -20,11 +20,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
-import ExamMusicModal from "@/components/ExamMusicModal";
+import { useAuth } from "@/hooks/useAuth";
 
 const PAGE_SIZE = 10;
 
 export default function Exams() {
+  const { user, isAdmin } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -33,21 +34,40 @@ export default function Exams() {
   const [page, setPage] = useState(1);
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<any | null>(null);
-  const [musicModalExam, setMusicModalExam] = useState<any | null>(null);
 
   const load = async () => {
     setLoading(true);
-    const { data: ex } = await supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config")
+    let q = supabase.from("exams")
+      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by")
       .order("created_at", { ascending: false });
-    setExams(ex || []);
-    const { data: subs } = await supabase.from("submissions").select("exam_id,student_class");
+
+    if (!isAdmin && user) {
+      q = q.eq("created_by", user.id);
+    }
+
+    const { data: ex } = await q;
+    const loadedExams = ex || [];
+    setExams(loadedExams);
+
+    const examIds = loadedExams.map((e: any) => e.id);
+    let subQ = supabase.from("submissions").select("exam_id,student_class");
+    if (!isAdmin && user) {
+      if (examIds.length > 0) {
+        subQ = subQ.in("exam_id", examIds);
+      } else {
+        setCounts({});
+        setLoading(false);
+        return;
+      }
+    }
+
+    const { data: subs } = await subQ;
     const c: Record<string, number> = {};
     (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
     setCounts(c);
     setLoading(false);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [isAdmin, user]);
 
   const classes = useMemo(() => {
     const set = new Set<string>();
@@ -329,25 +349,6 @@ export default function Exams() {
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => downloadOriginal(e)}>
                     <FileDown className="size-3.5 mr-1" /> Đề gốc
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className={`rounded-lg col-span-2 flex items-center justify-center gap-1.5 font-semibold transition-all ${
-                      e.team_config?.music?.enabled
-                        ? "bg-pink-500/10 text-pink-700 dark:text-pink-300 border-pink-500/40 hover:bg-pink-500/20"
-                        : "hover:bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                    onClick={() => setMusicModalExam(e)}
-                  >
-                    <Music className="size-3.5 text-pink-500" />
-                    {e.team_config?.music?.enabled ? (
-                      <span className="truncate max-w-[220px]">
-                        🎵 Nhạc nền: <span className="font-bold underline">{e.team_config?.music?.customName || (e.team_config?.music?.useDefault ? "Mặc định" : "Đã bật")}</span>
-                      </span>
-                    ) : (
-                      <span>🎵 Cài đặt nhạc nền bài thi</span>
-                    )}
-                  </Button>
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => handleDuplicateClick(e)}>
                     <CopyPlus className="size-3.5 mr-1" /> Sao chép
                   </Button>
@@ -423,13 +424,6 @@ export default function Exams() {
           />
         </div>
       )}
-      {/* MODAL CÀI ĐẶT NHẠC NỀN BÀI THI */}
-      <ExamMusicModal
-        open={!!musicModalExam}
-        onOpenChange={(open) => !open && setMusicModalExam(null)}
-        exam={musicModalExam}
-        onSaved={load}
-      />
     </div>
   );
 }

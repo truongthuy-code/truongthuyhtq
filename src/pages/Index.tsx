@@ -14,7 +14,6 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
-import ExamMusicModal from "@/components/ExamMusicModal";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -22,38 +21,56 @@ type Stats = {
 };
 
 export default function Index() {
-  const { user, isAdmin } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<Stats>({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
   const [query, setQuery] = useState("");
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
-  const [musicModalExam, setMusicModalExam] = useState<any | null>(null);
-
-  const loadExams = async () => {
-    const { data: ex } = await supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
-      .order("created_at", { ascending: false }).limit(200);
-    setExams(ex || []);
-  };
 
   useEffect(() => {
     (async () => {
-      await loadExams();
-      const { data: subs } = await supabase.from("submissions").select("student_name,student_class,score,violation_count");
+      let q = supabase.from("exams")
+        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
+        .order("created_at", { ascending: false }).limit(200);
+
+      // Teacher data isolation: If not admin and user exists, isolate exams to teacher
+      if (!isAdmin && user) {
+        q = q.eq("created_by", user.id);
+      }
+
+      const { data: ex } = await q;
+      const loadedExams = ex || [];
+      setExams(loadedExams);
+
+      const examIds = loadedExams.map((e: any) => e.id);
+
+      let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,score,violation_count");
+      if (!isAdmin && user) {
+        if (examIds.length > 0) {
+          subQ = subQ.in("exam_id", examIds);
+        } else {
+          // No exams for this teacher, empty stats
+          setStats({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
+          setLoading(false);
+          return;
+        }
+      }
+
+      const { data: subs } = await subQ;
       const s = subs || [];
       const uniqStudents = new Set(s.map((x: any) => `${x.student_name}__${x.student_class}`)).size;
       const avg = s.length ? s.reduce((a: number, b: any) => a + Number(b.score || 0), 0) / s.length : 0;
       const violations = s.reduce((a: number, b: any) => a + (b.violation_count || 0), 0);
       const now = Date.now();
-      const openCount = (ex || []).filter((e: any) => {
+      const openCount = loadedExams.filter((e: any) => {
         if (e.manual_closed) return false;
         if (e.open_at && new Date(e.open_at).getTime() > now) return false;
         if (e.close_at && new Date(e.close_at).getTime() < now) return false;
         return true;
       }).length;
       setStats({
-        exams: ex?.length || 0,
+        exams: loadedExams.length,
         students: uniqStudents,
         attempts: s.length,
         avgScore: Math.round(avg * 100) / 100,
@@ -62,7 +79,7 @@ export default function Index() {
       });
       setLoading(false);
     })();
-  }, []);
+  }, [isAdmin, user]);
 
   const copyLink = (id: string) => {
     navigator.clipboard.writeText(`${window.location.origin}/take/${id}`);
@@ -164,7 +181,9 @@ export default function Index() {
               Hệ thống tạo đề trắc nghiệm Online
             </h1>
           </div>
-          <p className="text-sm md:text-base text-white/90">Trương Thị Bích Thủy – THPT Lê Quý Đôn</p>
+          <p className="text-sm md:text-base text-white/90">
+            {profile?.full_name || "Giáo viên"} {profile?.school_name ? `– ${profile.school_name}` : ""}
+          </p>
         </div>
       </section>
 
@@ -318,25 +337,6 @@ export default function Index() {
                       <FileDown className="size-3.5 mr-1" /> Tải đề gốc
                     </Button>
                   ) : <span />}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className={`rounded-lg col-span-2 flex items-center justify-center gap-1.5 font-semibold transition-all ${
-                      e.team_config?.music?.enabled
-                        ? "bg-pink-500/10 text-pink-700 dark:text-pink-300 border-pink-500/40 hover:bg-pink-500/20"
-                        : "hover:bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                    onClick={() => setMusicModalExam(e)}
-                  >
-                    <Music className="size-3.5 text-pink-500" />
-                    {e.team_config?.music?.enabled ? (
-                      <span className="truncate max-w-[220px]">
-                        🎵 Nhạc nền: <span className="font-bold underline">{e.team_config?.music?.customName || (e.team_config?.music?.useDefault ? "Mặc định" : "Đã bật")}</span>
-                      </span>
-                    ) : (
-                      <span>🎵 Cài đặt nhạc nền bài thi</span>
-                    )}
-                  </Button>
                   {status === "closed" ? (
                     <Button size="sm" variant="outline" className="rounded-lg col-span-2 border-success/40 text-success hover:bg-success/10" onClick={() => setClosed(e, false)}>
                       <Unlock className="size-3.5 mr-1" /> 🔓 Mở lại đề thi
@@ -370,13 +370,6 @@ export default function Index() {
           />
         </div>
       )}
-      {/* MODAL CÀI ĐẶT NHẠC NỀN BÀI THI */}
-      <ExamMusicModal
-        open={!!musicModalExam}
-        onOpenChange={(open) => !open && setMusicModalExam(null)}
-        exam={musicModalExam}
-        onSaved={loadExams}
-      />
     </div>
   );
 }

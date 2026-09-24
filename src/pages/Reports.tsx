@@ -21,11 +21,13 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { useAuth } from "@/hooks/useAuth";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
 
 export default function Reports() {
+  const { user, isAdmin } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [examId, setExamId] = useState<string>("all");
   const [subs, setSubs] = useState<any[]>([]);
@@ -35,15 +37,33 @@ export default function Reports() {
 
   const load = async () => {
     setLoading(true);
-    const { data: ex } = await supabase.from("exams").select("id,title,max_attempts,scoring").order("created_at", { ascending: false });
-    setExams(ex || []);
+    let exQ = supabase.from("exams").select("id,title,max_attempts,scoring,created_by").order("created_at", { ascending: false });
+    if (!isAdmin && user) {
+      exQ = exQ.eq("created_by", user.id);
+    }
+    const { data: ex } = await exQ;
+    const loadedExams = ex || [];
+    setExams(loadedExams);
+
+    const examIds = loadedExams.map((e: any) => e.id);
+
     let q = supabase.from("submissions").select("*").order("score", { ascending: false });
-    if (examId !== "all") q = q.eq("exam_id", examId);
+    if (examId !== "all") {
+      q = q.eq("exam_id", examId);
+    } else if (!isAdmin && user) {
+      if (examIds.length > 0) {
+        q = q.in("exam_id", examIds);
+      } else {
+        setSubs([]);
+        setLoading(false);
+        return;
+      }
+    }
     const { data: s } = await q;
     setSubs(s || []);
     setLoading(false);
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [examId]);
+  useEffect(() => { load(); }, [examId, isAdmin, user]);
 
   const filtered = useMemo(() => {
     if (!query) return subs;
