@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import {
   FileText, Users, BarChart3, Upload, Copy, Download, Share2, Trash2, FileDown,
   Settings, Plus, GraduationCap, ClipboardCheck, ShieldAlert, Activity, Star, Search,
-  Lock, Unlock, CalendarClock, Trophy,
+  Lock, Unlock, CalendarClock, Trophy, Music,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -243,6 +243,19 @@ export default function Index() {
                         {e.display_mode === "team" && (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-bold whitespace-nowrap flex items-center gap-1">
                             <Trophy className="size-3 text-amber-500" /> Đội/Nhóm
+                          </span>
+                        )}
+                        {e.display_mode === "team" && e.team_config?.music?.enabled && (
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/15 text-pink-700 dark:text-pink-300 border border-pink-500/30 font-bold whitespace-nowrap flex items-center gap-1"
+                            title={e.team_config?.music?.customName ? `Nhạc: ${e.team_config.music.customName}` : "Có nhạc nền"}
+                          >
+                            <Music className="size-3 text-pink-500" />
+                            {e.team_config?.music?.customName ? (
+                              <span className="max-w-[80px] sm:max-w-[120px] truncate">{e.team_config.music.customName}</span>
+                            ) : (
+                              "Nhạc nền"
+                            )}
                           </span>
                         )}
                       </div>

@@ -45,7 +45,12 @@ export default function TeamTake() {
   const [finished, setFinished] = useState(false);
 
   const cfg = useMemo(() => normalizeTeamConfig(lb?.exam?.team_config), [lb]);
-  const music = useBattleMusic(cfg.music.volume);
+  const music = useBattleMusic({
+    initialVolume: cfg.music.volume,
+    customAudioUrl: cfg.music.customUrl,
+    idbKey: cfg.music.idbKey,
+    loop: cfg.music.loop,
+  });
   const musicStarted = useRef(false);
   const storageKey = `teamplay:${id}`;
 

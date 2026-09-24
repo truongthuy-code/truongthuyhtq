@@ -5,8 +5,16 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   FileText, Plus, Search, Copy, Share2, Trash2, Settings, FileDown, BarChart3,
-  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock, Trophy,
+  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock, Trophy, Music,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -23,6 +31,7 @@ export default function Exams() {
   const [klass, setKlass] = useState("all");
   const [page, setPage] = useState(1);
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = useState<any | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -104,14 +113,53 @@ export default function Exams() {
     if (error) return toast.error(error.message);
     toast.success("Đã reset kết quả"); load();
   };
-  const duplicate = async (exam: any) => {
+  const duplicate = async (exam: any, copyMusic = true) => {
     const { id, created_at, ...rest } = exam as any;
+    let finalTeamConfig = rest.team_config;
+
+    // Nếu không muốn sao chép nhạc nền, gỡ bỏ nhạc nền khỏi bản sao
+    if (!copyMusic && finalTeamConfig) {
+      finalTeamConfig = {
+        ...finalTeamConfig,
+        music: {
+          enabled: false,
+          volume: 0.4,
+          loop: true,
+          useDefault: false,
+          customName: null,
+          customUrl: null,
+          idbKey: null,
+        },
+      };
+    }
+
     const { data: u } = await supabase.auth.getUser();
     const { error } = await supabase.from("exams").insert({
-      ...rest, title: `${exam.title} (Bản sao)`, created_by: u.user?.id,
+      ...rest,
+      team_config: finalTeamConfig,
+      title: `${exam.title} (Bản sao)`,
+      created_by: u.user?.id,
     } as any);
     if (error) return toast.error(error.message);
-    toast.success("Đã sao chép đề"); load();
+    toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");
+    setDuplicateTarget(null);
+    load();
+  };
+
+  const handleDuplicateClick = (exam: any) => {
+    const hasCustomMusic =
+      exam.display_mode === "team" &&
+      exam.team_config?.music &&
+      (exam.team_config.music.customUrl ||
+        exam.team_config.music.customName ||
+        exam.team_config.music.useDefault ||
+        exam.team_config.music.enabled);
+
+    if (hasCustomMusic) {
+      setDuplicateTarget(exam);
+    } else {
+      duplicate(exam, true);
+    }
   };
   const downloadOriginal = async (exam: any) => {
     if (exam.original_file_path) {
@@ -203,6 +251,19 @@ export default function Exams() {
                             <Trophy className="size-3 text-amber-500" /> Đội/Nhóm
                           </span>
                         )}
+                        {e.display_mode === "team" && e.team_config?.music?.enabled && (
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/15 text-pink-700 dark:text-pink-300 font-bold border border-pink-500/30 inline-flex items-center gap-1"
+                            title={e.team_config?.music?.customName ? `Nhạc: ${e.team_config.music.customName}` : "Có nhạc nền"}
+                          >
+                            <Music className="size-3 text-pink-500" />
+                            {e.team_config?.music?.customName ? (
+                              <span className="max-w-[80px] sm:max-w-[120px] truncate">{e.team_config.music.customName}</span>
+                            ) : (
+                              "Nhạc nền"
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
@@ -266,7 +327,7 @@ export default function Exams() {
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => downloadOriginal(e)}>
                     <FileDown className="size-3.5 mr-1" /> Đề gốc
                   </Button>
-                  <Button size="sm" variant="outline" className="rounded-lg" onClick={() => duplicate(e)}>
+                  <Button size="sm" variant="outline" className="rounded-lg" onClick={() => handleDuplicateClick(e)}>
                     <CopyPlus className="size-3.5 mr-1" /> Sao chép
                   </Button>
                   <Button size="sm" variant="outline" className="rounded-lg text-warning border-warning/40" onClick={() => resetResults(e)}>
@@ -289,6 +350,44 @@ export default function Exams() {
           <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage(page + 1)}>Sau</Button>
         </div>
       )}
+
+      {/* HỘP THOẠI LỰA CHỌN SAO CHÉP CẢ NHẠC NỀN HOẶC KHÔNG */}
+      <Dialog open={!!duplicateTarget} onOpenChange={(open) => !open && setDuplicateTarget(null)}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-bold">
+              <CopyPlus className="size-5 text-primary" /> Sao chép bài thi Đội/Nhóm
+            </DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground pt-1">
+              Bài thi <b className="text-foreground font-semibold">"{duplicateTarget?.title}"</b> đang sử dụng nhạc nền riêng:{" "}
+              <span className="text-pink-600 font-semibold inline-flex items-center gap-1">
+                <Music className="size-3.5" />
+                {duplicateTarget?.team_config?.music?.customName || "Nhạc nền thi đấu"}
+              </span>
+              . Bạn có muốn sao chép cả nhạc nền sang bài thi mới không?
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => duplicate(duplicateTarget, false)}
+              className="rounded-xl flex-1 text-xs sm:text-sm font-semibold"
+            >
+              Không sao chép nhạc nền
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              onClick={() => duplicate(duplicateTarget, true)}
+              className="rounded-xl flex-1 text-xs sm:text-sm font-bold bg-pink-600 hover:bg-pink-700 text-white"
+            >
+              🎵 Sao chép cả nhạc nền
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* MODAL BẢNG XẾP HẠNG ĐỘI/NHÓM */}
       {viewingLeaderboardExamId && (

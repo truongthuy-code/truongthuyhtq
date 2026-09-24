@@ -182,7 +182,13 @@ export default function TeamLeaderboard({
   const [showWinnerModal, setShowWinnerModal] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
 
-  const music = useBattleMusic(0.4);
+  const cfg = useMemo(() => normalizeTeamConfig(data?.exam?.team_config), [data?.exam?.team_config]);
+  const music = useBattleMusic({
+    initialVolume: cfg.music.volume,
+    customAudioUrl: cfg.music.customUrl,
+    idbKey: cfg.music.idbKey,
+    loop: cfg.music.loop,
+  });
   const victoryPlayed = useRef(false);
   const prevScores = useRef<Record<string, number>>({});
   const [bumped, setBumped] = useState<Record<string, boolean>>({});
@@ -290,7 +296,6 @@ export default function TeamLeaderboard({
   // Dữ liệu xếp hạng
   const teams: LbTeam[] = useMemo(() => (data?.teams || []) as LbTeam[], [data?.teams]);
   const ended = !!data?.exam?.ended;
-  const cfg = useMemo(() => normalizeTeamConfig(data?.exam?.team_config), [data?.exam?.team_config]);
   const ranked = useMemo(() => rankTeams(teams), [teams]);
   const champion = ranked[0];
 
@@ -337,19 +342,21 @@ export default function TeamLeaderboard({
     }
   };
 
-  // Tính toán kích thước co giãn thông minh cho máy chiếu dựa trên số lượng nhóm
+  // Tính toán kích thước co giãn thông minh cho màn hình TV/máy chiếu dựa trên số lượng nhóm
+  // Giảm kích thước tổng thể khoảng 20-25% theo yêu cầu
   const n = Math.max(ranked.length, 1);
   const scale = useMemo(() => {
-    if (n <= 3) return 1.15;
-    if (n <= 5) return 1.0;
-    if (n <= 7) return 0.85;
-    if (n <= 9) return 0.72;
-    return 0.62;
+    if (n <= 3) return 0.95;
+    if (n <= 4) return 0.88;
+    if (n <= 6) return 0.80;
+    if (n <= 8) return 0.70;
+    if (n <= 10) return 0.62;
+    return 0.54; // > 10 nhóm: tiếp tục thu nhỏ để hiển thị tối đa số nhóm vừa khung nhìn
   }, [n]);
 
-  // Chiều cao mỗi thẻ nhóm
-  const rowHeight = Math.round(112 * scale);
-  const gap = Math.round(16 * scale);
+  // Chiều cao mỗi thẻ nhóm giảm 20-25% (từ 112*scale xuống ~84*scale)
+  const rowHeight = Math.max(54, Math.round(86 * scale));
+  const gap = Math.max(8, Math.round(11 * scale));
 
   return (
     <div
@@ -368,33 +375,33 @@ export default function TeamLeaderboard({
       {/* Hiệu ứng pháo hoa / pháo giấy */}
       <Confetti run={ended || showWinnerModal || (!!champion && Number(champion.score) > 0)} />
 
-      {/* THANH CÔNG CỤ ĐIỀU KHIỂN (GÓC PHẢI TRÊN) */}
-      <header className="w-full px-4 sm:px-6 py-3 flex items-center justify-between z-50 bg-[#070e28]/85 backdrop-blur-md border-b-2 border-indigo-950/60 shadow-lg sticky top-0">
+      {/* TOP BAR / HEADER ĐỘC LẬP - CỐ ĐỊNH PHÍA TRÊN CÙNG - KHÔNG BỊ BẢNG ĐÈ HAY CHE CẮT */}
+      <header className="w-full shrink-0 px-3 sm:px-6 py-2.5 flex items-center justify-between z-50 bg-[#070e28]/95 backdrop-blur-md border-b border-indigo-900/60 shadow-md sticky top-0 min-h-[56px]">
         {/* Nhãn trạng thái phát trực tiếp */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-950/90 border-2 border-indigo-700/60 shadow-inner">
-            <span className="relative flex size-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-full bg-indigo-950/90 border border-indigo-700/60 shadow-inner">
+            <span className="relative flex size-2.5 sm:size-3">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${ended ? "bg-amber-400" : "bg-emerald-400"} opacity-75`} />
-              <span className={`relative inline-flex rounded-full size-3 ${ended ? "bg-amber-500" : "bg-emerald-500"}`} />
+              <span className={`relative inline-flex rounded-full size-2.5 sm:size-3 ${ended ? "bg-amber-500" : "bg-emerald-500"}`} />
             </span>
-            <span className="text-xs sm:text-sm font-extrabold tracking-wider uppercase text-indigo-100">
+            <span className="text-[11px] sm:text-xs font-black tracking-wider uppercase text-indigo-100 whitespace-nowrap">
               {ended ? "ĐÃ KẾT THÚC" : "ĐANG THI ĐẤU TRỰC TIẾP"}
             </span>
           </div>
 
           {total > 0 && (
-            <div className="hidden md:flex items-center gap-1 text-xs font-bold text-indigo-200 bg-white/10 px-3 py-1.5 rounded-full">
+            <div className="hidden sm:flex items-center gap-1 text-[11px] sm:text-xs font-bold text-indigo-200 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
               <span>TỔNG SỐ:</span>
-              <span className="text-amber-300 font-extrabold">{total} CÂU HỎI</span>
+              <span className="text-amber-300 font-black">{total} CÂU</span>
             </div>
           )}
         </div>
 
-        {/* Các nút bấm thao tác của giáo viên */}
-        <div className="flex items-center gap-2 sm:gap-2.5">
+        {/* Các nút bấm thao tác của giáo viên - Luôn hiển thị đầy đủ 100%, không bị che/cắt */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Nút bật/tắt nhạc nền */}
           {cfg.music.enabled && (
-            <div className="flex items-center gap-2 bg-indigo-950/80 border-2 border-indigo-700/60 rounded-full px-3 py-1">
+            <div className="flex items-center gap-1.5 bg-indigo-950/90 border border-indigo-700/60 rounded-full px-2 sm:px-2.5 py-0.5">
               <Button
                 variant="ghost"
                 size="sm"
@@ -402,19 +409,27 @@ export default function TeamLeaderboard({
                   e.stopPropagation();
                   music.toggle();
                 }}
-                className="h-8 px-2 text-indigo-100 hover:text-white hover:bg-white/15 rounded-full font-bold text-xs"
+                title={cfg.music.customName ? `Nhạc: ${cfg.music.customName}` : "Nhạc nền thi đấu"}
+                className="h-7 sm:h-8 px-2 text-indigo-100 hover:text-white hover:bg-white/15 rounded-full font-bold text-xs flex items-center gap-1"
               >
                 {music.playing ? (
                   <>
-                    <Music2 className="size-4 text-pink-400 mr-1.5 animate-pulse" /> Tắt nhạc
+                    <Music2 className="size-3.5 text-pink-400 animate-pulse shrink-0" />
+                    <span className="hidden xs:inline">Tắt nhạc</span>
                   </>
                 ) : (
                   <>
-                    <Music className="size-4 text-indigo-300 mr-1.5" /> Bật nhạc
+                    <Music className="size-3.5 text-indigo-300 shrink-0" />
+                    <span className="hidden xs:inline">Bật nhạc</span>
                   </>
                 )}
+                {cfg.music.customName && (
+                  <span className="hidden lg:inline max-w-[100px] truncate text-[10px] text-pink-300 font-semibold opacity-90">
+                    ({cfg.music.customName})
+                  </span>
+                )}
               </Button>
-              <div className="w-20 sm:w-24 hidden sm:block">
+              <div className="w-16 sm:w-20 hidden md:block">
                 <Slider
                   value={[Math.round(music.volume * 100)]}
                   max={100}
@@ -435,10 +450,10 @@ export default function TeamLeaderboard({
                 setShowWinnerModal(true);
                 music.playVictory();
               }}
-              className="bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black text-xs sm:text-sm shadow-[0_3px_0_#78350f] border-2 border-amber-300 rounded-full px-3.5 h-9 active:translate-y-0.5"
+              className="bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-600 hover:to-yellow-500 text-indigo-950 font-black text-xs sm:text-sm shadow-sm border border-amber-300 rounded-full px-2.5 sm:px-3.5 h-7 sm:h-8 active:translate-y-0.5 shrink-0"
             >
-              <Trophy className="size-4 mr-1 text-indigo-950" />
-              {showWinnerModal ? "Xem cúp" : "Vinh danh"}
+              <Trophy className="size-3.5 sm:size-4 mr-1 text-indigo-950 shrink-0" />
+              <span>{showWinnerModal ? "Xem cúp" : "Vinh danh"}</span>
             </Button>
           )}
 
@@ -450,10 +465,10 @@ export default function TeamLeaderboard({
               e.stopPropagation();
               toggleFs();
             }}
-            className="bg-white/10 hover:bg-white/20 text-white border-2 border-white/20 rounded-full font-bold text-xs sm:text-sm h-9 px-3.5"
+            className="bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-full font-bold text-xs sm:text-sm h-7 sm:h-8 px-2.5 sm:px-3.5 shrink-0"
           >
-            {isFs ? <Minimize2 className="size-4 mr-1" /> : <Maximize2 className="size-4 mr-1" />}
-            {isFs ? "Thu nhỏ" : "Toàn màn hình"}
+            {isFs ? <Minimize2 className="size-3.5 sm:size-4 mr-1 shrink-0" /> : <Maximize2 className="size-3.5 sm:size-4 mr-1 shrink-0" />}
+            <span className="hidden sm:inline">{isFs ? "Thu nhỏ" : "Toàn màn hình"}</span>
           </Button>
 
           {/* Nút ĐÓNG bảng xếp hạng */}
@@ -463,52 +478,55 @@ export default function TeamLeaderboard({
               e.stopPropagation();
               handleClose();
             }}
-            className="bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs sm:text-sm rounded-full px-4 h-9 shadow-[0_3px_0_#881337] border-2 border-rose-400 active:translate-y-0.5 flex items-center gap-1.5"
+            className="bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs sm:text-sm rounded-full px-3 sm:px-4 h-7 sm:h-8 shadow-sm border border-rose-400 active:translate-y-0.5 flex items-center gap-1 shrink-0"
             title="Đóng bảng xếp hạng quay lại giao diện bài thi"
           >
-            <X className="size-4" /> ĐÓNG
+            <X className="size-3.5 sm:size-4 shrink-0" />
+            <span>ĐÓNG</span>
           </Button>
         </div>
       </header>
 
-      {/* KHU VỰC NỘI DUNG CHÍNH (TRUNG TÂM MÀN HÌNH MÁY CHIẾU) */}
-      <main className="flex-1 w-full max-w-[1550px] mx-auto px-4 sm:px-8 py-4 sm:py-6 flex flex-col items-center justify-start">
-        {/* BANNER TIÊU ĐỀ "BẢNG XẾP HẠNG" CHUẨN PHONG CÁCH GAMESHOW */}
-        <div className="relative mb-3 flex flex-col items-center">
-          {/* Hộp tiêu đề nền hồng, viền xanh đậm, chữ xanh tím đậm */}
+      {/* KHU VỰC NỘI DUNG CHÍNH (NẰM HOÀN TOÀN BÊN DƯỚI HEADER, KHÔNG CHỒNG LÊN HEADER) */}
+      <main className="flex-1 w-full max-w-[1400px] mx-auto px-3 sm:px-6 py-2 sm:py-3.5 flex flex-col items-center justify-start min-h-0">
+        {/* BANNER TIÊU ĐỀ "BẢNG XẾP HẠNG" CHUẨN PHONG CÁCH GAMESHOW - ĐÃ GIẢM KÍCH THƯỚC 20-25% */}
+        <div className="relative mb-2 sm:mb-3 flex flex-col items-center w-full">
+          {/* Hộp tiêu đề nền hồng, viền xanh đậm, chữ xanh tím đậm - kích thước gọn gàng, cân đối */}
           <div
-            className="rounded-[2.2rem] border-[6px] border-[#0f172a] bg-gradient-to-r from-[#f43f5e] via-[#fb7185] to-[#f43f5e] px-8 sm:px-14 py-3 sm:py-4 shadow-[0_12px_0_#090d16] flex items-center justify-center gap-3 relative transition-transform"
+            className="rounded-[1.4rem] sm:rounded-[1.8rem] border-[4px] sm:border-[5px] border-[#0f172a] bg-gradient-to-r from-[#f43f5e] via-[#fb7185] to-[#f43f5e] px-5 sm:px-9 py-1.5 sm:py-2.5 shadow-[0_6px_0_#090d16] flex items-center justify-center gap-2 sm:gap-2.5 relative transition-transform"
             style={{
-              transform: `scale(${Math.min(1.15, Math.max(0.85, scale * 1.05))})`,
+              transform: `scale(${Math.min(1.0, Math.max(0.82, scale * 1.05))})`,
             }}
           >
-            {/* Chi tiết trang trí góc */}
-            <span className="text-3xl sm:text-5xl animate-bounce">🏆</span>
-            <h1 className="font-black tracking-widest text-center text-[#0f172a] uppercase drop-shadow-[0_2px_0_rgba(255,255,255,0.4)] text-3xl sm:text-5xl lg:text-6xl">
+            <span className="text-xl sm:text-3xl animate-bounce">🏆</span>
+            <h1 className="font-black tracking-widest text-center text-[#0f172a] uppercase drop-shadow-[0_1px_0_rgba(255,255,255,0.4)] text-xl sm:text-3xl lg:text-4xl">
               BẢNG XẾP HẠNG
             </h1>
-            <span className="text-3xl sm:text-5xl animate-bounce">🏆</span>
+            <span className="text-xl sm:text-3xl animate-bounce">🏆</span>
           </div>
 
-          {/* Tên bài kiểm tra / kỳ thi */}
-          <div className="mt-3 flex items-center gap-2 text-center">
-            <span className="text-amber-400 font-black text-lg sm:text-2xl tracking-wide drop-shadow-[0_2px_8px_rgba(250,204,21,0.4)]">
+          {/* Tên bài kiểm tra / kỳ thi - Giảm kích thước, không chiếm quá nhiều chiều cao, tự động xuống dòng/rút gọn */}
+          <div className="mt-1.5 px-4 text-center max-w-2xl sm:max-w-3xl">
+            <span
+              className="text-amber-400 font-extrabold text-sm sm:text-base md:text-lg tracking-wide drop-shadow-[0_2px_6px_rgba(250,204,21,0.35)] line-clamp-2"
+              title={data?.exam?.title}
+            >
               {data?.exam?.title || "Đang tải dữ liệu phòng thi…"}
             </span>
           </div>
         </div>
 
         {/* DANH SÁCH CÁC NHÓM / ĐỘI THI ĐẤU */}
-        <div className="w-full mt-2 sm:mt-4 flex-1 flex flex-col justify-start">
+        <div className="w-full mt-1 sm:mt-2 flex-1 flex flex-col justify-start">
           {!ranked.length ? (
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="p-6 rounded-full bg-white/10 border-4 border-dashed border-white/20 mb-4 animate-pulse">
-                <Radio className="size-16 text-pink-400" />
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="p-4 rounded-full bg-white/10 border-2 border-dashed border-white/20 mb-3 animate-pulse">
+                <Radio className="size-12 text-pink-400" />
               </div>
-              <h3 className="text-2xl sm:text-3xl font-black text-white/90">
+              <h3 className="text-xl sm:text-2xl font-black text-white/90">
                 CHƯA CÓ NHÓM NÀO THAM GIA PHÒNG THI
               </h3>
-              <p className="text-indigo-200 mt-2 text-base font-semibold max-w-md">
+              <p className="text-indigo-200 mt-1.5 text-sm font-semibold max-w-md">
                 Học sinh quét mã QR hoặc truy cập đường dẫn bài thi theo đội để bắt đầu thi đấu.
               </p>
             </div>
@@ -517,20 +535,29 @@ export default function TeamLeaderboard({
               className="relative w-full mx-auto"
               style={{
                 height: n * (rowHeight + gap),
-                maxWidth: "1480px",
+                maxWidth: "1350px",
               }}
             >
               {ranked.map((team, index) => {
                 const isChampion = index === 0;
                 const isTop2 = index === 1;
                 const isTop3 = index === 2;
-                const isTop3Group = index < 3;
                 const pct = total ? Math.min(100, Math.round((team.answered_count / total) * 100)) : 0;
                 const isBump = bumped[team.id];
 
                 // Biểu tượng thứ hạng
                 const rankBadge =
                   index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}`;
+
+                // Tính toán kích thước các phần tử trong thẻ nhóm theo tỷ lệ rowHeight (đã giảm 20-25%)
+                const badgeSize = Math.max(38, Math.round(rowHeight * 0.72));
+                const badgeFont = Math.max(16, Math.round(rowHeight * 0.40));
+                const teamNameFont = Math.max(15, Math.round(rowHeight * 0.30));
+                const progFont = Math.max(10, Math.round(rowHeight * 0.15));
+                const correctLabelFont = Math.max(9, Math.round(rowHeight * 0.12));
+                const correctValFont = Math.max(16, Math.round(rowHeight * 0.28));
+                const scoreLabelFont = Math.max(10, Math.round(rowHeight * 0.13));
+                const scoreValFont = Math.max(20, Math.round(rowHeight * 0.38));
 
                 return (
                   <div
@@ -541,11 +568,11 @@ export default function TeamLeaderboard({
                       height: rowHeight,
                     }}
                   >
-                    {/* Hộp nhóm: Tông hồng/tím hồng, viền xanh đậm, chi tiết vàng nổi bật */}
+                    {/* Hộp nhóm: Tông hồng/tím hồng, viền xanh đậm, chi tiết vàng nổi bật - Giảm padding/margin dư thừa */}
                     <div
-                      className={`h-full w-full rounded-[2rem] border-[5px] sm:border-[6px] border-[#0f172a] shadow-[0_10px_0_#090d16] px-4 sm:px-7 flex items-center justify-between gap-3 sm:gap-6 relative overflow-hidden transition-all duration-300 ${
+                      className={`h-full w-full rounded-[1.2rem] sm:rounded-[1.5rem] border-[3px] sm:border-[4px] border-[#0f172a] shadow-[0_5px_0_#090d16] px-3 sm:px-5 flex items-center justify-between gap-2.5 sm:gap-4 relative overflow-hidden transition-all duration-300 ${
                         isChampion
-                          ? "bg-gradient-to-r from-[#f43f5e] via-[#e11d48] to-[#be185d] border-[#facc15] shadow-[0_12px_0_#090d16,0_0_35px_rgba(250,204,21,0.45)]"
+                          ? "bg-gradient-to-r from-[#f43f5e] via-[#e11d48] to-[#be185d] border-[#facc15] shadow-[0_6px_0_#090d16,0_0_24px_rgba(250,204,21,0.4)]"
                           : isTop2
                           ? "bg-gradient-to-r from-[#e11d48] to-[#db2777]"
                           : isTop3
@@ -556,12 +583,12 @@ export default function TeamLeaderboard({
                       }`}
                     >
                       {/* Hiệu ứng tia sáng phản chiếu nhẹ kiểu game */}
-                      <div className="absolute inset-0 bg-gradient-to-b from-white/20 via-transparent to-black/20 pointer-events-none" />
+                      <div className="absolute inset-0 bg-gradient-to-b from-white/15 via-transparent to-black/20 pointer-events-none" />
 
-                      {/* 1. CỘT THỨ HẠNG (BÊN TRÁI) */}
-                      <div className="flex items-center gap-3 sm:gap-4 shrink-0 z-10">
+                      {/* 1. CỘT THỨ HẠNG (BÊN TRÁI) - Căn giữa dọc, kích thước vừa phải */}
+                      <div className="flex items-center shrink-0 z-10">
                         <div
-                          className={`grid place-items-center rounded-2xl border-4 border-[#0f172a] shadow-[0_4px_0_#090d16] font-black ${
+                          className={`grid place-items-center rounded-xl sm:rounded-2xl border-[3px] border-[#0f172a] shadow-[0_3px_0_#090d16] font-black ${
                             isChampion
                               ? "bg-amber-400 text-indigo-950 scale-105"
                               : isTop2
@@ -571,51 +598,50 @@ export default function TeamLeaderboard({
                               : "bg-white/25 text-white"
                           }`}
                           style={{
-                            width: Math.max(52, Math.round(rowHeight * 0.7)),
-                            height: Math.max(52, Math.round(rowHeight * 0.7)),
-                            fontSize: Math.max(22, Math.round(rowHeight * 0.38)),
+                            width: badgeSize,
+                            height: badgeSize,
+                            fontSize: badgeFont,
                           }}
                         >
                           <span className="leading-none drop-shadow-sm">{rankBadge}</span>
                         </div>
                       </div>
 
-                      {/* 2. CỘT TÊN NHÓM & TIẾN ĐỘ (Ở GIỮA) */}
+                      {/* 2. CỘT TÊN NHÓM & TIẾN ĐỘ (Ở GIỮA) - Cân đối theo chiều ngang */}
                       <div className="flex-1 min-w-0 z-10 flex flex-col justify-center">
-                        {/* Tên nhóm viết CHỮ HOA, kích thước rất lớn */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 sm:gap-2">
                           <span
-                            className="font-black uppercase tracking-wider text-white truncate drop-shadow-[0_3px_0_#0f172a]"
+                            className="font-black uppercase tracking-wider text-white truncate drop-shadow-[0_2px_0_#0f172a]"
                             style={{
-                              fontSize: Math.max(20, Math.round(rowHeight * 0.35)),
+                              fontSize: teamNameFont,
                             }}
                           >
                             {team.name}
                           </span>
                           {isChampion && (
-                            <span className="text-2xl sm:text-3xl animate-trophy drop-shadow-md shrink-0">
+                            <span className="text-lg sm:text-2xl animate-trophy drop-shadow-md shrink-0">
                               🏆
                             </span>
                           )}
                           {team.finished_at && (
-                            <span className="hidden lg:inline-flex items-center gap-1 text-[11px] font-black uppercase px-2.5 py-0.5 rounded-full bg-emerald-500 text-white border border-emerald-300 shrink-0">
-                              <CheckCircle2 className="size-3" /> ĐÃ HOÀN THÀNH
+                            <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500 text-white border border-emerald-300 shrink-0">
+                              <CheckCircle2 className="size-2.5" /> HOÀN THÀNH
                             </span>
                           )}
                         </div>
 
-                        {/* Thanh tiến độ làm bài màu vàng */}
-                        <div className="mt-1.5 flex items-center gap-3 w-full max-w-[560px]">
-                          <div className="flex-1 h-3 sm:h-3.5 rounded-full bg-[#0f172a]/50 p-[2px] border-2 border-[#0f172a] overflow-hidden shadow-inner">
+                        {/* Thanh tiến độ làm bài màu vàng - Thu nhỏ chiều cao, gọn gàng */}
+                        <div className="mt-1 flex items-center gap-2 sm:gap-3 w-full max-w-[500px]">
+                          <div className="flex-1 h-2 sm:h-2.5 rounded-full bg-[#0f172a]/50 p-[1.5px] border border-[#0f172a] overflow-hidden shadow-inner">
                             <div
                               className="h-full bg-gradient-to-r from-amber-300 to-yellow-400 rounded-full transition-all duration-700 shadow-sm"
                               style={{ width: `${pct}%` }}
                             />
                           </div>
                           <span
-                            className="font-black text-amber-200 tracking-wider shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
+                            className="font-black text-amber-200 tracking-wider shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]"
                             style={{
-                              fontSize: Math.max(12, Math.round(rowHeight * 0.16)),
+                              fontSize: progFont,
                             }}
                           >
                             TIẾN ĐỘ: {team.answered_count}/{total || "?"} CÂU ({pct}%)
@@ -623,50 +649,49 @@ export default function TeamLeaderboard({
                         </div>
                       </div>
 
-                      {/* 3. CỘT CÂU ĐÚNG */}
+                      {/* 3. CỘT CÂU ĐÚNG - Thu nhỏ khung, không chiếm diện tích quá lớn */}
                       <div
-                        className="text-center shrink-0 z-10 hidden sm:flex flex-col items-center justify-center px-3 py-1.5 rounded-2xl bg-[#0f172a]/40 border-2 border-[#0f172a]/70"
-                        style={{ width: Math.max(90, Math.round(rowHeight * 1.35)) }}
+                        className="text-center shrink-0 z-10 hidden sm:flex flex-col items-center justify-center px-2.5 py-1 rounded-xl bg-[#0f172a]/40 border border-[#0f172a]/70"
+                        style={{ width: Math.max(75, Math.round(rowHeight * 1.15)) }}
                       >
                         <div
                           className="font-extrabold uppercase text-white/80 tracking-wider"
-                          style={{ fontSize: Math.max(11, Math.round(rowHeight * 0.13)) }}
+                          style={{ fontSize: correctLabelFont }}
                         >
                           CÂU ĐÚNG
                         </div>
                         <div
-                          className="font-black text-white leading-tight drop-shadow-[0_2px_0_#0f172a]"
-                          style={{ fontSize: Math.max(22, Math.round(rowHeight * 0.32)) }}
+                          className="font-black text-white leading-tight drop-shadow-[0_1px_0_#0f172a]"
+                          style={{ fontSize: correctValFont }}
                         >
                           {team.correct_count}
                           {total > 0 && (
-                            <span className="text-white/60 text-sm font-bold">/{total}</span>
+                            <span className="text-white/60 text-xs font-bold">/{total}</span>
                           )}
                         </div>
                       </div>
 
-                      {/* 4. CỘT ĐIỂM SỐ NỔI BẬT NHẤT (BÊN PHẢI) */}
+                      {/* 4. CỘT ĐIỂM SỐ NỔI BẬT NHẤT (BÊN PHẢI) - Giảm kích thước số điểm, vẫn nổi bật */}
                       <div
-                        className="text-right shrink-0 z-10 flex flex-col items-end justify-center pl-2"
-                        style={{ minWidth: Math.max(120, Math.round(rowHeight * 1.85)) }}
+                        className="text-right shrink-0 z-10 flex flex-col items-end justify-center pl-1 sm:pl-2"
+                        style={{ minWidth: Math.max(95, Math.round(rowHeight * 1.55)) }}
                       >
                         <div
                           className="font-black uppercase text-amber-200 tracking-wider flex items-center gap-1 drop-shadow-sm"
-                          style={{ fontSize: Math.max(12, Math.round(rowHeight * 0.14)) }}
+                          style={{ fontSize: scoreLabelFont }}
                         >
-                          <Star className="size-3.5 fill-amber-300 text-amber-300 inline" />
-                          ĐIỂM SỐ
+                          <Star className="size-3 fill-amber-300 text-amber-300 inline shrink-0" />
+                          <span>ĐIỂM SỐ</span>
                         </div>
                         <div
-                          className="font-black text-amber-300 tracking-tight leading-none drop-shadow-[0_4px_0_#0f172a] flex items-baseline gap-1"
+                          className="font-black text-amber-300 tracking-tight leading-none drop-shadow-[0_2px_0_#0f172a] flex items-baseline gap-1"
                           style={{
-                            fontSize: Math.max(28, Math.round(rowHeight * 0.44)),
+                            fontSize: scoreValFont,
                           }}
                         >
                           <span>{Number(team.score).toFixed(team.score % 1 === 0 ? 0 : 2)}</span>
                           <span
-                            className="font-bold text-amber-200/90"
-                            style={{ fontSize: Math.max(12, Math.round(rowHeight * 0.2)) }}
+                            className="font-bold text-amber-200/90 text-xs"
                           >
                             ĐIỂM
                           </span>
@@ -681,15 +706,15 @@ export default function TeamLeaderboard({
         </div>
       </main>
 
-      {/* FOOTER BẢNG ĐIỀU HƯỚNG MÁY CHIẾU */}
-      <footer className="w-full py-2.5 px-6 text-center text-xs font-semibold text-indigo-300/80 bg-[#060c22]/90 border-t border-indigo-950 flex items-center justify-between">
+      {/* FOOTER BẢNG ĐIỀU HƯỚNG MÁY CHIẾU - Nhỏ gọn, tinh tế */}
+      <footer className="w-full shrink-0 py-1.5 sm:py-2 px-4 sm:px-6 text-center text-[11px] sm:text-xs font-semibold text-indigo-300/80 bg-[#060c22]/90 border-t border-indigo-950 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span>🎮 CHẾ ĐỘ THI ĐẤU ĐỘI/NHÓM TRỰC TIẾP</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <span>Tự động cập nhật thời gian thực</span>
           <span className="hidden sm:inline">·</span>
-          <span className="hidden sm:inline">Nhấn phím F11 hoặc nút góc trên để bật Toàn màn hình</span>
+          <span className="hidden sm:inline">Nhấn F11 hoặc nút trên để Toàn màn hình</span>
         </div>
       </footer>
 

@@ -187,7 +187,7 @@ export default function EditExam() {
 
             {displayMode === "team" && (
               <div className="mt-3">
-                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} />
+                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId={id} />
               </div>
             )}
 
