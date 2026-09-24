@@ -14,6 +14,7 @@ import LockModeSettings from "@/components/LockModeSettings";
 import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
+import ExamMusicManager from "@/components/ExamMusicManager";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -185,9 +186,18 @@ export default function EditExam() {
               Quizizz: mỗi lần 1 câu, không quay lại, tự lưu tiến độ.
             </div>
 
-            {displayMode === "team" && (
+            {displayMode === "team" ? (
               <div className="mt-3">
-                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId={id} />
+                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId={id} examTitle={title} />
+              </div>
+            ) : (
+              <div className="mt-3">
+                <ExamMusicManager
+                  value={teamConfig.music}
+                  onChange={(music) => setTeamConfig({ ...teamConfig, music })}
+                  examId={id}
+                  examTitle={title}
+                />
               </div>
             )}
 

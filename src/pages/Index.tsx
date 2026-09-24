@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
+import ExamMusicModal from "@/components/ExamMusicModal";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -27,13 +28,18 @@ export default function Index() {
   const [stats, setStats] = useState<Stats>({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
   const [query, setQuery] = useState("");
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
+  const [musicModalExam, setMusicModalExam] = useState<any | null>(null);
+
+  const loadExams = async () => {
+    const { data: ex } = await supabase.from("exams")
+      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
+      .order("created_at", { ascending: false }).limit(200);
+    setExams(ex || []);
+  };
 
   useEffect(() => {
     (async () => {
-      const { data: ex } = await supabase.from("exams")
-        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
-        .order("created_at", { ascending: false }).limit(200);
-      setExams(ex || []);
+      await loadExams();
       const { data: subs } = await supabase.from("submissions").select("student_name,student_class,score,violation_count");
       const s = subs || [];
       const uniqStudents = new Set(s.map((x: any) => `${x.student_name}__${x.student_class}`)).size;
@@ -312,6 +318,25 @@ export default function Index() {
                       <FileDown className="size-3.5 mr-1" /> Tải đề gốc
                     </Button>
                   ) : <span />}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={`rounded-lg col-span-2 flex items-center justify-center gap-1.5 font-semibold transition-all ${
+                      e.team_config?.music?.enabled
+                        ? "bg-pink-500/10 text-pink-700 dark:text-pink-300 border-pink-500/40 hover:bg-pink-500/20"
+                        : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setMusicModalExam(e)}
+                  >
+                    <Music className="size-3.5 text-pink-500" />
+                    {e.team_config?.music?.enabled ? (
+                      <span className="truncate max-w-[220px]">
+                        🎵 Nhạc nền: <span className="font-bold underline">{e.team_config?.music?.customName || (e.team_config?.music?.useDefault ? "Mặc định" : "Đã bật")}</span>
+                      </span>
+                    ) : (
+                      <span>🎵 Cài đặt nhạc nền bài thi</span>
+                    )}
+                  </Button>
                   {status === "closed" ? (
                     <Button size="sm" variant="outline" className="rounded-lg col-span-2 border-success/40 text-success hover:bg-success/10" onClick={() => setClosed(e, false)}>
                       <Unlock className="size-3.5 mr-1" /> 🔓 Mở lại đề thi
@@ -345,6 +370,13 @@ export default function Index() {
           />
         </div>
       )}
+      {/* MODAL CÀI ĐẶT NHẠC NỀN BÀI THI */}
+      <ExamMusicModal
+        open={!!musicModalExam}
+        onOpenChange={(open) => !open && setMusicModalExam(null)}
+        exam={musicModalExam}
+        onSaved={loadExams}
+      />
     </div>
   );
 }

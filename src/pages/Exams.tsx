@@ -20,6 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
+import ExamMusicModal from "@/components/ExamMusicModal";
 
 const PAGE_SIZE = 10;
 
@@ -32,6 +33,7 @@ export default function Exams() {
   const [page, setPage] = useState(1);
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<any | null>(null);
+  const [musicModalExam, setMusicModalExam] = useState<any | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -327,6 +329,25 @@ export default function Exams() {
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => downloadOriginal(e)}>
                     <FileDown className="size-3.5 mr-1" /> Đề gốc
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={`rounded-lg col-span-2 flex items-center justify-center gap-1.5 font-semibold transition-all ${
+                      e.team_config?.music?.enabled
+                        ? "bg-pink-500/10 text-pink-700 dark:text-pink-300 border-pink-500/40 hover:bg-pink-500/20"
+                        : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setMusicModalExam(e)}
+                  >
+                    <Music className="size-3.5 text-pink-500" />
+                    {e.team_config?.music?.enabled ? (
+                      <span className="truncate max-w-[220px]">
+                        🎵 Nhạc nền: <span className="font-bold underline">{e.team_config?.music?.customName || (e.team_config?.music?.useDefault ? "Mặc định" : "Đã bật")}</span>
+                      </span>
+                    ) : (
+                      <span>🎵 Cài đặt nhạc nền bài thi</span>
+                    )}
+                  </Button>
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => handleDuplicateClick(e)}>
                     <CopyPlus className="size-3.5 mr-1" /> Sao chép
                   </Button>
@@ -402,6 +423,13 @@ export default function Exams() {
           />
         </div>
       )}
+      {/* MODAL CÀI ĐẶT NHẠC NỀN BÀI THI */}
+      <ExamMusicModal
+        open={!!musicModalExam}
+        onOpenChange={(open) => !open && setMusicModalExam(null)}
+        exam={musicModalExam}
+        onSaved={load}
+      />
     </div>
   );
 }

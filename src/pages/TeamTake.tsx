@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -7,14 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 import RichText from "@/components/RichText";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
-import { useBattleMusic } from "@/hooks/useBattleMusic";
 import { LeaderboardBoard, rankTeams, LbTeam } from "./TeamLeaderboard";
 import {
-  ChevronLeft, ChevronRight, Users, Trophy, Music, Music2, Send, CheckCircle2, Loader2,
+  ChevronLeft, ChevronRight, Users, Trophy, Send, CheckCircle2, Loader2,
 } from "lucide-react";
 
 type Q = any;
@@ -45,13 +43,6 @@ export default function TeamTake() {
   const [finished, setFinished] = useState(false);
 
   const cfg = useMemo(() => normalizeTeamConfig(lb?.exam?.team_config), [lb]);
-  const music = useBattleMusic({
-    initialVolume: cfg.music.volume,
-    customAudioUrl: cfg.music.customUrl,
-    idbKey: cfg.music.idbKey,
-    loop: cfg.music.loop,
-  });
-  const musicStarted = useRef(false);
   const storageKey = `teamplay:${id}`;
 
   const questions = useMemo(() => flatten(exam?.questions), [exam]);
@@ -108,15 +99,6 @@ export default function TeamTake() {
     const t = setInterval(() => { loadState(teamId); loadLb(); }, 6000);
     return () => { supabase.removeChannel(ch); clearInterval(t); };
   }, [teamId, id, loadState, loadLb]);
-
-  // Nhạc nền
-  useEffect(() => {
-    if (teamId && cfg.music.enabled && !musicStarted.current) {
-      musicStarted.current = true;
-      music.setVolume(cfg.music.volume);
-      music.start();
-    }
-  }, [teamId, cfg.music.enabled, cfg.music.volume, music]);
 
   const join = async () => {
     const tName = (customTeam || pickTeam).trim();
@@ -277,19 +259,8 @@ export default function TeamTake() {
               <span>Đã trả lời <b>{answeredCount}</b></span>
               <span>Điểm <b className="text-primary">{Number(team?.score || 0).toFixed(2)}</b></span>
               {myRank > 0 && <span>Hạng <b>#{myRank}</b></span>}
-              {cfg.music.enabled && (
-                <Button variant="outline" size="icon" onClick={music.toggle}>
-                  {music.playing ? <Music2 className="size-4" /> : <Music className="size-4" />}
-                </Button>
-              )}
             </div>
           </div>
-          {cfg.music.enabled && music.playing && (
-            <div className="flex items-center gap-2 max-w-xs">
-              <Music className="size-3 text-muted-foreground" />
-              <Slider value={[Math.round(music.volume * 100)]} max={100} step={5} onValueChange={([v]) => music.setVolume(v / 100)} />
-            </div>
-          )}
           <Progress value={pct} className="h-2" />
         </div>
       </header>

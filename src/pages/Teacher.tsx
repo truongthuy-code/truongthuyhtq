@@ -21,6 +21,7 @@ import LockModeSettings from "@/components/LockModeSettings";
 import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
+import ExamMusicManager from "@/components/ExamMusicManager";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -406,11 +407,20 @@ export default function Teacher() {
                 Quizizz: mỗi lần 1 câu, không quay lại, tự lưu tiến độ.
               </div>
 
-              {displayMode === "team" && (
-              <div className="mt-3">
-                <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId="new-exam" />
-              </div>
-            )}
+              {displayMode === "team" ? (
+                <div className="mt-3">
+                  <TeamModeSettings value={teamConfig} onChange={setTeamConfig} examId="new-exam" examTitle={title} />
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <ExamMusicManager
+                    value={teamConfig.music}
+                    onChange={(music) => setTeamConfig({ ...teamConfig, music })}
+                    examId="new-exam"
+                    examTitle={title}
+                  />
+                </div>
+              )}
 
             {displayMode === "quizizz" && (
                 <div className="flex items-center justify-between rounded-lg border p-3 mt-3 bg-background">

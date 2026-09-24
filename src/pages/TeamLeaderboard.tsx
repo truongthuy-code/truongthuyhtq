@@ -399,47 +399,46 @@ export default function TeamLeaderboard({
 
         {/* Các nút bấm thao tác của giáo viên - Luôn hiển thị đầy đủ 100%, không bị che/cắt */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Nút bật/tắt nhạc nền */}
-          {cfg.music.enabled && (
-            <div className="flex items-center gap-1.5 bg-indigo-950/90 border border-indigo-700/60 rounded-full px-2 sm:px-2.5 py-0.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  music.toggle();
-                }}
-                title={cfg.music.customName ? `Nhạc: ${cfg.music.customName}` : "Nhạc nền thi đấu"}
-                className="h-7 sm:h-8 px-2 text-indigo-100 hover:text-white hover:bg-white/15 rounded-full font-bold text-xs flex items-center gap-1"
-              >
-                {music.playing ? (
-                  <>
-                    <Music2 className="size-3.5 text-pink-400 animate-pulse shrink-0" />
-                    <span className="hidden xs:inline">Tắt nhạc</span>
-                  </>
-                ) : (
-                  <>
-                    <Music className="size-3.5 text-indigo-300 shrink-0" />
-                    <span className="hidden xs:inline">Bật nhạc</span>
-                  </>
-                )}
-                {cfg.music.customName && (
-                  <span className="hidden lg:inline max-w-[100px] truncate text-[10px] text-pink-300 font-semibold opacity-90">
-                    ({cfg.music.customName})
-                  </span>
-                )}
-              </Button>
-              <div className="w-16 sm:w-20 hidden md:block">
-                <Slider
-                  value={[Math.round(music.volume * 100)]}
-                  max={100}
-                  step={5}
-                  onValueChange={(v) => music.setVolume(v[0] / 100)}
-                  className="cursor-pointer"
-                />
-              </div>
+          {/* Nút BẬT / TẮT NHẠC NỀN trên Bảng xếp hạng của giáo viên */}
+          <div className="flex items-center gap-1.5 bg-indigo-950/90 border border-indigo-700/60 rounded-full px-2 sm:px-2.5 py-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                music.toggle();
+              }}
+              title={cfg.music.customName ? `Nhạc nền: ${cfg.music.customName}` : "Nhạc nền thi đấu"}
+              className="h-7 sm:h-8 px-2 text-indigo-100 hover:text-white hover:bg-white/15 rounded-full font-bold text-xs flex items-center gap-1"
+            >
+              {music.playing ? (
+                <>
+                  <Music2 className="size-3.5 text-pink-400 animate-pulse shrink-0" />
+                  <span className="text-pink-300 font-extrabold">Tắt nhạc</span>
+                </>
+              ) : (
+                <>
+                  <Music className="size-3.5 text-indigo-300 shrink-0" />
+                  <span>Bật nhạc</span>
+                </>
+              )}
+              {cfg.music.customName && (
+                <span className="hidden lg:inline max-w-[100px] truncate text-[10px] text-pink-300 font-semibold opacity-90">
+                  ({cfg.music.customName})
+                </span>
+              )}
+            </Button>
+            <div className="w-16 sm:w-20 hidden md:block">
+              <Slider
+                value={[Math.round(music.volume * 100)]}
+                max={100}
+                step={5}
+                onValueChange={(v) => music.setVolume(v[0] / 100)}
+                className="cursor-pointer"
+                title="Âm lượng nhạc nền"
+              />
             </div>
-          )}
+          </div>
 
           {/* Nút công bố trao giải */}
           {champion && (
