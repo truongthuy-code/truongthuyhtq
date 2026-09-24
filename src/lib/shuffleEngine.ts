@@ -42,7 +42,13 @@ export function shuffleMC(q: MCQuestion, opts: ShuffleOptions): MCQuestion {
 export function shuffleTF(q: TFQuestion, opts: ShuffleOptions): TFQuestion {
   if (!opts.shuffleAnswers) return { ...q };
   const shuffled = shuffleArray(q.items);
-  const newItems = shuffled.map((it, i) => ({ key: TF_KEYS[i], text: it.text, correct: it.correct }));
+  const newItems = shuffled.map((it, i) => ({
+    key: TF_KEYS[i],
+    text: it.text,
+    correct: it.correct,
+    level: it.level,
+    order: it.order,
+  }));
   return { ...q, items: newItems };
 }
 

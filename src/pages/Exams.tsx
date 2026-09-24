@@ -6,10 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   FileText, Plus, Search, Copy, Share2, Trash2, Settings, FileDown, BarChart3,
-  Play, RotateCcw, CopyPlus, Activity,
+  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { publishExamClosed } from "@/lib/studentStorage";
 
 const PAGE_SIZE = 10;
 
@@ -57,6 +58,32 @@ export default function Exams() {
   const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const countQs = (q: any) => (q?.partI?.length || 0) + (q?.partII?.length || 0) + (q?.partIII?.length || 0);
+
+  const getStatus = (e: any): "not_open" | "open" | "closed" => {
+    const now = Date.now();
+    if (e.manual_closed) return "closed";
+    if (e.open_at && new Date(e.open_at).getTime() > now) return "not_open";
+    if (e.close_at && new Date(e.close_at).getTime() < now) return "closed";
+    return "open";
+  };
+
+  const setClosed = async (exam: any, closed: boolean) => {
+    const updates: any = { manual_closed: closed };
+    if (closed) updates.allow_review = true;
+    const { error } = await supabase.from("exams").update(updates).eq("id", exam.id);
+    if (error) return toast.error(error.message);
+    if (closed) {
+      publishExamClosed(exam.id, exam.questions, exam.title);
+    }
+    toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
+    load();
+  };
+
+  const confirmClose = (exam: any) => {
+    if (confirm(`Bạn có chắc chắn muốn đóng đề "${exam.title}"? Học sinh sẽ không thể nộp bài mới và hệ thống sẽ tự động công bố đáp án chính thức kèm lời giải.`)) {
+      setClosed(exam, true);
+    }
+  };
 
   const copyLink = (id: string) => {
     navigator.clipboard.writeText(`${window.location.origin}/take/${id}`);
@@ -149,9 +176,28 @@ export default function Exams() {
                       <span>Lớp: <b>{cls}</b></span>
                     </div>
                   </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success font-medium inline-flex items-center gap-1">
-                    <Activity className="size-3" /> Đang mở
-                  </span>
+                  {(() => {
+                    const st = getStatus(e);
+                    if (st === "closed") {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium inline-flex items-center gap-1">
+                          <Lock className="size-3" /> Đã đóng
+                        </span>
+                      );
+                    }
+                    if (st === "not_open") {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 font-medium inline-flex items-center gap-1">
+                          <Activity className="size-3" /> Chưa mở
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success font-medium inline-flex items-center gap-1">
+                        <Activity className="size-3" /> Đang mở
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mt-4 text-center">
@@ -176,6 +222,15 @@ export default function Exams() {
                   <Button size="sm" variant="outline" className="rounded-lg" asChild>
                     <Link to={`/exam/${e.id}/edit`}><Settings className="size-3.5 mr-1" /> Sửa</Link>
                   </Button>
+                  {getStatus(e) === "closed" ? (
+                    <Button size="sm" variant="outline" className="rounded-lg text-success border-success/40" onClick={() => setClosed(e, false)}>
+                      <Unlock className="size-3.5 mr-1" /> Mở lại đề
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="outline" className="rounded-lg text-destructive border-destructive/40" onClick={() => confirmClose(e)}>
+                      <Lock className="size-3.5 mr-1" /> Đóng đề
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e.id)}>
                     <Copy className="size-3.5 mr-1" /> Copy link
                   </Button>

@@ -132,6 +132,13 @@ export default function AuthPage() {
             </form>
           </TabsContent>
         </Tabs>
+
+        <div className="mt-6 pt-4 border-t text-center text-xs text-muted-foreground">
+          Bạn là Học sinh?{" "}
+          <Link to="/student/auth" className="text-primary font-semibold hover:underline">
+            Đăng nhập / Đăng ký cổng học sinh tại đây
+          </Link>
+        </div>
       </Card>
     </div>
   );

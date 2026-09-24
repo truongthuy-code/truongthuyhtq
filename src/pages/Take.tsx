@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,10 +9,12 @@ import { getTFValue } from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Clock, SkipForward, CheckCircle2, Send, ShieldAlert, Maximize2, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, SkipForward, CheckCircle2, Send, ShieldAlert, Maximize2, Loader2, UserCheck } from "lucide-react";
 import RichText from "@/components/RichText";
 import { useExamLock } from "@/hooks/useExamLock";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { useStudentAuth } from "@/hooks/useStudentAuth";
+import { saveStudentSubmission } from "@/lib/studentStorage";
 
 
 function shuffle<T>(arr: T[]): T[] {
@@ -27,10 +29,12 @@ function shuffle<T>(arr: T[]): T[] {
 export default function Take() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { student, logout: studentLogout } = useStudentAuth();
   const [exam, setExam] = useState<any>(null);
   const [started, setStarted] = useState(false);
   const [name, setName] = useState("");
   const [klass, setKlass] = useState("");
+  const [account, setAccount] = useState("");
   const [questions, setQuestions] = useState<any[]>([]);
   const [optionOrders, setOptionOrders] = useState<Record<string, string[]>>({});
   const [idx, setIdx] = useState(0);
@@ -46,6 +50,15 @@ export default function Take() {
   const instantFb = isQuiz && !!exam?.instant_feedback;
   const storageKey = useMemo(() => (id && name && klass ? `take:${id}:${name}:${klass}` : ""), [id, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
+
+  // Auto-fill from student account if logged in
+  useEffect(() => {
+    if (student) {
+      if (!name) setName(student.fullName);
+      if (!klass) setKlass(student.className);
+      if (!account) setAccount(student.account);
+    }
+  }, [student]);
 
   // Snapshot of live state for unload handler (refs avoid stale closures)
   const liveRef = useRef<any>({});
@@ -76,7 +89,7 @@ export default function Take() {
 
   // Keep a live snapshot for the unload auto-submit
   useEffect(() => {
-    liveRef.current = { started, finished, answers, name, klass, violations: lock.violations, violationCount: lock.violationCount, doneKey, storageKey };
+    liveRef.current = { started, finished, answers, name, klass, account, examTitle: exam?.title, violations: lock.violations, violationCount: lock.violationCount, doneKey, storageKey };
   });
 
   // Auto-save & auto-grade when the student leaves the page without pressing NỘP BÀI
@@ -236,6 +249,35 @@ export default function Take() {
     if (error) { toast.error(error.message); submittedRef.current = false; return; }
     if (doneKey) try { localStorage.setItem(doneKey, "1"); } catch {}
     if (storageKey) try { localStorage.removeItem(storageKey); } catch {}
+
+    // Save to student submission history linked to student account
+    try {
+      const durSecs = startedAtRef.current
+        ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
+        : null;
+      const { data: subData } = await supabase.rpc("get_submission_for_student", { p_submission_id: data });
+      const sInfo = (subData as any)?.submission;
+      saveStudentSubmission({
+        id: data,
+        examId: id!,
+        examTitle: exam?.title || "Đề kiểm tra",
+        studentAccount: (account.trim() || student?.account || `${name.trim()}_${klass.trim()}`),
+        studentName: name.trim(),
+        studentClass: klass.trim(),
+        score: sInfo?.score ?? 0,
+        maxScore: sInfo?.max_score ?? 10,
+        correctCount: sInfo?.correct_count ?? 0,
+        wrongCount: sInfo?.wrong_count ?? 0,
+        answers: answers as any,
+        startedAt: startedAtRef.current,
+        submittedAt: new Date().toISOString(),
+        durationSeconds: durSecs,
+        status: "completed",
+      });
+    } catch (e) {
+      console.error("Failed to link student submission:", e);
+    }
+
     await lock.exitFullscreen();
     navigate(`/result/${data}`);
   };
@@ -310,9 +352,40 @@ export default function Take() {
             </div>
           )}
           <div className="mt-6 space-y-3">
-            <div><Label>Họ và tên</Label><Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" /></div>
-            <div><Label>Lớp</Label><Input value={klass} onChange={(e) => setKlass(e.target.value)} className="mt-1" /></div>
+            <div><Label>Họ và tên *</Label><Input placeholder="Nhập họ và tên học sinh..." value={name} onChange={(e) => setName(e.target.value)} className="mt-1" /></div>
+            <div><Label>Lớp *</Label><Input placeholder="Nhập lớp (VD: 12A1)..." value={klass} onChange={(e) => setKlass(e.target.value)} className="mt-1" /></div>
+            <div><Label>Tài khoản (Email hoặc mã học sinh)</Label><Input placeholder="Ví dụ: an12a1@gmail.com hoặc nguyenvana..." value={account} onChange={(e) => setAccount(e.target.value)} className="mt-1" /></div>
           </div>
+
+          {student ? (
+            <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs flex items-center justify-between">
+              <div>
+                <span className="font-semibold text-primary">Đang thi với tài khoản:</span> {student.fullName} ({student.className})
+                <div className="text-muted-foreground text-[11px]">{student.account}</div>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs h-7 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  studentLogout();
+                  setName("");
+                  setKlass("");
+                  setAccount("");
+                }}
+              >
+                Đổi tài khoản
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-3 text-xs text-muted-foreground text-center">
+              Đã có tài khoản?{" "}
+              <Link to="/student/auth" state={{ from: `/take/${id}` }} className="text-primary font-medium hover:underline">
+                Đăng nhập để tự động lưu & đồng bộ
+              </Link>
+            </div>
+          )}
           <Button onClick={start} className="w-full mt-6 bg-gradient-primary">
             {exam.lock_mode?.enabled && <Maximize2 className="size-4 mr-2" />}
             Bắt đầu làm bài

@@ -22,6 +22,8 @@ import Subjects from "./pages/Subjects.tsx";
 import ShufflePage from "./pages/Shuffle.tsx";
 import TeamTake from "./pages/TeamTake.tsx";
 import TeamLeaderboard from "./pages/TeamLeaderboard.tsx";
+import StudentAuth from "./pages/StudentAuth.tsx";
+import StudentDashboard from "./pages/StudentDashboard.tsx";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +37,8 @@ const App = () => (
           <Routes>
             <Route path="/auth" element={<Auth />} />
             {/* public student routes */}
+            <Route path="/student" element={<StudentDashboard />} />
+            <Route path="/student/auth" element={<StudentAuth />} />
             <Route path="/take/:id" element={<Take />} />
             <Route path="/result/:id" element={<Result />} />
             <Route path="/team/:id" element={<TeamTake />} />

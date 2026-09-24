@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import RichText from "@/components/RichText";
-import { Check, X } from "lucide-react";
+import { Check, X, GraduationCap, ArrowLeft } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import { getTFValue } from "@/lib/grading";
+import { getPublishedExamAnswerKey } from "@/lib/studentStorage";
 
 export default function Result() {
   const { id } = useParams();
@@ -17,8 +18,19 @@ export default function Result() {
       const { data, error } = await supabase.rpc("get_submission_for_student", { p_submission_id: id! });
       if (error || !data) return;
       const payload: any = data;
-      setSub(payload.submission);
-      setExam(payload.exam);
+      const submission = payload.submission;
+      let examObj = payload.exam;
+
+      // If exam is closed via published answer key, unlock review
+      if (!examObj?.questions && submission?.exam_id) {
+        const pub = getPublishedExamAnswerKey(submission.exam_id);
+        if (pub?.questions) {
+          examObj = { ...examObj, allow_review: true, questions: pub.questions };
+        }
+      }
+
+      setSub(submission);
+      setExam(examObj);
     })();
   }, [id]);
 
@@ -124,7 +136,20 @@ export default function Result() {
   if (!allowReview || !exam) {
     return (
       <div className="min-h-screen bg-gradient-soft grid place-items-center p-4">
-        {summary}
+        <div className="max-w-md w-full space-y-4">
+          {summary}
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-800 dark:text-amber-300 space-y-2">
+            <div className="font-semibold text-sm">🔒 Đề thi đang mở (Giáo viên chưa đóng đề thi)</div>
+            <div>
+              Đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ tự động hiển thị sau khi Giáo viên đóng đề thi.
+            </div>
+            <div className="pt-2">
+              <Link to="/student" className="inline-flex items-center text-primary font-semibold hover:underline">
+                <GraduationCap className="size-4 mr-1.5" /> Vào trang cá nhân học sinh để theo dõi lịch sử bài thi
+              </Link>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -266,6 +291,15 @@ export default function Result() {
             </section>
           )}
         </Card>
+
+        <div className="flex justify-center pt-2">
+          <Link
+            to="/student"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-primary text-primary-foreground font-semibold text-sm shadow-soft hover:opacity-95 transition-opacity"
+          >
+            <GraduationCap className="size-4" /> Về trang cá nhân học sinh
+          </Link>
+        </div>
       </div>
     </div>
   );

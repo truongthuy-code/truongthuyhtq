@@ -15,6 +15,7 @@ const items = [
   { title: "Xáo đề kiểm tra", url: "/shuffle", icon: Shuffle },
   { title: "Quản lý học sinh", url: "/students", icon: Users },
   { title: "Kết quả & Báo cáo", url: "/reports", icon: BarChart3 },
+  { title: "Cổng học sinh", url: "/student", icon: GraduationCap },
 ];
 
 export default function AppSidebar() {

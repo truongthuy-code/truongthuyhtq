@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { publishExamClosed } from "@/lib/studentStorage";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -107,13 +108,20 @@ export default function Index() {
   const fmtDt = (s: string | null | undefined) => s ? new Date(s).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" }) : "";
 
   const setClosed = async (exam: any, closed: boolean) => {
-    const { error } = await supabase.from("exams").update({ manual_closed: closed } as any).eq("id", exam.id);
+    const updates: any = { manual_closed: closed };
+    if (closed) {
+      updates.allow_review = true;
+    }
+    const { error } = await supabase.from("exams").update(updates).eq("id", exam.id);
     if (error) { toast.error(error.message); return; }
-    setExams((prev) => prev.map((x) => x.id === exam.id ? { ...x, manual_closed: closed } : x));
-    toast.success(closed ? "Đã đóng đề thi" : "Đã mở lại đề thi");
+    if (closed) {
+      publishExamClosed(exam.id, exam.questions, exam.title);
+    }
+    setExams((prev) => prev.map((x) => x.id === exam.id ? { ...x, manual_closed: closed, allow_review: closed ? true : x.allow_review } : x));
+    toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
   };
   const confirmClose = (exam: any) => {
-    if (confirm(`Bạn có chắc chắn muốn đóng đề thi "${exam.title}"? Học sinh truy cập sẽ không được làm bài mới.`)) {
+    if (confirm(`Bạn có chắc chắn muốn đóng đề thi "${exam.title}"? Học sinh sẽ không thể làm bài mới, đồng thời hệ thống sẽ tự động công bố đáp án chính thức và lời giải cho học sinh.`)) {
       setClosed(exam, true);
     }
   };
