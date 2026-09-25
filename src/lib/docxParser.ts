@@ -205,7 +205,7 @@ function tokensToRich(toks: Tok[]): string {
       out += encTbl(t.rows);
     } else if (t.kind === "pbrk") {
       flushCode();
-      out += " ";
+      out += "\n";
     } else if (t.kind === "obj") {
       flushCode();
       out += encMath("\\boxed{\\text{ct}}");
@@ -473,145 +473,136 @@ function stripMarkers(s: string): string {
   return s.replace(/<g[123]>/gi, "").trim();
 }
 
+export type OptionMarkerMatch = {
+  key: string;       // "A"|"B"|"C"|"D" or "a"|"b"|"c"|"d"
+  delim: string;     // "." or ")"
+  isMarked: boolean; // red, underline, or *
+  precedingTokens: Tok[]; // any tokens (like images) that appeared before this option marker in the paragraph
+  remainingTokens: Tok[]; // the tokens belonging to this option after stripping the marker prefix
+  order?: number;
+  level?: QuestionLevel;
+};
+
 /**
- * Given an ordered token stream, split it into option segments based on letter
- * delimiters like "A.", "B.", … (or "a)", "b)" …).
- *
- * Returns the stem (everything before the first option) plus options with rich
- * text and a `marked` flag (true if the letter character was inside an
- * underlined or red run).
+ * Checks if a paragraph begins with a valid option marker.
+ * Strictly adheres to the rule:
+ * - Only recognizes markers at the very BEGINNING of a new paragraph.
+ * - Valid markers:
+ *     a)  b)  c)  d)
+ *     A.  B.  C.  D.
+ *   (as well as A) or a. at paragraph start).
+ * - NEVER recognizes a), b), c), d), A., B., C., D. appearing in the middle of a paragraph.
+ * - Detects correct answer marking via red color, underline, or leading '*'.
  */
-function splitOptions(
-  toks: Tok[],
-  letters: string,
-  allowedDelims: string = ".)",
-  dotNeedsParaStart = false,
-): { stem: Tok[]; options: { key: string; toks: Tok[]; marked: boolean }[] } {
-  // Flatten the token stream into per-character entries so option markers
-  // can span run boundaries (e.g. underlined "C" then "." in next run).
-  type Atom =
-    | { kind: "ch"; ch: string; marked: boolean }
-    | { kind: "non"; tok: Tok };
-  const atoms: Atom[] = [];
-  for (const tok of toks) {
-    if (tok.kind === "text") {
-      const marked = tok.props.red || tok.props.underline;
-      for (const ch of tok.text) atoms.push({ kind: "ch", ch, marked });
+export function detectOptionMarkerAtParaStart(p: Para): OptionMarkerMatch | null {
+  // If paragraph contains a table, it is not an option line
+  if (p.toks.some((t) => t.kind === "tbl")) {
+    return null;
+  }
+
+  // Find first text token in paragraph
+  let firstTextIdx = -1;
+  const precedingTokens: Tok[] = [];
+  for (let i = 0; i < p.toks.length; i++) {
+    if (p.toks[i].kind === "text") {
+      firstTextIdx = i;
+      break;
     } else {
-      atoms.push({ kind: "non", tok });
+      precedingTokens.push(p.toks[i]);
     }
   }
 
-  const isLetter = (c: string) => letters.indexOf(c) >= 0;
-  const isAlnum = (c: string) => /[A-Za-z0-9]/.test(c);
-  const isDelim = (c: string) => allowedDelims.indexOf(c) >= 0;
-  const isSpace = (c: string) => c === " " || c === "\u00A0" || c === "\t" || c === "\n";
-  /** True when nothing but whitespace/'*' separates this atom from a paragraph break. */
-  const atParaStart = (i: number): boolean => {
-    for (let j = i - 1; j >= 0; j--) {
-      const a = atoms[j];
-      if (a.kind === "ch") {
-        if (isSpace(a.ch) || a.ch === "*") continue;
-        return false;
+  if (firstTextIdx === -1) {
+    return null;
+  }
+
+  // Plain text from firstTextIdx onwards:
+  const textFromFirst = tokensToPlain(p.toks.slice(firstTextIdx));
+
+  // Match strictly at the start of textFromFirst:
+  // - Optional leading spaces / tabs / NBSP
+  // - Optional [order, level] tag e.g. [1, NB]
+  // - Optional asterisk '*'
+  // - Optional spaces
+  // - Optional [order, level] tag
+  // - Letter: A-D or a-d
+  // - Delimiter: '.' or ')'
+  // - Followed by whitespace, NBSP, end-of-string, or non-word character (e.g. $, \(, etc.)
+  const match = textFromFirst.match(
+    /^[ \t\u00A0]*(?:\[\s*(\d+)?\s*,?\s*(NB|TH|VD|VDC)?\s*\][ \t\u00A0]*)?(\*?)[ \t\u00A0]*(?:\[\s*(\d+)?\s*,?\s*(NB|TH|VD|VDC)?\s*\][ \t\u00A0]*)?([A-Da-d])([.)])(?=[ \t\u00A0\n\r]|$|[^\w\d\p{L}])/u
+  );
+
+  if (!match) return null;
+
+  const orderStr = match[1] || match[4];
+  const levelStr = match[2] || match[5];
+  const hasStar = match[3] === "*";
+  const letter = match[6];
+  const delim = match[7];
+  const matchLen = match[0].length;
+
+  // Strip the marker prefix from text tokens ONLY:
+  let isRunMarked = false;
+  let remainingCharsToStrip = matchLen;
+  let finishedPrefix = false;
+  const remainingTokens: Tok[] = [];
+
+  for (let j = firstTextIdx; j < p.toks.length; j++) {
+    const tok = p.toks[j];
+    if (!finishedPrefix) {
+      if (tok.kind === "text") {
+        if (tok.props.red || tok.props.underline) {
+          isRunMarked = true;
+        }
+        if (remainingCharsToStrip > 0) {
+          if (tok.text.length <= remainingCharsToStrip) {
+            remainingCharsToStrip -= tok.text.length;
+            continue;
+          } else {
+            // Marker ends inside this text token
+            const afterMarker = tok.text.slice(remainingCharsToStrip);
+            remainingCharsToStrip = 0;
+            finishedPrefix = true;
+            // Strip any leading spaces immediately after delimiter:
+            const trimmed = afterMarker.replace(/^[ \t\u00A0]+/, "");
+            if (trimmed) {
+              remainingTokens.push({ ...tok, text: trimmed });
+            }
+            continue;
+          }
+        } else {
+          // remainingCharsToStrip === 0, strip leading spaces:
+          finishedPrefix = true;
+          const trimmed = tok.text.replace(/^[ \t\u00A0]+/, "");
+          if (trimmed) {
+            remainingTokens.push({ ...tok, text: trimmed });
+          }
+          continue;
+        }
+      } else {
+        // Non-text token: marker is finished, never strip non-text!
+        finishedPrefix = true;
+        remainingTokens.push(tok);
+        continue;
       }
-      return a.tok.kind === "pbrk";
+    } else {
+      remainingTokens.push(tok);
     }
-    return true;
+  }
+
+  const isMarked = hasStar || isRunMarked;
+  const order = orderStr ? parseInt(orderStr, 10) : undefined;
+  const level = levelStr ? (levelStr.toUpperCase() as QuestionLevel) : undefined;
+
+  return {
+    key: letter,
+    delim,
+    isMarked,
+    precedingTokens,
+    remainingTokens,
+    order,
+    level,
   };
-
-  // Locate option boundaries: positions in `atoms` where a letter+delim starts.
-  type Boundary = { start: number; end: number; key: string; marked: boolean };
-  const bounds: Boundary[] = [];
-  const seen = new Set<string>();
-  for (let i = 0; i < atoms.length; i++) {
-    const a = atoms[i];
-    if (a.kind !== "ch") continue;
-    if (!isLetter(a.ch)) continue;
-    if (seen.has(a.ch)) continue;
-    // previous visible char must not be alphanumeric
-    let prev: Atom | undefined;
-    let prevIdx = -1;
-    for (let j = i - 1; j >= 0; j--) {
-      if (atoms[j].kind === "ch") { prev = atoms[j]; prevIdx = j; break; }
-      break; // a non-text token (math/image/paragraph break) separates it
-
-    }
-    if (prev && prev.kind === "ch" && isAlnum(prev.ch)) continue;
-    // next non-space char must be an allowed delim
-    let nextIdx = -1;
-    for (let j = i + 1; j < atoms.length; j++) {
-      const b = atoms[j];
-      if (b.kind !== "ch") continue;
-      if (b.ch === " " || b.ch === "\u00A0" || b.ch === "\t") continue;
-      nextIdx = j; break;
-    }
-    if (nextIdx < 0) continue;
-    const nb = atoms[nextIdx];
-    if (nb.kind !== "ch" || !isDelim(nb.ch)) continue;
-    // "a." style markers are ambiguous with ordinary prose — only accept them
-    // when they open a paragraph.
-    if (nb.ch === "." && dotNeedsParaStart && !atParaStart(i)) continue;
-
-    // Star-marker: nearest non-space char before letter is '*' → correct answer.
-    let starMarked = false;
-    if (prev && prev.kind === "ch" && prev.ch === "*") {
-      let pp: Atom | undefined;
-      for (let j = prevIdx - 1; j >= 0; j--) {
-        const aj = atoms[j];
-        if (aj.kind === "ch") { pp = aj; break; }
-        // A picture / equation / paragraph break ends the lookback.
-        break;
-      }
-
-      if (!pp || (pp.kind === "ch" && !isAlnum(pp.ch))) {
-        starMarked = true;
-        // Neutralize the '*' atom so it doesn't leak into stem/prev option text.
-        atoms[prevIdx] = { kind: "ch", ch: " ", marked: false };
-      }
-    }
-    bounds.push({ start: i, end: nextIdx, key: a.ch, marked: a.marked || starMarked });
-    seen.add(a.ch);
-  }
-
-  const sliceToToks = (lo: number, hi: number): Tok[] => {
-    // Rebuild tokens from atom range [lo, hi). Merge adjacent text atoms
-    // sharing the same `marked` flag isn't strictly necessary — we drop the
-    // mark from re-assembled text since rich rendering doesn't need it.
-    const out: Tok[] = [];
-    let buf = "";
-    const flush = () => {
-      if (buf) {
-        out.push({
-          kind: "text",
-          text: buf,
-          props: { red: false, underline: false, mono: false, bold: false },
-        });
-        buf = "";
-      }
-    };
-    for (let i = lo; i < hi; i++) {
-      const a = atoms[i];
-      if (a.kind === "ch") buf += a.ch;
-      else { flush(); out.push(a.tok); }
-    }
-    flush();
-    return out;
-  };
-
-  const stem = bounds.length > 0 ? sliceToToks(0, bounds[0].start) : sliceToToks(0, atoms.length);
-  const options: { key: string; toks: Tok[]; marked: boolean }[] = [];
-  for (let i = 0; i < bounds.length; i++) {
-    const b = bounds[i];
-    const next = i + 1 < bounds.length ? bounds[i + 1].start : atoms.length;
-    const toksOpt = sliceToToks(b.end + 1, next);
-    // strip leading whitespace
-    if (toksOpt.length && toksOpt[0].kind === "text") {
-      const t = toksOpt[0] as TextTok;
-      toksOpt[0] = { ...t, text: t.text.replace(/^[\s\u00A0]+/, "") };
-    }
-    options.push({ key: b.key, toks: toksOpt, marked: b.marked });
-  }
-  return { stem, options };
 }
 
 // Strip the first `n` plain characters from a token array (leaves inline
@@ -1228,54 +1219,68 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
   const partIII: SAQuestion[] = [];
 
   let currentPart: 1 | 2 | 3 = 1;
-  // We accumulate tokens for the current question across multiple paragraphs.
-  let qBuf: { part: 1 | 2 | 3; idx: number; toks: Tok[]; explToks: Tok[]; ansToks: Tok[]; inExpl: boolean; inAns: boolean; level: QuestionLevel | null } | null = null;
   let qIdx = 0;
 
-  const explRich = (): string | null => {
-    if (!qBuf || !qBuf.explToks.length) return null;
-    const s = tokensToRich(qBuf.explToks).replace(/^\s+|\s+$/g, "");
-    return s || null;
+  type TempOption = {
+    key: string;
+    toks: Tok[];
+    marked: boolean;
+    level?: QuestionLevel | null;
+    order?: number;
   };
+
+  type QuestionBuffer = {
+    part: 1 | 2 | 3;
+    idx: number;
+    level: QuestionLevel | null;
+    stemToks: Tok[];
+    options: TempOption[];
+    explToks: Tok[];
+    ansToks: Tok[];
+    mode: "stem" | "options" | "expl" | "ans";
+  };
+
+  let qBuf: QuestionBuffer | null = null;
 
   const flush = () => {
     if (!qBuf) return;
-    const { part, idx, toks, level, ansToks } = qBuf;
-    const explanation = explRich();
+    const { part, idx, level, stemToks, options, explToks, ansToks } = qBuf;
     qBuf = null;
 
+    const stemRich = tokensToRich(stemToks).trim();
+    const explanation = explToks.length ? tokensToRich(explToks).trim() : null;
+
     if (part === 1) {
-      const { stem, options } = splitOptions(toks, "ABCD");
-      const stemRich = tokensToRich(stem).trim();
-      // Strip leading "Câu N:" from the stem
-      const stemCleaned = stemRich.replace(QUESTION_PREFIX_RE, "");
       let answer: "A" | "B" | "C" | "D" | "" = "";
-      const opts = options.map((o) => {
-        if (o.marked && !answer) answer = o.key as any;
-        return { key: o.key as "A" | "B" | "C" | "D", text: tokensToRich(o.toks).trim() };
+      const formattedOpts: { key: "A" | "B" | "C" | "D"; text: string }[] = [];
+
+      for (const o of options) {
+        const keyUpper = o.key.toUpperCase() as "A" | "B" | "C" | "D";
+        if (o.marked && !answer) {
+          answer = keyUpper;
+        }
+        formattedOpts.push({
+          key: keyUpper,
+          text: tokensToRich(o.toks).trim(),
+        });
+      }
+
+      if (!answer && ansToks.length) {
+        const ansPlain = tokensToPlain(ansToks);
+        const m = ansPlain.match(/([A-D])\b/i);
+        if (m) answer = m[1].toUpperCase() as any;
+      }
+
+      partI.push({
+        type: "mc",
+        id: `q${idx}`,
+        text: stemRich,
+        options: formattedOpts,
+        answer: (answer || "A") as "A" | "B" | "C" | "D",
+        explanation,
+        level,
       });
-      if (opts.length === 4 && answer) {
-        partI.push({ type: "mc", id: `q${idx}`, text: stemCleaned, options: opts, answer, explanation, level });
-      } else if (opts.length === 4) {
-        partI.push({ type: "mc", id: `q${idx}`, text: stemCleaned, options: opts, answer: "A", explanation, level });
-      }
     } else if (part === 2) {
-      // "a)" markers are accepted anywhere; "a." only at a paragraph start. Accept lowercase or uppercase.
-      const { stem, options } = splitOptions(toks, "abcdABCD", ".)", true);
-      let stemRich = tokensToRich(stem).trim().replace(QUESTION_PREFIX_RE, "");
-
-      // Check if stem has a trailing [order, level] prefix meant for item a)
-      let firstItemPrefix: { order: number; level: QuestionLevel } | null = null;
-      const stemPrefixMatch = stemRich.match(/\[\s*(\d+)\s*,\s*(NB|TH|VD|VDC)\s*\]\s*$/i);
-      if (stemPrefixMatch) {
-        firstItemPrefix = {
-          order: parseInt(stemPrefixMatch[1]),
-          level: stemPrefixMatch[2].toUpperCase() as QuestionLevel,
-        };
-        stemRich = stemRich.slice(0, stemPrefixMatch.index).trim();
-      }
-      stemRich = stemRich.replace(/\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]/gi, "").trim();
-
       type ExtractedItem = {
         key: "a" | "b" | "c" | "d";
         text: string;
@@ -1288,13 +1293,8 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
       for (let i = 0; i < options.length; i++) {
         const o = options[i];
         let textRich = tokensToRich(o.toks).trim();
-        let itemOrder: number | undefined;
-        let itemLevel: QuestionLevel | null = null;
-
-        if (i === 0 && firstItemPrefix) {
-          itemOrder = firstItemPrefix.order;
-          itemLevel = firstItemPrefix.level;
-        }
+        let itemOrder = o.order;
+        let itemLevel = o.level ?? null;
 
         const leadingMatch = textRich.match(/^\s*\[\s*(\d+)\s*,\s*(NB|TH|VD|VDC)\s*\]\s*/i);
         if (leadingMatch) {
@@ -1329,38 +1329,36 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
         text: it.text.replace(/\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]/gi, "").trim(),
       }));
 
-      if (items.length > 0) {
-        partII.push({ type: "tf", id: `q${idx}`, text: stemRich, items, explanation, level });
-      }
+      partII.push({
+        type: "tf",
+        id: `q${idx}`,
+        text: stemRich,
+        items,
+        explanation,
+        level,
+      });
     } else {
-      // Part III: stem until "Đáp án:"
-      const rich = tokensToRich(toks);
-      const plain = tokensToPlain(toks);
-      const m = plain.match(/Đáp\s*án\s*[:.]?\s*(.+)$/i);
-      let stemRich = rich.replace(QUESTION_PREFIX_RE, "");
+      // Part III: Short Answer
       let answer = "";
+      let stemCleaned = stemRich;
       if (ansToks.length) {
-        // "Đáp án:" was on its own paragraph — the answer content (text,
-        // equation, MathType/OLE object or image) follows it.
         answer = tokensToRich(ansToks).replace(/\s+/g, " ").trim();
-      } else if (m) {
-        const ansIdx = plain.search(/Đáp\s*án\s*[:.]?/i);
-        if (ansIdx >= 0) {
-          let plainCount = 0, i = 0;
-          while (i < rich.length && plainCount < ansIdx) {
-            if (rich[i] === SENT_OPEN) {
-              const end = rich.indexOf(SENT_CLOSE, i);
-              if (end === -1) break;
-              i = end + 1;
-            } else { plainCount++; i++; }
-          }
-          stemRich = rich.slice(0, i).replace(QUESTION_PREFIX_RE, "").trim();
+      } else {
+        const m = stemRich.match(/Đáp\s*án\s*[:.]?\s*(.+)$/i);
+        if (m) {
           answer = m[1].trim();
+          stemCleaned = stemRich.replace(/Đáp\s*án\s*[:.]?\s*.+$/i, "").trim();
         }
       }
-      partIII.push({ type: "sa", id: `q${idx}`, text: stemRich.trim(), answer, explanation, level });
+      partIII.push({
+        type: "sa",
+        id: `q${idx}`,
+        text: stemCleaned,
+        answer,
+        explanation,
+        level,
+      });
     }
-
   };
 
   // Detects "Lời giải:" or "Đáp án:" at the start of a paragraph plain-text.
@@ -1409,38 +1407,81 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
     if (startsNewQ) {
       flush();
       qIdx++;
-      qBuf = { part: currentPart, idx: qIdx, toks: [...toks], explToks: [], ansToks: [], inExpl: false, inAns: false, level: (qStart![2]?.toUpperCase() as any) ?? null };
+      // Strip "Câu N:" prefix from this initial paragraph
+      const strippedToks = stripLeadingPlain(toks, qStart[0].length);
+      qBuf = {
+        part: currentPart,
+        idx: qIdx,
+        level: (qStart[2]?.toUpperCase() as any) ?? null,
+        stemToks: [...strippedToks],
+        options: [],
+        explToks: [],
+        ansToks: [],
+        mode: "stem",
+      };
       continue;
     }
 
     if (!qBuf) continue;
 
     // Check for explanation / answer-block start marker on this paragraph.
-    if (!qBuf.inExpl) {
+    if (qBuf.mode !== "expl") {
       const em = detectExplStart(stripMarkers(p.plain), qBuf.part, hasNonText);
       if (em) {
         const stripped = stripLeadingPlain(toks, em.markerLen);
         if (em.mode === "answer") {
-          qBuf.inAns = true;
+          qBuf.mode = "ans";
           if (stripped.length) qBuf.ansToks.push(...stripped);
         } else {
-          qBuf.inExpl = true;
-          qBuf.inAns = false;
+          qBuf.mode = "expl";
           if (stripped.length) qBuf.explToks.push(...stripped);
         }
         continue;
       }
     }
 
-    if (qBuf.inExpl) {
+    if (qBuf.mode === "expl") {
       qBuf.explToks.push({ kind: "text", text: "\n", props: { red: false, underline: false, mono: false, bold: false } });
       qBuf.explToks.push(...toks);
-    } else if (qBuf.inAns) {
+      continue;
+    }
+
+    if (qBuf.mode === "ans") {
       if (qBuf.ansToks.length) qBuf.ansToks.push({ ...PBRK });
       qBuf.ansToks.push(...toks);
+      continue;
+    }
+
+    // Question body mode: check if this paragraph STARTS with an option marker
+    const optMatch = qBuf.part !== 3 ? detectOptionMarkerAtParaStart(p) : null;
+    if (optMatch) {
+      // If there were preceding tokens (e.g. image before the marker):
+      if (optMatch.precedingTokens.length > 0) {
+        if (qBuf.mode === "options" && qBuf.options.length > 0) {
+          qBuf.options[qBuf.options.length - 1].toks.push(...optMatch.precedingTokens);
+        } else {
+          qBuf.stemToks.push(...optMatch.precedingTokens);
+        }
+      }
+      qBuf.mode = "options";
+      qBuf.options.push({
+        key: optMatch.key,
+        toks: optMatch.remainingTokens,
+        marked: optMatch.isMarked,
+        level: optMatch.level,
+        order: optMatch.order,
+      });
     } else {
-      qBuf.toks.push({ ...PBRK });
-      qBuf.toks.push(...toks);
+      // Paragraph does not start with an option marker
+      if (qBuf.mode === "options" && qBuf.options.length > 0) {
+        // Continuation paragraph of the current option
+        qBuf.options[qBuf.options.length - 1].toks.push({ ...PBRK });
+        qBuf.options[qBuf.options.length - 1].toks.push(...toks);
+      } else {
+        // Continuation paragraph of the question stem
+        qBuf.stemToks.push({ ...PBRK });
+        qBuf.stemToks.push(...toks);
+      }
     }
   }
 

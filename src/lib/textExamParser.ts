@@ -112,7 +112,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
   let answer: "A" | "B" | "C" | "D" | "" = "";
   let inOptions = false;
   let cur: typeof opts[number] | null = null;
-  const optRe = /^\s*(\*?)\s*([A-D])\s*[.\)]\s*(.*)$/;
+  const optRe = /^\s*(\*?)\s*(?:\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]\s*)?([A-Da-d])\s*[.)]\s*(.*)$/;
   const ansRe = /^\s*Đáp\s*án\s*[:.]?\s*([A-D])\b/i;
   for (const ln of lines) {
     const am = ln.match(ansRe);
@@ -121,7 +121,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
     if (m) {
       inOptions = true;
       if (cur) opts.push(cur);
-      cur = { key: m[2] as any, text: m[3], marked: m[1] === "*" };
+      cur = { key: m[2].toUpperCase() as any, text: m[3], marked: m[1] === "*" };
     } else if (inOptions && cur) {
       cur.text += "\n" + ln.trim();
     } else {
@@ -151,13 +151,13 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
   const items: { key: "a" | "b" | "c" | "d"; text: string; correct: boolean }[] = [];
   let inItems = false;
   let cur: typeof items[number] | null = null;
-  const re = /^\s*(\*?)\s*([a-d])\s*\)\s*(.*)$/;
+  const re = /^\s*(\*?)\s*(?:\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]\s*)?([A-Da-d])\s*[.)]\s*(.*)$/;
   for (const ln of lines) {
     const m = ln.match(re);
     if (m) {
       inItems = true;
       if (cur) items.push(cur);
-      cur = { key: m[2] as any, text: m[3], correct: m[1] === "*" };
+      cur = { key: m[2].toLowerCase() as any, text: m[3], correct: m[1] === "*" };
     } else if (inItems && cur) {
       cur.text += "\n" + ln.trim();
     } else {
