@@ -604,7 +604,7 @@ export default function Take() {
               </div>
 
               {/* NỘI DUNG CÂU HỎI: CỠ CHỮ GẤP ĐÔI, TỰ ĐỘNG CO GIÃN HỢP LÝ */}
-              <div className={`font-bold ${qFontSizeClass} leading-[1.38] text-foreground tracking-tight mb-6 sm:mb-8`}>
+              <div className={`font-bold ${qFontSizeClass} leading-[1.38] text-foreground tracking-tight mb-6 sm:mb-8 question-content`}>
                 <RichText text={q.text} />
               </div>
 
@@ -875,7 +875,7 @@ export default function Take() {
                 {q._part === 1 ? "PHẦN I — Trắc nghiệm" : q._part === 2 ? "PHẦN II — Đúng/Sai" : "PHẦN III — Trả lời ngắn"}
               </div>
             </div>
-            <div className="font-medium text-lg"><RichText text={q.text} /></div>
+            <div className="font-medium text-lg question-content"><RichText text={q.text} /></div>
 
             {q.type === "mc" && (
               <RadioGroup value={answers[q.id] || ""} onValueChange={setAns} className="mt-5 space-y-2">

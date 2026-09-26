@@ -87,6 +87,41 @@
   html { font-family: 'Poppins', 'Inter', system-ui, -apple-system, sans-serif; }
   body { @apply bg-background text-foreground; font-family: 'Poppins', 'Inter', system-ui, sans-serif; font-feature-settings: "cv02","cv03","cv04","cv11"; }
   h1, h2, h3, h4, h5, h6 { font-family: 'Poppins', 'Inter', system-ui, sans-serif; font-weight: 700; letter-spacing: -0.01em; }
+
+  /* Bảng trong đề thi & câu hỏi: font-size nội dung trong table, th, td = font-size hiện tại của câu hỏi */
+  .question-content table,
+  .question-content thead,
+  .question-content tbody,
+  .question-content tfoot,
+  .question-content tr,
+  .question-content th,
+  .question-content td,
+  .rich-text-root table,
+  .rich-text-root thead,
+  .rich-text-root tbody,
+  .rich-text-root tfoot,
+  .rich-text-root tr,
+  .rich-text-root th,
+  .rich-text-root td,
+  table.rich-table,
+  table.rich-table thead,
+  table.rich-table tbody,
+  table.rich-table tfoot,
+  table.rich-table tr,
+  table.rich-table th,
+  table.rich-table td {
+    font-size: inherit !important;
+  }
+
+  .question-content th,
+  .question-content td,
+  .rich-text-root th,
+  .rich-text-root td,
+  table.rich-table th,
+  table.rich-table td {
+    font-size: inherit !important;
+    line-height: inherit;
+  }
 }
 
 @layer utilities {

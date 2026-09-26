@@ -77,7 +77,7 @@ function tokenize(s: string): Token[] {
 export default function RichText({ text, className }: { text: string; className?: string }) {
   const tokens = useMemo(() => tokenize(text || ""), [text]);
   return (
-    <span className={className}>
+    <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
       {tokens.map((t, idx) => {
         if (t.kind === "text") {
           return <span key={idx} className="whitespace-pre-wrap">{t.value}</span>;
@@ -103,19 +103,24 @@ export default function RichText({ text, className }: { text: string; className?
         }
         if (t.kind === "tbl") {
           return (
-            <table key={idx} className="my-2 border-collapse border border-border text-sm">
-              <tbody>
-                {t.rows.map((row, ri) => (
-                  <tr key={ri}>
-                    {row.map((cell, ci) => (
-                      <td key={ci} className="border border-border px-2 py-1 align-top">
-                        <RichText text={cell} />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <span key={idx} className="block my-3 max-w-full overflow-x-auto text-[inherit] font-[inherit]">
+              <table className="rich-table border-collapse border border-border text-[inherit] font-[inherit] leading-[inherit] w-auto max-w-full my-1">
+                <tbody className="text-[inherit] font-[inherit]">
+                  {t.rows.map((row, ri) => (
+                    <tr key={ri} className="text-[inherit] font-[inherit]">
+                      {row.map((cell, ci) => (
+                        <td
+                          key={ci}
+                          className="border border-border px-3 py-2 align-top text-[inherit] font-[inherit] leading-[inherit]"
+                        >
+                          <RichText text={cell} className="text-[inherit] font-[inherit]" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </span>
           );
         }
         // code

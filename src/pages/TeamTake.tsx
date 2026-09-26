@@ -280,7 +280,7 @@ export default function TeamTake() {
               )}
             </div>
 
-            <div className="font-semibold text-lg sm:text-xl leading-relaxed">
+            <div className="font-semibold text-lg sm:text-xl leading-relaxed question-content">
               <RichText text={q.text} />
             </div>
 
