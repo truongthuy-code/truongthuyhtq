@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import hljs from "highlight.js/lib/common";
 import "highlight.js/styles/github.css";
+import { ZoomIn, X } from "lucide-react";
 
 const SENT_OPEN = "\u27E6";
 const SENT_CLOSE = "\u27E7";
@@ -76,79 +77,125 @@ function tokenize(s: string): Token[] {
 
 export default function RichText({ text, className }: { text: string; className?: string }) {
   const tokens = useMemo(() => tokenize(text || ""), [text]);
+  const [zoomImg, setZoomImg] = useState<string | null>(null);
+
   return (
-    <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
-      {tokens.map((t, idx) => {
-        if (t.kind === "text") {
-          return <span key={idx} className="whitespace-pre-wrap">{t.value}</span>;
-        }
-        if (t.kind === "math") {
+    <>
+      <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
+        {tokens.map((t, idx) => {
+          if (t.kind === "text") {
+            return <span key={idx} className="whitespace-pre-wrap">{t.value}</span>;
+          }
+          if (t.kind === "math") {
+            let html = "";
+            try {
+              html = katex.renderToString(t.latex, { throwOnError: false, output: "html" });
+            } catch {
+              html = `<code>${t.latex}</code>`;
+            }
+            return <span key={idx} className="inline-block align-middle" dangerouslySetInnerHTML={{ __html: html }} />;
+          }
+          if (t.kind === "img") {
+            return (
+              <span
+                key={idx}
+                className="relative inline-block my-2 group cursor-zoom-in"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setZoomImg(t.src);
+                }}
+                title="Nhấn để phóng to hình ảnh"
+              >
+                <img
+                  src={t.src}
+                  alt="Minh họa câu hỏi"
+                  className="inline-block max-w-full max-h-[380px] object-contain rounded-xl border border-border shadow-sm group-hover:border-primary/60 transition-all"
+                  loading="lazy"
+                />
+                <span className="absolute bottom-2 right-2 px-2 py-1 rounded-lg bg-black/70 text-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow pointer-events-none">
+                  <ZoomIn className="size-3.5" /> Phóng to
+                </span>
+              </span>
+            );
+          }
+          if (t.kind === "tbl") {
+            return (
+              <span key={idx} className="block my-3 max-w-full overflow-x-auto text-[inherit] font-[inherit]">
+                <table className="rich-table border-collapse border border-border text-[inherit] font-[inherit] leading-[inherit] w-auto max-w-full my-1">
+                  <tbody className="text-[inherit] font-[inherit]">
+                    {t.rows.map((row, ri) => (
+                      <tr key={ri} className="text-[inherit] font-[inherit]">
+                        {row.map((cell, ci) => (
+                          <td
+                            key={ci}
+                            className="border border-border px-3 py-2 align-top text-[inherit] font-[inherit] leading-[inherit]"
+                          >
+                            <RichText text={cell} className="text-[inherit] font-[inherit]" />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </span>
+            );
+          }
+          // code
           let html = "";
           try {
-            html = katex.renderToString(t.latex, { throwOnError: false, output: "html" });
+            if (t.lang && t.lang !== "plaintext" && hljs.getLanguage(t.lang)) {
+              html = hljs.highlight(t.content, { language: t.lang }).value;
+            } else {
+              html = hljs.highlightAuto(t.content).value;
+            }
           } catch {
-            html = `<code>${t.latex}</code>`;
+            html = t.content
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
           }
-          return <span key={idx} className="inline-block align-middle" dangerouslySetInnerHTML={{ __html: html }} />;
-        }
-        if (t.kind === "img") {
           return (
-            <img
+            <pre
               key={idx}
-              src={t.src}
-              alt=""
-              className="inline-block max-w-full h-auto my-2 rounded border"
-            />
+              className="my-2 rounded-md bg-muted p-3 overflow-x-auto text-sm"
+            >
+              <code
+                className={`language-${t.lang} hljs`}
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            </pre>
           );
-        }
-        if (t.kind === "tbl") {
-          return (
-            <span key={idx} className="block my-3 max-w-full overflow-x-auto text-[inherit] font-[inherit]">
-              <table className="rich-table border-collapse border border-border text-[inherit] font-[inherit] leading-[inherit] w-auto max-w-full my-1">
-                <tbody className="text-[inherit] font-[inherit]">
-                  {t.rows.map((row, ri) => (
-                    <tr key={ri} className="text-[inherit] font-[inherit]">
-                      {row.map((cell, ci) => (
-                        <td
-                          key={ci}
-                          className="border border-border px-3 py-2 align-top text-[inherit] font-[inherit] leading-[inherit]"
-                        >
-                          <RichText text={cell} className="text-[inherit] font-[inherit]" />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </span>
-          );
-        }
-        // code
-        let html = "";
-        try {
-          if (t.lang && t.lang !== "plaintext" && hljs.getLanguage(t.lang)) {
-            html = hljs.highlight(t.content, { language: t.lang }).value;
-          } else {
-            html = hljs.highlightAuto(t.content).value;
-          }
-        } catch {
-          html = t.content
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-        }
-        return (
-          <pre
-            key={idx}
-            className="my-2 rounded-md bg-muted p-3 overflow-x-auto text-sm"
+        })}
+      </span>
+
+      {/* Lightbox Modal for Image Zoom */}
+      {zoomImg && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setZoomImg(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] bg-card/95 rounded-2xl p-3 shadow-2xl border flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
           >
-            <code
-              className={`language-${t.lang} hljs`}
-              dangerouslySetInnerHTML={{ __html: html }}
+            <button
+              onClick={() => setZoomImg(null)}
+              className="absolute -top-3 -right-3 size-9 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center justify-center shadow-lg font-bold transition-transform hover:scale-110"
+              title="Đóng"
+            >
+              <X className="size-5" />
+            </button>
+            <img
+              src={zoomImg}
+              alt="Hình ảnh phóng to"
+              className="max-h-[82vh] max-w-full object-contain rounded-xl"
             />
-          </pre>
-        );
-      })}
-    </span>
+            <div className="mt-2 text-xs text-muted-foreground text-center">
+              Nhấn ra ngoài hoặc nút X để đóng hình ảnh
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

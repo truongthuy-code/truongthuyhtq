@@ -3,10 +3,12 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import RichText from "@/components/RichText";
-import { Check, X, GraduationCap, ArrowLeft } from "lucide-react";
+import QuizBackground from "@/components/QuizBackground";
+import { Check, X, GraduationCap, ArrowLeft, Trophy, Sparkles } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import { getTFValue } from "@/lib/grading";
 import { getPublishedExamAnswerKey } from "@/lib/studentStorage";
+import confetti from "canvas-confetti";
 
 export default function Result() {
   const { id } = useParams();
@@ -31,10 +33,21 @@ export default function Result() {
 
       setSub(submission);
       setExam(examObj);
+
+      try {
+        if (submission?.score >= 5) {
+          confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+        }
+      } catch {}
     })();
   }, [id]);
 
-  if (!sub) return <div className="container py-20 text-center text-muted-foreground">Đang tải…</div>;
+  if (!sub) return (
+    <div className="min-h-screen grid place-items-center relative">
+      <QuizBackground />
+      <div className="text-center text-muted-foreground font-bold relative z-10">Đang tải kết quả…</div>
+    </div>
+  );
 
   const total = sub.correct_count + sub.wrong_count;
   const allowReview = !!exam?.allow_review;
@@ -135,8 +148,9 @@ export default function Result() {
 
   if (!allowReview || !exam) {
     return (
-      <div className="min-h-screen bg-gradient-soft grid place-items-center p-4">
-        <div className="max-w-md w-full space-y-4">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 grid place-items-center p-4 relative selection:bg-primary/20">
+        <QuizBackground />
+        <div className="max-w-md w-full space-y-4 relative z-10">
           {summary}
           <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-800 dark:text-amber-300 space-y-2">
             <div className="font-semibold text-sm">🔒 Đề thi đang mở (Giáo viên chưa đóng đề thi)</div>
@@ -166,8 +180,9 @@ export default function Result() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-soft py-6 px-3">
-      <div className="max-w-3xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 relative selection:bg-primary/20">
+      <QuizBackground />
+      <div className="max-w-3xl mx-auto space-y-6 relative z-10">
         {summary}
 
         <Card className="p-5 sm:p-6 space-y-6">
