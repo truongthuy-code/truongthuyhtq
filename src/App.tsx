@@ -40,7 +40,10 @@ const App = () => (
             {/* public student routes */}
             <Route path="/student" element={<StudentDashboard />} />
             <Route path="/student/auth" element={<StudentAuth />} />
+            <Route path="/take" element={<Take />} />
             <Route path="/take/:id" element={<Take />} />
+            <Route path="/exam/:id" element={<Take />} />
+            <Route path="/exam/:id/take" element={<Take />} />
             <Route path="/result/:id" element={<Result />} />
             <Route path="/team/:id" element={<TeamTake />} />
             <Route path="/leaderboard/:id" element={<TeamLeaderboard />} />

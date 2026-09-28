@@ -99,15 +99,10 @@ export function getDeterministicPrimaryCode(examId: string, subjectName?: string
  * Get the public origin for student exam URLs
  */
 export function getExamPublicOrigin(): string {
-  const PUBLISHED_ORIGIN = "https://thuy-tracnghiem.lovable.app";
-  const host = typeof window !== "undefined" ? window.location.hostname : "";
-  const isPreview =
-    host.includes("id-preview--") ||
-    host.endsWith(".lovable.dev") ||
-    host.endsWith(".sandbox.lovable.dev") ||
-    host === "localhost" ||
-    host === "127.0.0.1";
-  return isPreview ? PUBLISHED_ORIGIN : window.location.origin;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
 }
 
 /**
@@ -224,24 +219,30 @@ export async function syncExamAssignmentCodes(exam: any) {
   try {
     const primaryCode = getExamPrimaryCode(exam);
     if (primaryCode) {
+      const pUpper = primaryCode.toUpperCase().trim();
+      const pClean = pUpper.replace(/[^A-Z0-9]/g, "");
+      const payload = {
+        id: `primary_${exam.id}`,
+        examId: exam.id,
+        code: pUpper,
+        className: "Chung",
+        title: exam.title,
+        teacherName: exam.teacher_name,
+        schoolName: exam.school_name,
+        subjectName: exam.subject_name,
+        durationMinutes: exam.duration_minutes,
+        openAt: exam.open_at,
+        closeAt: exam.close_at,
+        createdAt: new Date().toISOString(),
+      };
+      const jsonStr = JSON.stringify(payload);
+
       await supabase.from("schools").upsert(
-        {
-          name_key: `assign_code:${primaryCode.toUpperCase()}`,
-          name: JSON.stringify({
-            id: `primary_${exam.id}`,
-            examId: exam.id,
-            code: primaryCode.toUpperCase(),
-            className: "Chung",
-            title: exam.title,
-            teacherName: exam.teacher_name,
-            schoolName: exam.school_name,
-            subjectName: exam.subject_name,
-            durationMinutes: exam.duration_minutes,
-            openAt: exam.open_at,
-            closeAt: exam.close_at,
-            createdAt: new Date().toISOString(),
-          }),
-        },
+        [
+          { name_key: `assign_code:${pUpper}`, name: jsonStr },
+          { name_key: `assign_code:${pClean}`, name: jsonStr },
+          { name_key: `assign_code:${exam.id.toLowerCase()}`, name: jsonStr },
+        ],
         { onConflict: "name_key" }
       );
     }
@@ -251,15 +252,18 @@ export async function syncExamAssignmentCodes(exam: any) {
     if (Array.isArray(teamCfg.assignments)) {
       for (const a of teamCfg.assignments) {
         if (a && a.code) {
+          const aUpper = String(a.code).toUpperCase().trim();
+          const aClean = aUpper.replace(/[^A-Z0-9]/g, "");
+          const aPayload = JSON.stringify({
+            ...a,
+            examId: a.examId || exam.id,
+            title: a.title || exam.title,
+          });
           await supabase.from("schools").upsert(
-            {
-              name_key: `assign_code:${String(a.code).toUpperCase()}`,
-              name: JSON.stringify({
-                ...a,
-                examId: a.examId || exam.id,
-                title: a.title || exam.title,
-              }),
-            },
+            [
+              { name_key: `assign_code:${aUpper}`, name: aPayload },
+              { name_key: `assign_code:${aClean}`, name: aPayload },
+            ],
             { onConflict: "name_key" }
           );
         }
@@ -398,9 +402,19 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
   let extractedCode = "";
   let targetClass = "";
 
-  const uuidInUrlMatch = raw.match(/\/take\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-  const codeInUrlMatch = raw.match(/[?&]code=([^&#]+)/i);
-  const classInUrlMatch = raw.match(/[?&]targetClass=([^&#]+)/i);
+  // Check URL paths like /take/TOKEN or /exam/TOKEN
+  const pathMatch = raw.match(/\/(?:take|exam)\/([^/?#\s]+)/i);
+  if (pathMatch) {
+    const segment = decodeURIComponent(pathMatch[1]).trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) {
+      targetExamId = segment;
+    } else {
+      extractedCode = segment;
+    }
+  }
+
+  const codeInUrlMatch = raw.match(/[?&](?:code|join)=([^&#\s]+)/i);
+  const classInUrlMatch = raw.match(/[?&]targetClass=([^&#\s]+)/i);
 
   if (codeInUrlMatch) {
     extractedCode = decodeURIComponent(codeInUrlMatch[1]).trim().toUpperCase();
@@ -409,10 +423,33 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     targetClass = decodeURIComponent(classInUrlMatch[1]).trim();
   }
 
-  if (uuidInUrlMatch) {
-    targetExamId = uuidInUrlMatch[1];
-  } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+  if (!targetExamId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
     targetExamId = raw;
+  }
+
+  // 1.5. If targetExamId is identified, check sample exams first
+  if (targetExamId) {
+    const sampleById = findSampleExam(targetExamId) || getSampleExamById(targetExamId);
+    if (sampleById) {
+      return {
+        success: true,
+        exam: sampleById,
+        assignment: {
+          id: `sample_${sampleById.id}`,
+          examId: sampleById.id,
+          code: sampleById.code,
+          className: targetClass || sampleById.className,
+          title: sampleById.title,
+          teacherName: sampleById.teacher_name,
+          schoolName: sampleById.school_name,
+          subjectName: sampleById.subject_name,
+          durationMinutes: sampleById.duration_minutes,
+          openAt: sampleById.open_at,
+          closeAt: sampleById.close_at,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
   }
 
   // If we already have the exam UUID (from URL, QR or raw input), resolve it via get_exam_for_student RPC
@@ -452,9 +489,14 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
   }
 
   const lookupCode = (extractedCode || raw).toUpperCase().trim();
+  const cleanCode = lookupCode.replace(/[^A-Z0-9]/g, "");
 
-  // 1.5. Check built-in sample exams (TIN12-7A3K9, A1K8P2, etc.)
-  const sample = findSampleExam(lookupCode) || (targetExamId ? findSampleExam(targetExamId) : null);
+  // 2. Check built-in sample exams (TIN12-7A3K9, TOAN12-9B1K2, A1K8P2, etc.)
+  const sample =
+    findSampleExam(lookupCode) ||
+    findSampleExam(cleanCode) ||
+    (targetExamId ? findSampleExam(targetExamId) : null);
+
   if (sample) {
     return {
       success: true,
@@ -476,12 +518,12 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     };
   }
 
-  // 2. Check local assignments cache
+  // 3. Check local assignments cache
   const localList = getLocalAssignments();
   const localFound = localList.find(
     (a) =>
       a.code.toUpperCase() === lookupCode ||
-      a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, "")
+      a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === cleanCode
   );
 
   if (localFound) {
@@ -538,17 +580,53 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     }
   }
 
-  // 3. Cross-device lookup via public schools registry table
+  // 4. Cross-device lookup via public schools registry table
   try {
-    const { data: row } = await supabase
-      .from("schools")
-      .select("name")
-      .eq("name_key", `assign_code:${lookupCode}`)
-      .maybeSingle();
+    const keysToTry = [
+      `assign_code:${lookupCode}`,
+      `assign_code:${cleanCode}`,
+      `assign_code:${lookupCode.toLowerCase()}`,
+    ];
 
-    if (row?.name) {
-      const parsed = JSON.parse(row.name);
+    let rowData: string | null = null;
+    for (const key of keysToTry) {
+      const { data: row } = await supabase
+        .from("schools")
+        .select("name")
+        .eq("name_key", key)
+        .maybeSingle();
+      if (row?.name) {
+        rowData = row.name;
+        break;
+      }
+    }
+
+    if (rowData) {
+      const parsed = JSON.parse(rowData);
       if (parsed?.examId) {
+        // First check if this examId corresponds to a sample exam
+        const sampleById = findSampleExam(parsed.examId);
+        if (sampleById) {
+          return {
+            success: true,
+            exam: sampleById,
+            assignment: {
+              id: parsed.id || `sample_${sampleById.id}`,
+              examId: sampleById.id,
+              code: parsed.code || sampleById.code,
+              className: targetClass || parsed.className || sampleById.className,
+              title: parsed.title || sampleById.title,
+              teacherName: parsed.teacherName || sampleById.teacher_name,
+              schoolName: parsed.schoolName || sampleById.school_name,
+              subjectName: parsed.subjectName || sampleById.subject_name,
+              durationMinutes: parsed.durationMinutes || sampleById.duration_minutes,
+              openAt: parsed.openAt ?? sampleById.open_at,
+              closeAt: parsed.closeAt ?? sampleById.close_at,
+              createdAt: parsed.createdAt || new Date().toISOString(),
+            },
+          };
+        }
+
         const { data: exData } = await supabase.rpc("get_exam_for_student", {
           p_exam_id: parsed.examId,
         });
@@ -592,7 +670,7 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     }
   } catch {}
 
-  // 4. If current session is an authenticated teacher or admin, try fallback query
+  // 5. If current session is an authenticated teacher or admin, try fallback query
   try {
     const { data: sess } = await supabase.auth.getSession();
     if (sess?.session) {
@@ -612,7 +690,7 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
                 a &&
                 typeof a.code === "string" &&
                 (a.code.toUpperCase() === lookupCode ||
-                  a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, ""))
+                  a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === cleanCode)
             );
             if (matched) {
               return {
@@ -642,7 +720,7 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
 
           if (
             primaryCode === lookupCode ||
-            primaryCode.replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, "")
+            primaryCode.replace(/[^A-Z0-9]/g, "") === cleanCode
           ) {
             return { success: true, exam: ex };
           }
@@ -651,9 +729,9 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     }
   } catch {}
 
-  // 5. Friendly, clear error message if code is truly not found
+  // 6. Friendly, clear error message complying with requirements
   return {
     success: false,
-    error: `Không tìm thấy bài thi có mã "${raw}". Vui lòng kiểm tra lại mã bài thi hoặc quét mã QR do giáo viên cung cấp.`,
+    error: "Mã bài thi không hợp lệ hoặc không tồn tại.",
   };
 }

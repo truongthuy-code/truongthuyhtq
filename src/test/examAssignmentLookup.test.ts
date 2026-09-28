@@ -90,10 +90,22 @@ describe("Exam Assignment & Code Resolution", () => {
     expect(res.exam.questions.partI.length).toBeGreaterThan(0);
   });
 
-  it("should return friendly error message if code not found and never throw permission denied", async () => {
+  it("should handle code with leading/trailing whitespace and lower case", async () => {
+    const res = await findAssignmentOrExamByCode("   tin12-7a3k9   ");
+    expect(res.success).toBe(true);
+    expect(res.exam.title).toContain("Tin học 12");
+  });
+
+  it("should extract code from full URL path like /take/TIN12-7A3K9", async () => {
+    const res = await findAssignmentOrExamByCode("https://myapp.com/take/TIN12-7A3K9");
+    expect(res.success).toBe(true);
+    expect(res.exam.title).toContain("Tin học 12");
+  });
+
+  it("should return exact error message if code not found and never throw permission denied", async () => {
     const res = await findAssignmentOrExamByCode("INVALID-CODE-999");
     expect(res.success).toBe(false);
     expect(res.error).not.toContain("permission denied");
-    expect(res.error).toContain("Không tìm thấy bài thi");
+    expect(res.error).toBe("Mã bài thi không hợp lệ hoặc không tồn tại.");
   });
 });

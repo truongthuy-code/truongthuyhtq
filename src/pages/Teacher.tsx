@@ -22,6 +22,7 @@ import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
+import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -236,6 +237,20 @@ export default function Teacher() {
       toast.error("Lỗi tạo đề: " + error.message);
       return;
     }
+
+    // Sync assignment codes immediately for students to join via code/link
+    syncExamAssignmentCodes({
+      id: data.id,
+      title,
+      duration_minutes: duration,
+      teacher_name: profile?.full_name || "Giáo viên",
+      school_name: profile?.school_name || "",
+      subject_name: profile?.subject_name || "",
+      open_at: schedule.open_at,
+      close_at: schedule.close_at,
+      team_config: teamConfig as any,
+    }).catch(() => {});
+
     navigate(`/exam/${data.id}/share`);
   };
 

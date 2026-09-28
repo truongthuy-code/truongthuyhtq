@@ -15,6 +15,7 @@ import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
+import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -87,6 +88,14 @@ export default function EditExam() {
     } as any).eq("id", id);
     setSaving(false);
     if (error) { toast.error("Lỗi lưu: " + error.message); return; }
+    syncExamAssignmentCodes({
+      id,
+      title,
+      duration_minutes: duration,
+      open_at: schedule.open_at,
+      close_at: schedule.close_at,
+      team_config: teamConfig as any,
+    }).catch(() => {});
     toast.success("Đã lưu cài đặt");
     navigate("/");
   };

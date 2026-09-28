@@ -115,9 +115,27 @@ export default function StudentDashboard() {
     try {
       const res = await findAssignmentOrExamByCode(val);
       if (!res.success || !res.exam) {
-        toast.error(res.error || "Mã bài thi không tồn tại hoặc đã hết hạn.");
+        toast.error("Mã bài thi không hợp lệ hoặc không tồn tại.");
         return;
       }
+
+      // Check status
+      const isClosed =
+        res.exam.manual_closed === true ||
+        res.exam.status === "closed" ||
+        (res.exam.close_at && new Date() > new Date(res.exam.close_at));
+
+      const isNotOpen =
+        res.exam.status === "not_open" ||
+        (res.exam.open_at && new Date() < new Date(res.exam.open_at));
+
+      if (isClosed) {
+        toast.error("Bài thi đã đóng, bạn không thể tham gia.");
+      } else if (isNotOpen) {
+        const timeStr = res.exam.open_at ? new Date(res.exam.open_at).toLocaleString("vi-VN") : "";
+        toast.warning(`Bài thi chưa đến thời gian mở${timeStr ? ` (Bắt đầu lúc: ${timeStr})` : ""}.`);
+      }
+
       setConfirmExamModal({
         open: true,
         exam: res.exam,
@@ -701,15 +719,23 @@ export default function StudentDashboard() {
               </div>
 
               {/* Status Warning if closed or not open */}
-              {confirmExamModal.exam.manual_closed === true || confirmExamModal.exam.status === "closed" ? (
+              {confirmExamModal.exam.manual_closed === true ||
+              confirmExamModal.exam.status === "closed" ||
+              (confirmExamModal.exam.close_at && new Date() > new Date(confirmExamModal.exam.close_at)) ? (
                 <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2">
                   <AlertTriangle className="size-4 shrink-0 text-rose-500" />
-                  <span>Đề thi này hiện đã đóng nhận bài làm.</span>
+                  <span>Bài thi đã đóng, bạn không thể tham gia.</span>
                 </div>
-              ) : confirmExamModal.exam.status === "not_open" ? (
+              ) : confirmExamModal.exam.status === "not_open" ||
+                (confirmExamModal.exam.open_at && new Date() < new Date(confirmExamModal.exam.open_at)) ? (
                 <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
                   <AlertTriangle className="size-4 shrink-0 text-amber-500" />
-                  <span>Đề thi chưa đến giờ mở làm bài. Vui lòng quay lại sau.</span>
+                  <span>
+                    Bài thi chưa đến thời gian mở.
+                    {confirmExamModal.exam.open_at
+                      ? ` Thời gian bắt đầu: ${new Date(confirmExamModal.exam.open_at).toLocaleString("vi-VN")}`
+                      : ""}
+                  </span>
                 </div>
               ) : (
                 <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2">

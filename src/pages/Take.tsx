@@ -26,6 +26,7 @@ import {
   Flame,
   Award,
   AlertTriangle,
+  AlertCircle,
   RotateCcw,
   Eye,
 } from "lucide-react";
@@ -165,11 +166,25 @@ export default function Take() {
     const fromState = (location.state as any)?.exam;
     if (fromState) return fromState;
     if (id) {
-      const sample = findSampleExam(id) || getSampleExamById(id) || getSampleExamByCode(id);
+      const cleanId = id.trim();
+      const sample = findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId);
       if (sample) return sample;
     }
     return null;
   });
+
+  const [loading, setLoading] = useState<boolean>(() => {
+    const fromState = (location.state as any)?.exam;
+    if (fromState) return false;
+    if (id) {
+      const cleanId = id.trim();
+      const sample = findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId);
+      if (sample) return false;
+    }
+    return true;
+  });
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [manualCodeInput, setManualCodeInput] = useState("");
 
   const [started, setStarted] = useState(false);
   const [name, setName] = useState(() => student?.fullName || "");
@@ -227,60 +242,116 @@ export default function Take() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // 1. If id matches a sample exam, use it directly
-      if (id) {
-        const sample = findSampleExam(id) || getSampleExamById(id) || getSampleExamByCode(id);
-        if (sample) {
-          if (!cancelled) setExam(sample);
-          return;
+      const cleanId = (id || "").trim();
+      const searchParams = new URLSearchParams(window.location.search);
+      const codeParam = (searchParams.get("code") || "").trim();
+
+      // If we already have the exam with valid questions, don't show loading
+      if (
+        exam &&
+        (exam.questions?.partI?.length ||
+          exam.questions?.partII?.length ||
+          exam.questions?.partIII?.length ||
+          (Array.isArray(exam.questions) && exam.questions.length > 0))
+      ) {
+        if (!cancelled) {
+          setLoading(false);
+          setErrorMsg(null);
         }
+        return;
       }
 
-      // 2. Query Supabase RPC get_exam_for_student
-      try {
-        const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: id! });
-        if (!error && data) {
-          if ((data as any)?.display_mode === "team") {
-            navigate(`/team/${id}`, { replace: true });
+      setLoading(true);
+      setErrorMsg(null);
+
+      // 1. If cleanId or codeParam matches a sample exam, use it directly
+      const sample =
+        (cleanId ? findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId) : null) ||
+        (codeParam ? findSampleExam(codeParam) || getSampleExamByCode(codeParam) : null);
+
+      if (sample) {
+        if (!cancelled) {
+          setExam(sample);
+          setLoading(false);
+          setErrorMsg(null);
+        }
+        return;
+      }
+
+      // 2. Try findAssignmentOrExamByCode with codeParam if provided
+      if (codeParam) {
+        try {
+          const res = await findAssignmentOrExamByCode(codeParam);
+          if (res.success && res.exam) {
+            if ((res.exam as any)?.display_mode === "team") {
+              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
+              return;
+            }
+            if (!cancelled) {
+              setExam(res.exam);
+              setLoading(false);
+              setErrorMsg(null);
+            }
             return;
           }
-          if (!cancelled) setExam(data);
-          return;
-        }
-      } catch (e) {
-        console.warn("RPC get_exam_for_student failed, attempting fallbacks:", e);
-      }
-
-      // 3. Fallback: check query parameter code
-      const searchParams = new URLSearchParams(window.location.search);
-      const codeParam = searchParams.get("code");
-      if (codeParam) {
-        const sampleByCode = findSampleExam(codeParam) || getSampleExamByCode(codeParam);
-        if (sampleByCode) {
-          if (!cancelled) setExam(sampleByCode);
-          return;
-        }
-        const res = await findAssignmentOrExamByCode(codeParam);
-        if (res.success && res.exam) {
-          if (!cancelled) setExam(res.exam);
-          return;
+        } catch (e) {
+          console.warn("Error finding exam by codeParam:", e);
         }
       }
 
-      // 4. Fallback: findAssignmentOrExamByCode by id
-      if (id) {
-        const resId = await findAssignmentOrExamByCode(id);
-        if (resId.success && resId.exam) {
-          if (!cancelled) setExam(resId.exam);
-          return;
+      // 3. Try findAssignmentOrExamByCode with cleanId (which can be UUID, code, or path token)
+      if (cleanId) {
+        try {
+          const res = await findAssignmentOrExamByCode(cleanId);
+          if (res.success && res.exam) {
+            if ((res.exam as any)?.display_mode === "team") {
+              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
+              return;
+            }
+            if (!cancelled) {
+              setExam(res.exam);
+              setLoading(false);
+              setErrorMsg(null);
+            }
+            return;
+          }
+        } catch (e) {
+          console.warn("Error finding exam by cleanId:", e);
         }
+      }
+
+      // 4. If cleanId is UUID, try RPC get_exam_for_student
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanId)) {
+        try {
+          const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanId });
+          if (!error && data) {
+            if ((data as any)?.display_mode === "team") {
+              navigate(`/team/${cleanId}`, { replace: true });
+              return;
+            }
+            if (!cancelled) {
+              setExam(data);
+              setLoading(false);
+              setErrorMsg(null);
+            }
+            return;
+          }
+        } catch (e) {
+          console.warn("RPC get_exam_for_student failed:", e);
+        }
+      }
+
+      // 5. If not found, display clear message
+      if (!cancelled) {
+        setLoading(false);
+        setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc không tồn tại.");
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [id, navigate]);
+  }, [id, location.search, navigate]);
 
   // Persist progress
   useEffect(() => {
@@ -389,7 +460,30 @@ export default function Take() {
   const start = async () => {
     if (!exam) return;
 
-    const studentName = (name || student?.fullName || student?.account || "Học sinh").trim();
+    // Validate exam status
+    const isClosed =
+      exam.manual_closed === true ||
+      exam.status === "closed" ||
+      (exam.close_at && new Date() > new Date(exam.close_at));
+    if (isClosed) {
+      toast.error("Bài thi đã đóng, bạn không thể tham gia.");
+      return;
+    }
+
+    const isNotOpen =
+      exam.status === "not_open" ||
+      (exam.open_at && new Date() < new Date(exam.open_at));
+    if (isNotOpen) {
+      toast.error("Bài thi chưa đến thời gian mở.");
+      return;
+    }
+
+    const studentName = (name || student?.fullName || student?.account || "").trim();
+    if (!student && !studentName) {
+      toast.error("Vui lòng nhập họ và tên của bạn trước khi bắt đầu.");
+      return;
+    }
+
     const searchParams = new URLSearchParams(window.location.search);
     const studentClass = (
       klass ||
@@ -399,10 +493,11 @@ export default function Take() {
       "Chung"
     ).trim();
 
-    setName(studentName);
+    setName(studentName || "Học sinh");
     setKlass(studentClass);
 
-    const key = `take:${id}:${studentName}:${studentClass}`;
+    const activeName = studentName || "Học sinh";
+    const key = `take:${id}:${activeName}:${studentClass}`;
     if (localStorage.getItem(`${key}:done`)) {
       toast.error("Lượt làm bài này đã được nộp (hoặc đã tự động nộp khi bạn thoát trang).");
       return;
@@ -416,7 +511,7 @@ export default function Take() {
     try {
       const raw =
         localStorage.getItem(key) ||
-        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${id}:${studentName}:${studentClass}`) : null);
+        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${id}:${activeName}:${studentClass}`) : null);
       if (raw) {
         const saved = JSON.parse(raw);
         if (saved.questions?.length) {
@@ -435,7 +530,15 @@ export default function Take() {
       }
     } catch {}
 
-    const qs = normalizeExamQuestions(exam);
+    let qs = normalizeExamQuestions(exam);
+    if (!qs || qs.length === 0) {
+      // Fallback check if this corresponds to a sample exam
+      const sample = findSampleExam(exam.id) || findSampleExam(exam.code || "");
+      if (sample) {
+        qs = normalizeExamQuestions(sample);
+      }
+    }
+
     if (!qs || qs.length === 0) {
       toast.error("Không tìm thấy danh sách câu hỏi trong đề thi này.");
       return;
@@ -744,58 +847,135 @@ export default function Take() {
   );
 
   // Màn hình loading
-  if (!exam) {
+  if (loading && !exam) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4">
         <QuizBackground />
-        <div className="flex items-center gap-3 text-primary font-bold text-lg bg-card/80 backdrop-blur px-6 py-4 rounded-2xl shadow-lg border">
-          <Loader2 className="size-6 animate-spin" />
-          <span>Đang tải đề thi...</span>
+        <div className="flex items-center gap-3 text-primary font-bold text-lg bg-card/90 backdrop-blur px-8 py-5 rounded-3xl shadow-xl border-2">
+          <Loader2 className="size-6 animate-spin text-primary" />
+          <span>Đang tải thông tin bài thi...</span>
         </div>
+      </div>
+    );
+  }
+
+  // Màn hình lỗi: Không tìm thấy bài thi hoặc link không hợp lệ
+  if (!exam || errorMsg) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
+        <QuizBackground />
+        <Card className="p-8 sm:p-10 max-w-md w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur space-y-5 animate-slide-up">
+          <div className="size-20 rounded-3xl mx-auto grid place-items-center bg-destructive/10 text-destructive shadow-lg shadow-rose-200/50">
+            <AlertCircle className="size-10 text-destructive" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-black text-foreground">Không tìm thấy bài thi</h1>
+            <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
+              {errorMsg || "Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại trong hệ thống."}
+            </p>
+          </div>
+
+          {/* Ô nhập lại mã trực tiếp ngay tại đây */}
+          <div className="space-y-3 pt-2 text-left">
+            <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+              Nhập mã bài thi được cung cấp:
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Ví dụ: TIN12-7A3K9"
+                value={manualCodeInput}
+                onChange={(e) => setManualCodeInput(e.target.value.toUpperCase())}
+                className="h-12 rounded-xl text-base font-bold uppercase tracking-wider px-4 border-2"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && manualCodeInput.trim()) {
+                    navigate(`/take/${manualCodeInput.trim()}`);
+                  }
+                }}
+              />
+              <Button
+                onClick={() => {
+                  if (manualCodeInput.trim()) {
+                    navigate(`/take/${manualCodeInput.trim()}`);
+                  } else {
+                    toast.error("Vui lòng nhập mã bài thi");
+                  }
+                }}
+                className="h-12 px-5 rounded-xl font-bold bg-primary text-primary-foreground shrink-0 shadow-md"
+              >
+                Tìm
+              </Button>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t">
+            <Button asChild variant="outline" className="w-full h-12 rounded-xl font-bold text-sm">
+              <Link to="/student">Quay lại trang học sinh</Link>
+            </Button>
+          </div>
+        </Card>
       </div>
     );
   }
 
   const fmtDt = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("vi-VN") : "");
 
+  const isExamClosed =
+    exam.manual_closed === true ||
+    exam.status === "closed" ||
+    (exam.close_at && new Date() > new Date(exam.close_at));
+
+  const isExamNotOpen =
+    exam.status === "not_open" ||
+    (exam.open_at && new Date() < new Date(exam.open_at));
+
   // Màn hình đề chưa mở hoặc đã kết thúc
-  if (!started && (exam.status === "not_open" || exam.status === "closed")) {
-    const isNotOpen = exam.status === "not_open";
+  if (!started && (isExamClosed || isExamNotOpen)) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 grid place-items-center p-4 relative selection:bg-primary/20">
         <QuizBackground />
-        <Card className="p-8 sm:p-10 max-w-md w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur">
+        <Card className="p-8 sm:p-10 max-w-md w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur space-y-4">
           <div
-            className={`size-20 rounded-3xl mx-auto mb-5 grid place-items-center shadow-lg ${
-              isNotOpen ? "bg-amber-100 text-amber-600 shadow-amber-200" : "bg-destructive/10 text-destructive shadow-rose-200"
+            className={`size-20 rounded-3xl mx-auto grid place-items-center shadow-lg ${
+              isExamNotOpen
+                ? "bg-amber-100 text-amber-600 shadow-amber-200"
+                : "bg-destructive/10 text-destructive shadow-rose-200"
             }`}
           >
             <Clock className="size-10" />
           </div>
           <h1 className="text-2xl font-black text-foreground">{exam.title}</h1>
-          {isNotOpen ? (
+          {isExamNotOpen ? (
             <>
-              <p className="mt-3 text-muted-foreground text-sm sm:text-base">
-                Đề thi chưa được mở.
+              <p className="text-muted-foreground text-sm sm:text-base">
+                Bài thi chưa đến thời gian mở làm bài.
                 <br />
                 Vui lòng quay lại vào thời gian quy định bên dưới.
               </p>
-              <div className="mt-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
-                <div className="font-bold text-amber-700 dark:text-amber-400">Thời gian mở đề:</div>
-                <div className="text-primary font-black text-base mt-0.5">{fmtDt(exam.open_at)}</div>
-              </div>
+              {exam.open_at && (
+                <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
+                  <div className="font-bold text-amber-700 dark:text-amber-400">Thời gian bài thi bắt đầu:</div>
+                  <div className="text-primary font-black text-base mt-0.5">{fmtDt(exam.open_at)}</div>
+                </div>
+              )}
             </>
           ) : (
             <>
-              <p className="mt-3 text-muted-foreground text-sm sm:text-base">Đề thi này đã kết thúc nhận bài.</p>
+              <div className="p-4 rounded-2xl bg-destructive/10 border border-destructive/30 text-destructive font-bold text-base">
+                Bài thi đã đóng, bạn không thể tham gia.
+              </div>
               {exam.close_at && (
-                <div className="mt-5 rounded-2xl bg-destructive/10 border border-destructive/30 p-4 text-sm">
-                  <div className="font-bold text-destructive">Thời gian đóng đề:</div>
-                  <div className="text-destructive font-black text-base mt-0.5">{fmtDt(exam.close_at)}</div>
+                <div className="text-xs text-muted-foreground">
+                  Thời gian kết thúc: {fmtDt(exam.close_at)}
                 </div>
               )}
             </>
           )}
+
+          <div className="pt-3 border-t">
+            <Button asChild variant="outline" className="w-full h-11 rounded-xl font-bold">
+              <Link to="/student">Quay lại trang học sinh</Link>
+            </Button>
+          </div>
         </Card>
       </div>
     );
