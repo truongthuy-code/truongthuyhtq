@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import type { Session, User } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
 import {
   getCurrentAuthUser,
   setCurrentAuthUser,
@@ -11,7 +11,7 @@ import {
   TeacherUser,
 } from "@/lib/teacherStorage";
 
-export type Role = "admin" | "teacher";
+export type Role = "super_admin" | "admin" | "teacher";
 
 export type TeacherProfile = {
   id: string;
@@ -30,11 +30,13 @@ export type TeacherProfile = {
 
 type AuthCtx = {
   session: Session | null;
-  user: { id: string; email?: string | null; role?: string } | null;
+  user: { id: string; email?: string | null; role?: Role; mustChangePassword?: boolean } | null;
   roles: Role[];
   role: Role | null;
+  isSuperAdmin: boolean;
   isAdmin: boolean;
   isTeacher: boolean;
+  mustChangePassword: boolean;
   loading: boolean;
   profile: TeacherProfile | null;
   refreshProfile: () => Promise<void>;
@@ -47,8 +49,10 @@ const Ctx = createContext<AuthCtx>({
   user: null,
   roles: [],
   role: null,
+  isSuperAdmin: false,
   isAdmin: false,
   isTeacher: false,
+  mustChangePassword: false,
   loading: true,
   profile: null,
   refreshProfile: async () => {},
@@ -58,32 +62,38 @@ const Ctx = createContext<AuthCtx>({
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<{ id: string; email?: string | null; role?: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email?: string | null; role?: Role; mustChangePassword?: boolean } | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [profile, setProfile] = useState<TeacherProfile | null>(null);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Sync profile & user from either custom storage or Supabase Auth
   const syncState = useCallback(async () => {
     const customUser = getCurrentAuthUser();
     if (customUser) {
-      const isAdm = customUser.role === "admin";
+      const isSuper = customUser.role === "super_admin";
+      const isAdm = isSuper || customUser.role === "admin";
+      const roleVal: Role = isSuper ? "super_admin" : (isAdm ? "admin" : "teacher");
+
       setUser({
         id: customUser.id,
         email: customUser.email,
-        role: customUser.role,
+        role: roleVal,
+        mustChangePassword: !!customUser.mustChangePassword,
       });
-      setRoles(isAdm ? ["admin"] : ["teacher"]);
+      setRoles([roleVal]);
+      setMustChangePassword(!!customUser.mustChangePassword);
 
       if (isAdm) {
         setProfile({
           id: customUser.id,
           email: customUser.email,
           username: customUser.username,
-          full_name: customUser.name || "Quản trị viên Hệ thống",
+          full_name: customUser.name || (isSuper ? "Quản trị viên hệ thống" : "Quản trị viên"),
           phone: "",
           subject_id: null,
-          subject_name: "Toàn quyền Quản trị",
+          subject_name: isSuper ? "Toàn quyền Quản trị Super Admin" : "Quản trị viên Hệ thống",
           school_id: null,
           school_name: "Hệ thống Quản trị",
           profile_completed: true,
@@ -123,15 +133,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const mappedRoles = (r || []).map((x: any) => x.role as Role);
         setRoles(mappedRoles.length ? mappedRoles : ["teacher"]);
         setProfile((p as any) || null);
+        setMustChangePassword(false);
       } else {
         setUser(null);
         setRoles([]);
         setProfile(null);
+        setMustChangePassword(false);
       }
     } catch {
       setUser(null);
       setRoles([]);
       setProfile(null);
+      setMustChangePassword(false);
     } finally {
       setLoading(false);
     }
@@ -143,6 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onAppAuth = () => syncState();
     window.addEventListener("app_auth_change", onAppAuth);
     window.addEventListener("teacher_registry_changed", onAppAuth);
+    window.addEventListener("admin_registry_changed", onAppAuth);
     window.addEventListener("storage", onAppAuth);
 
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
@@ -154,6 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
           setRoles([]);
           setProfile(null);
+          setMustChangePassword(false);
         }
       }
     });
@@ -161,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener("app_auth_change", onAppAuth);
       window.removeEventListener("teacher_registry_changed", onAppAuth);
+      window.removeEventListener("admin_registry_changed", onAppAuth);
       window.removeEventListener("storage", onAppAuth);
       sub.subscription.unsubscribe();
     };
@@ -238,10 +254,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setRoles([]);
     setProfile(null);
+    setMustChangePassword(false);
     window.dispatchEvent(new Event("app_auth_change"));
   }, []);
 
-  const isAdmin = roles.includes("admin");
+  const isSuperAdmin = roles.includes("super_admin") || user?.role === "super_admin";
+  const isAdmin = isSuperAdmin || roles.includes("admin") || user?.role === "admin";
   const isTeacher = !isAdmin && (roles.includes("teacher") || !!user);
 
   return (
@@ -249,9 +267,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       user,
       roles,
-      role: isAdmin ? "admin" : (user ? "teacher" : null),
+      role: isSuperAdmin ? "super_admin" : (isAdmin ? "admin" : (user ? "teacher" : null)),
+      isSuperAdmin,
       isAdmin,
       isTeacher,
+      mustChangePassword,
       loading,
       profile,
       refreshProfile,

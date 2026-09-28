@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,31 +39,73 @@ import {
   CheckCircle2,
   XCircle,
   Eye,
-  ExternalLink,
   Plus,
   RefreshCw,
   School,
   BookOpen,
   GraduationCap,
+  Crown,
+  UserCheck,
+  Building,
+  Layers,
+  Award,
+  AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import {
   getAllTeachers,
-  saveAllTeachers,
   TeacherUser,
   hashPassword,
   upsertTeacher,
   deleteTeacher,
+  AdminUser,
+  getAllAdmins,
+  saveAllAdmins,
+  upsertAdmin,
+  deleteAdmin,
+  changeAdminPassword,
+  ROOT_SUPER_ADMIN_ID,
+  getRootAdmin,
 } from "@/lib/teacherStorage";
 import { SUBJECT_LIST } from "@/lib/subjects";
 import { toast } from "sonner";
+import MandatoryPasswordChange from "@/components/MandatoryPasswordChange";
+
+const DEFAULT_SCHOOLS = [
+  "THPT Phan Bội Châu - TP Đà Nẵng",
+  "THPT Lê Quý Đôn",
+  "THPT Chuyên Hà Nội - Amsterdam",
+  "THPT Bùi Thị Xuân",
+  "THPT Marie Curie",
+  "THPT Trần Phú",
+];
+
+const LS_SCHOOLS_KEY = "qc_schools_registry_v1";
+const LS_SUBJECTS_KEY = "qc_custom_subjects_v1";
 
 export default function AdminDashboard() {
-  const { user, isAdmin } = useAuth();
+  const { user, isSuperAdmin, isAdmin, mustChangePassword, refreshProfile } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "teachers" | "exams" | "results">("dashboard");
+  const [activeTab, setActiveTab] = useState<
+    "dashboard" | "admins" | "teachers" | "students" | "schools" | "subjects" | "exams" | "results"
+  >("dashboard");
+
+  // Admins State (Super Admin tab)
+  const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [adminQuery, setAdminQuery] = useState("");
+  const [addAdminOpen, setAddAdminOpen] = useState(false);
+  const [resetPwdAdmin, setResetPwdAdmin] = useState<AdminUser | null>(null);
+  const [newAdminPwd, setNewAdminPwd] = useState("");
+  const [deleteAdminTarget, setDeleteAdminTarget] = useState<AdminUser | null>(null);
+
+  // Admin form state
+  const [afUsername, setAfUsername] = useState("");
+  const [afName, setAfName] = useState("");
+  const [afEmail, setAfEmail] = useState("");
+  const [afPassword, setAfPassword] = useState("");
+  const [afStatus, setAfStatus] = useState<"active" | "locked">("active");
 
   // Teachers State
   const [teachers, setTeachers] = useState<TeacherUser[]>([]);
@@ -82,6 +124,32 @@ export default function AdminDashboard() {
   const [tfSubject, setTfSubject] = useState("");
   const [tfPassword, setTfPassword] = useState("");
 
+  // Schools State
+  const [customSchools, setCustomSchools] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(LS_SCHOOLS_KEY);
+      return raw ? JSON.parse(raw) : DEFAULT_SCHOOLS;
+    } catch {
+      return DEFAULT_SCHOOLS;
+    }
+  });
+  const [schoolQuery, setSchoolQuery] = useState("");
+  const [addSchoolOpen, setAddSchoolOpen] = useState(false);
+  const [newSchoolName, setNewSchoolName] = useState("");
+
+  // Subjects State
+  const [customSubjects, setCustomSubjects] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(LS_SUBJECTS_KEY);
+      return raw ? JSON.parse(raw) : SUBJECT_LIST;
+    } catch {
+      return SUBJECT_LIST;
+    }
+  });
+  const [subjectQuery, setSubjectQuery] = useState("");
+  const [addSubjectOpen, setAddSubjectOpen] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState("");
+
   // Exams State
   const [exams, setExams] = useState<any[]>([]);
   const [examQuery, setExamQuery] = useState("");
@@ -94,16 +162,23 @@ export default function AdminDashboard() {
   const [resultQuery, setResultQuery] = useState("");
   const [selectedSubDetail, setSelectedSubDetail] = useState<any | null>(null);
 
+  // Students filter state
+  const [studentQuery, setStudentQuery] = useState("");
+  const [studentClassFilter, setStudentClassFilter] = useState("all");
+
   const [loading, setLoading] = useState(true);
 
   // Load All Data
   const loadData = async () => {
     setLoading(true);
-    // 1. Teachers
+    // 1. Admins
+    setAdmins(getAllAdmins());
+
+    // 2. Teachers
     const tchs = getAllTeachers();
     setTeachers(tchs);
 
-    // 2. Exams
+    // 3. Exams
     const { data: ex } = await supabase
       .from("exams")
       .select("id,title,created_by,created_at,duration_minutes,display_mode,school_name,teacher_name,subject_name,questions,manual_closed")
@@ -111,7 +186,7 @@ export default function AdminDashboard() {
     const allExams = ex || [];
     setExams(allExams);
 
-    // 3. Submissions
+    // 4. Submissions
     const { data: subs } = await supabase
       .from("submissions")
       .select("id,exam_id,student_name,student_class,score,max_score,correct_count,wrong_count,violation_count,submitted_at,duration_seconds,answers")
@@ -131,10 +206,29 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     loadData();
-    const handleSync = () => setTeachers(getAllTeachers());
+    const handleSync = () => {
+      setTeachers(getAllTeachers());
+      setAdmins(getAllAdmins());
+    };
     window.addEventListener("teacher_registry_changed", handleSync);
-    return () => window.removeEventListener("teacher_registry_changed", handleSync);
+    window.addEventListener("admin_registry_changed", handleSync);
+    return () => {
+      window.removeEventListener("teacher_registry_changed", handleSync);
+      window.removeEventListener("admin_registry_changed", handleSync);
+    };
   }, []);
+
+  // Filtered Admins
+  const filteredAdmins = useMemo(() => {
+    const q = adminQuery.toLowerCase().trim();
+    if (!q) return admins;
+    return admins.filter(
+      (a) =>
+        a.name.toLowerCase().includes(q) ||
+        a.username.toLowerCase().includes(q) ||
+        a.email.toLowerCase().includes(q)
+    );
+  }, [admins, adminQuery]);
 
   // Filtered Teachers
   const filteredTeachers = useMemo(() => {
@@ -162,14 +256,13 @@ export default function AdminDashboard() {
   }, [teachers]);
 
   // Helper to get teacher name for an exam
-  const getExamTeacherName = (exam: any) => {
+  const getExamTeacherName = useCallback((exam: any) => {
     if (exam.created_by && teacherMap.has(exam.created_by)) {
       return teacherMap.get(exam.created_by)!.name;
     }
     if (exam.teacher_name) return exam.teacher_name;
-    // Default teacher if created_by is default
     return "Giáo viên Hệ thống";
-  };
+  }, [teacherMap]);
 
   // Filtered Exams
   const filteredExams = useMemo(() => {
@@ -185,7 +278,96 @@ export default function AdminDashboard() {
       }
       return true;
     });
-  }, [exams, selectedTeacherFilter, examQuery, teacherMap]);
+  }, [exams, selectedTeacherFilter, examQuery, getExamTeacherName]);
+
+  // Aggregated Students
+  const studentList = useMemo(() => {
+    const map = new Map<string, { name: string; klass: string; attempts: number; totalScore: number; lastActive: string }>();
+    submissions.forEach((s) => {
+      const name = (s.student_name || "Ẩn danh").trim();
+      const klass = (s.student_class || "Chưa rõ").trim();
+      const key = `${name}___${klass}`.toLowerCase();
+
+      const existing = map.get(key);
+      const score = Number(s.score || 0);
+      if (!existing) {
+        map.set(key, {
+          name,
+          klass,
+          attempts: 1,
+          totalScore: score,
+          lastActive: s.submitted_at || new Date().toISOString(),
+        });
+      } else {
+        existing.attempts += 1;
+        existing.totalScore += score;
+        if (s.submitted_at && s.submitted_at > existing.lastActive) {
+          existing.lastActive = s.submitted_at;
+        }
+      }
+    });
+
+    const list = Array.from(map.values()).map((st) => ({
+      ...st,
+      avgScore: st.attempts ? Math.round((st.totalScore / st.attempts) * 10) / 10 : 0,
+    }));
+
+    return list;
+  }, [submissions]);
+
+  const uniqueClasses = useMemo(() => {
+    const set = new Set<string>();
+    studentList.forEach((s) => set.add(s.klass));
+    return Array.from(set).sort();
+  }, [studentList]);
+
+  const filteredStudents = useMemo(() => {
+    return studentList.filter((s) => {
+      if (studentClassFilter !== "all" && s.klass !== studentClassFilter) return false;
+      if (studentQuery) {
+        const q = studentQuery.toLowerCase().trim();
+        return s.name.toLowerCase().includes(q) || s.klass.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [studentList, studentClassFilter, studentQuery]);
+
+  // All Schools (custom + from teachers/exams)
+  const allSchools = useMemo(() => {
+    const set = new Set<string>(customSchools);
+    teachers.forEach((t) => {
+      if (t.school) set.add(t.school.trim());
+    });
+    exams.forEach((e) => {
+      if (e.school_name) set.add(e.school_name.trim());
+    });
+    return Array.from(set).filter(Boolean).sort();
+  }, [customSchools, teachers, exams]);
+
+  const filteredSchools = useMemo(() => {
+    const q = schoolQuery.toLowerCase().trim();
+    if (!q) return allSchools;
+    return allSchools.filter((s) => s.toLowerCase().includes(q));
+  }, [allSchools, schoolQuery]);
+
+  // All Subjects
+  const allSubjects = useMemo(() => {
+    const set = new Set<string>(customSubjects);
+    SUBJECT_LIST.forEach((s) => set.add(s));
+    teachers.forEach((t) => {
+      if (t.subject) set.add(t.subject.trim());
+    });
+    exams.forEach((e) => {
+      if (e.subject_name) set.add(e.subject_name.trim());
+    });
+    return Array.from(set).filter(Boolean).sort();
+  }, [customSubjects, teachers, exams]);
+
+  const filteredSubjects = useMemo(() => {
+    const q = subjectQuery.toLowerCase().trim();
+    if (!q) return allSubjects;
+    return allSubjects.filter((s) => s.toLowerCase().includes(q));
+  }, [allSubjects, subjectQuery]);
 
   // Filtered Results
   const filteredResults = useMemo(() => {
@@ -207,13 +389,125 @@ export default function AdminDashboard() {
     const activeTeachers = teachers.filter((t) => t.status === "active").length;
     const totalExams = exams.length;
     const totalSubs = submissions.length;
-    const uniqStudents = new Set(submissions.map((s) => `${s.student_name}_${s.student_class}`)).size;
+    const totalStudents = studentList.length;
+    const totalSchools = allSchools.length;
+    const totalSubjects = allSubjects.length;
     const avgScore = totalSubs
       ? Math.round((submissions.reduce((a, b) => a + Number(b.score || 0), 0) / totalSubs) * 10) / 10
       : 0;
 
-    return { totalTeachers, activeTeachers, totalExams, totalSubs, uniqStudents, avgScore };
-  }, [teachers, exams, submissions]);
+    return { totalTeachers, activeTeachers, totalExams, totalSubs, totalStudents, totalSchools, totalSubjects, avgScore };
+  }, [teachers, exams, submissions, studentList, allSchools, allSubjects]);
+
+  // ADMIN MANAGEMENT HANDLERS (Super Admin only)
+  const handleCreateAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin) {
+      toast.error("Chỉ Super Admin gốc mới có quyền tạo Quản trị viên mới!");
+      return;
+    }
+
+    const uname = afUsername.trim().toLowerCase();
+    const email = afEmail.trim().toLowerCase();
+
+    if (!uname || !afName.trim() || !afPassword) {
+      toast.error("Vui lòng điền đầy đủ họ tên, tên đăng nhập và mật khẩu");
+      return;
+    }
+
+    if (uname === "admin" || email === "admin@admin.com") {
+      toast.error("Tên đăng nhập hoặc Email này là của Super Admin gốc!");
+      return;
+    }
+
+    if (afPassword.length < 6) {
+      toast.error("Mật khẩu ban đầu phải có ít nhất 6 ký tự");
+      return;
+    }
+
+    const newAdm: AdminUser = {
+      id: `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      username: uname,
+      name: afName.trim(),
+      email: email || `${uname}@admin.edu.vn`,
+      role: "admin", // strictly secondary admin
+      passwordHash: hashPassword(afPassword),
+      status: afStatus,
+      mustChangePassword: false,
+      createdAt: new Date().toISOString(),
+      createdBy: user?.id || "super_admin",
+    };
+
+    const res = upsertAdmin(newAdm);
+    if (!res.ok) {
+      toast.error(res.message || "Không thể tạo tài khoản Admin");
+      return;
+    }
+
+    setAdmins(getAllAdmins());
+    toast.success(`Đã tạo Quản trị viên mới: ${newAdm.name} (@${newAdm.username})`);
+    setAddAdminOpen(false);
+
+    // Reset Form
+    setAfUsername("");
+    setAfName("");
+    setAfEmail("");
+    setAfPassword("");
+    setAfStatus("active");
+  };
+
+  const handleToggleAdminStatus = (adm: AdminUser) => {
+    if (!isSuperAdmin) {
+      toast.error("Chỉ Super Admin gốc mới có quyền thay đổi trạng thái!");
+      return;
+    }
+    if (adm.role === "super_admin" || adm.id === ROOT_SUPER_ADMIN_ID) {
+      toast.error("Không thể khóa tài khoản Super Admin gốc!");
+      return;
+    }
+
+    const nextStatus = adm.status === "active" ? "locked" : "active";
+    upsertAdmin({ ...adm, status: nextStatus });
+    setAdmins(getAllAdmins());
+    toast.success(
+      nextStatus === "active"
+        ? `Đã mở khóa tài khoản Admin: @${adm.username}`
+        : `Đã khóa tài khoản Admin: @${adm.username}`
+    );
+  };
+
+  const handleResetAdminPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin || !resetPwdAdmin) return;
+    if (newAdminPwd.length < 6) {
+      toast.error("Mật khẩu mới phải có tối thiểu 6 ký tự");
+      return;
+    }
+
+    changeAdminPassword(resetPwdAdmin.id, newAdminPwd);
+    setAdmins(getAllAdmins());
+    toast.success(`Đã cập nhật mật khẩu cho Quản trị viên @${resetPwdAdmin.username}`);
+    setResetPwdAdmin(null);
+    setNewAdminPwd("");
+  };
+
+  const handleDeleteAdmin = () => {
+    if (!isSuperAdmin || !deleteAdminTarget) return;
+    if (deleteAdminTarget.role === "super_admin" || deleteAdminTarget.id === ROOT_SUPER_ADMIN_ID) {
+      toast.error("Tuyệt đối không thể xóa tài khoản Super Admin gốc!");
+      return;
+    }
+
+    const res = deleteAdmin(deleteAdminTarget.id);
+    if (!res.ok) {
+      toast.error(res.message || "Lỗi xóa Quản trị viên");
+      return;
+    }
+
+    setAdmins(getAllAdmins());
+    toast.success(`Đã xóa tài khoản Quản trị viên: @${deleteAdminTarget.username}`);
+    setDeleteAdminTarget(null);
+  };
 
   // Teacher CRUD Handlers
   const handleCreateTeacher = (e: React.FormEvent) => {
@@ -221,6 +515,10 @@ export default function AdminDashboard() {
     const uname = tfUsername.trim().toLowerCase();
     if (!uname || !tfName.trim() || !tfPassword) {
       toast.error("Vui lòng điền tên đăng nhập, họ tên và mật khẩu");
+      return;
+    }
+    if (uname === "admin" || uname === "super_admin") {
+      toast.error("Tên đăng nhập này không hợp lệ");
       return;
     }
     if (teachers.some((t) => t.username.toLowerCase() === uname)) {
@@ -246,7 +544,6 @@ export default function AdminDashboard() {
     toast.success(`Đã tạo tài khoản giáo viên: ${newTeacher.name}`);
     setAddTeacherOpen(false);
 
-    // Reset Form
     setTfUsername("");
     setTfName("");
     setTfEmail("");
@@ -261,150 +558,254 @@ export default function AdminDashboard() {
     if (!editTeacher) return;
     upsertTeacher(editTeacher);
     setTeachers(getAllTeachers());
-    toast.success("Cập nhật thông tin giáo viên thành công");
+    toast.success("Cập nhật thông tin giáo viên thành công!");
     setEditTeacher(null);
   };
 
-  const toggleTeacherStatus = (t: TeacherUser) => {
+  const handleToggleTeacherStatus = (t: TeacherUser) => {
     const nextStatus = t.status === "active" ? "locked" : "active";
-    const updated: TeacherUser = { ...t, status: nextStatus };
-    upsertTeacher(updated);
+    upsertTeacher({ ...t, status: nextStatus });
     setTeachers(getAllTeachers());
-    toast.success(nextStatus === "locked" ? `Đã khóa tài khoản ${t.name}` : `Đã mở khóa tài khoản ${t.name}`);
+    toast.success(
+      nextStatus === "active"
+        ? `Đã mở khóa tài khoản giáo viên: ${t.name}`
+        : `Đã khóa tài khoản giáo viên: ${t.name}`
+    );
   };
 
   const handleResetPassword = (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetPwdTeacher) return;
     if (newPasswordVal.length < 6) {
-      toast.error("Mật khẩu mới tối thiểu 6 ký tự");
+      toast.error("Mật khẩu mới phải có tối thiểu 6 ký tự");
       return;
     }
-    const updated: TeacherUser = {
-      ...resetPwdTeacher,
-      passwordHash: hashPassword(newPasswordVal),
-    };
-    upsertTeacher(updated);
+    upsertTeacher({ ...resetPwdTeacher, passwordHash: hashPassword(newPasswordVal) });
     setTeachers(getAllTeachers());
-    toast.success(`Đã đổi mật khẩu cho giáo viên ${resetPwdTeacher.name}`);
+    toast.success(`Đã đặt lại mật khẩu cho giáo viên ${resetPwdTeacher.name}`);
     setResetPwdTeacher(null);
     setNewPasswordVal("");
   };
 
-  const handleDeleteTeacher = (t: TeacherUser) => {
-    if (!confirm(`Bạn có chắc muốn xóa tài khoản giáo viên "${t.name}"? Thao tác này không thể hoàn tác.`)) {
-      return;
+  const handleDeleteTeacher = (id: string, name: string) => {
+    if (confirm(`Bạn có chắc chắn muốn xóa giáo viên "${name}" khỏi hệ thống?`)) {
+      deleteTeacher(id);
+      setTeachers(getAllTeachers());
+      toast.success(`Đã xóa giáo viên: ${name}`);
     }
-    deleteTeacher(t.id);
-    setTeachers(getAllTeachers());
-    toast.success(`Đã xóa tài khoản giáo viên: ${t.name}`);
   };
 
-  // Exam Actions
-  const handleDeleteExam = async (exam: any) => {
-    if (!confirm(`Xóa đề thi "${exam.title}"? Toàn bộ bài làm của học sinh cho đề này cũng sẽ bị xóa vĩnh viễn.`)) {
-      return;
-    }
-    await supabase.from("submissions").delete().eq("exam_id", exam.id);
-    const { error } = await supabase.from("exams").delete().eq("id", exam.id);
+  // Exam Management Handlers
+  const handleToggleCloseExam = async (exam: any) => {
+    const nextState = !exam.manual_closed;
+    const { error } = await supabase
+      .from("exams")
+      .update({ manual_closed: nextState })
+      .eq("id", exam.id);
+
     if (error) {
-      toast.error("Lỗi xóa đề: " + error.message);
+      toast.error("Không thể thay đổi trạng thái đề thi");
+    } else {
+      toast.success(nextState ? "Đã khóa đề thi" : "Đã mở lại đề thi cho học sinh làm bài");
+      loadData();
+    }
+  };
+
+  const handleDeleteExam = async (examId: string, title: string) => {
+    if (!confirm(`Bạn có chắc chắn muốn xóa đề thi "${title}"? Toàn bộ kết quả bài nộp của đề này cũng sẽ bị gỡ bỏ.`)) {
       return;
     }
-    setExams((prev) => prev.filter((e) => e.id !== exam.id));
-    toast.success("Đã xóa đề thi thành công");
+    try {
+      await supabase.from("submissions").delete().eq("exam_id", examId);
+      const { error } = await supabase.from("exams").delete().eq("id", examId);
+      if (error) throw error;
+      toast.success(`Đã xóa đề thi: ${title}`);
+      loadData();
+    } catch (err: any) {
+      toast.error("Không thể xóa đề thi: " + err.message);
+    }
   };
+
+  // School handlers
+  const handleAddSchool = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newSchoolName.trim();
+    if (!name) return;
+    if (allSchools.includes(name)) {
+      toast.error("Trường học này đã có trong hệ thống");
+      return;
+    }
+    const updated = [...customSchools, name];
+    setCustomSchools(updated);
+    localStorage.setItem(LS_SCHOOLS_KEY, JSON.stringify(updated));
+    toast.success(`Đã thêm trường học mới: ${name}`);
+    setNewSchoolName("");
+    setAddSchoolOpen(false);
+  };
+
+  // Subject handlers
+  const handleAddSubject = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newSubjectName.trim();
+    if (!name) return;
+    if (allSubjects.includes(name)) {
+      toast.error("Môn học này đã có trong hệ thống");
+      return;
+    }
+    const updated = [...customSubjects, name];
+    setCustomSubjects(updated);
+    localStorage.setItem(LS_SUBJECTS_KEY, JSON.stringify(updated));
+    toast.success(`Đã thêm môn học mới: ${name}`);
+    setNewSubjectName("");
+    setAddSubjectOpen(false);
+  };
+
+  // If mandatory change password flag is active, block everything and show the change screen
+  if (mustChangePassword) {
+    return (
+      <MandatoryPasswordChange
+        onSuccess={() => {
+          refreshProfile();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-card border rounded-2xl p-6 shadow-soft">
-        <div className="flex items-center gap-3">
-          <div className="size-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 grid place-items-center text-white shadow-soft shrink-0">
-            <ShieldCheck className="size-7" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
-              Hệ thống Quản trị Toàn quyền (Admin)
-              <Badge className="bg-amber-500 hover:bg-amber-600 text-white font-semibold">Tối cao</Badge>
+      {/* HEADER WITH ROLE BADGE */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-foreground flex items-center gap-2">
+              <ShieldCheck className="size-7 text-primary" /> Dashboard Quản trị Hệ thống
             </h1>
-            <p className="text-xs font-semibold text-primary mt-0.5 uppercase tracking-wide">
-              Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Toàn quyền quản lý tài khoản giáo viên, tất cả đề thi và kết quả kiểm tra trong toàn bộ hệ thống
-            </p>
           </div>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+            Quản trị toàn diện: Quản trị viên, Giáo viên, Học sinh, Trường học, Môn học & Đề thi
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
-            <RefreshCw className={`size-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Làm mới
-          </Button>
-          <Button asChild size="sm" className="bg-gradient-primary">
-            <Link to="/teacher">
-              <Plus className="size-4 mr-1" /> Tạo đề thi mới
-            </Link>
+
+        <div className="flex items-center gap-2.5">
+          {isSuperAdmin ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/15 via-rose-500/15 to-purple-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-bold text-xs shadow-sm">
+              <Crown className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>SUPER ADMIN (GỐC)</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 font-bold text-xs">
+              <ShieldCheck className="size-4 shrink-0" />
+              <span>QUẢN TRỊ VIÊN (ADMIN)</span>
+            </div>
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadData}
+            disabled={loading}
+            className="rounded-xl h-9"
+          >
+            <RefreshCw className={`size-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+            Làm mới
           </Button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="space-y-6">
-        <TabsList className="grid grid-cols-4 w-full md:w-auto md:inline-flex bg-muted/60 p-1 rounded-xl">
-          <TabsTrigger value="dashboard" className="rounded-lg gap-2 text-xs sm:text-sm">
-            <BarChart3 className="size-4" /> Tổng quan
-          </TabsTrigger>
-          <TabsTrigger value="teachers" className="rounded-lg gap-2 text-xs sm:text-sm">
-            <Users className="size-4" /> Quản lý Giáo viên ({teachers.length})
-          </TabsTrigger>
-          <TabsTrigger value="exams" className="rounded-lg gap-2 text-xs sm:text-sm">
-            <FileText className="size-4" /> Tất cả Bài thi ({exams.length})
-          </TabsTrigger>
-          <TabsTrigger value="results" className="rounded-lg gap-2 text-xs sm:text-sm">
-            <GraduationCap className="size-4" /> Kết quả làm bài ({submissions.length})
-          </TabsTrigger>
-        </TabsList>
+      {/* TABS NAVIGATION */}
+      <Tabs value={activeTab} onValueChange={(v: any) => setActiveTab(v)} className="space-y-6">
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="bg-muted/60 p-1 rounded-xl h-auto gap-1">
+            <TabsTrigger value="dashboard" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <BarChart3 className="size-3.5 mr-1.5" /> Tổng quan
+            </TabsTrigger>
 
-        {/* TAB 1: DASHBOARD OVERVIEW */}
+            {/* ONLY VISIBLE TO SUPER ADMIN */}
+            {isSuperAdmin && (
+              <TabsTrigger
+                value="admins"
+                className="rounded-lg text-xs py-2 px-3 font-semibold data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-600 data-[state=active]:to-purple-600 data-[state=active]:text-white"
+              >
+                <Crown className="size-3.5 mr-1.5 text-amber-400" /> Quản lý Quản trị viên
+              </TabsTrigger>
+            )}
+
+            <TabsTrigger value="teachers" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <Users className="size-3.5 mr-1.5" /> Giáo viên ({teachers.length})
+            </TabsTrigger>
+
+            <TabsTrigger value="students" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <GraduationCap className="size-3.5 mr-1.5" /> Học sinh ({studentList.length})
+            </TabsTrigger>
+
+            <TabsTrigger value="schools" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <School className="size-3.5 mr-1.5" /> Trường học ({allSchools.length})
+            </TabsTrigger>
+
+            <TabsTrigger value="subjects" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <BookOpen className="size-3.5 mr-1.5" /> Môn học ({allSubjects.length})
+            </TabsTrigger>
+
+            <TabsTrigger value="exams" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <FileText className="size-3.5 mr-1.5" /> Đề thi ({exams.length})
+            </TabsTrigger>
+
+            <TabsTrigger value="results" className="rounded-lg text-xs py-2 px-3 font-semibold">
+              <Award className="size-3.5 mr-1.5" /> Kết quả & Báo cáo ({submissions.length})
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* ============================================================ */}
+        {/* TAB 1: TỔNG QUAN (DASHBOARD) */}
+        {/* ============================================================ */}
         <TabsContent value="dashboard" className="space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-blue-500">
-              <Users className="size-5 text-blue-500 mb-1" />
-              <div className="text-2xl font-black">{stats.totalTeachers}</div>
-              <div className="text-xs text-muted-foreground">Giáo viên</div>
+          {/* Quick Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-primary shadow-xs">
+              <Users className="size-4 text-primary mb-1" />
+              <div className="text-xl font-black">{stats.totalTeachers}</div>
+              <div className="text-[11px] text-muted-foreground">Giáo viên</div>
             </Card>
 
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-emerald-500">
-              <CheckCircle2 className="size-5 text-emerald-500 mb-1" />
-              <div className="text-2xl font-black">{stats.activeTeachers}</div>
-              <div className="text-xs text-muted-foreground">GV Đang hoạt động</div>
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-emerald-500 shadow-xs">
+              <GraduationCap className="size-4 text-emerald-500 mb-1" />
+              <div className="text-xl font-black">{stats.totalStudents}</div>
+              <div className="text-[11px] text-muted-foreground">Học sinh</div>
             </Card>
 
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-purple-500">
-              <FileText className="size-5 text-purple-500 mb-1" />
-              <div className="text-2xl font-black">{stats.totalExams}</div>
-              <div className="text-xs text-muted-foreground">Tổng số đề thi</div>
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-blue-500 shadow-xs">
+              <FileText className="size-4 text-blue-500 mb-1" />
+              <div className="text-xl font-black">{stats.totalExams}</div>
+              <div className="text-[11px] text-muted-foreground">Đề thi</div>
             </Card>
 
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-cyan-500">
-              <GraduationCap className="size-5 text-cyan-500 mb-1" />
-              <div className="text-2xl font-black">{stats.uniqStudents}</div>
-              <div className="text-xs text-muted-foreground">Học sinh tham gia</div>
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-amber-500 shadow-xs">
+              <BarChart3 className="size-4 text-amber-500 mb-1" />
+              <div className="text-xl font-black">{stats.totalSubs}</div>
+              <div className="text-[11px] text-muted-foreground">Bài nộp</div>
             </Card>
 
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-amber-500">
-              <BarChart3 className="size-5 text-amber-500 mb-1" />
-              <div className="text-2xl font-black">{stats.totalSubs}</div>
-              <div className="text-xs text-muted-foreground">Lượt nộp bài</div>
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-purple-500 shadow-xs">
+              <School className="size-4 text-purple-500 mb-1" />
+              <div className="text-xl font-black">{stats.totalSchools}</div>
+              <div className="text-[11px] text-muted-foreground">Trường học</div>
             </Card>
 
-            <Card className="p-4 flex flex-col items-center justify-center text-center border-l-4 border-l-rose-500">
-              <ShieldAlert className="size-5 text-rose-500 mb-1" />
-              <div className="text-2xl font-black">{stats.avgScore}/10</div>
-              <div className="text-xs text-muted-foreground">Điểm trung bình</div>
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-cyan-500 shadow-xs">
+              <BookOpen className="size-4 text-cyan-500 mb-1" />
+              <div className="text-xl font-black">{stats.totalSubjects}</div>
+              <div className="text-[11px] text-muted-foreground">Môn học</div>
+            </Card>
+
+            <Card className="p-3.5 flex flex-col items-center justify-center text-center border-l-4 border-l-rose-500 shadow-xs">
+              <Award className="size-4 text-rose-500 mb-1" />
+              <div className="text-xl font-black">{stats.avgScore}/10</div>
+              <div className="text-[11px] text-muted-foreground">Điểm TB</div>
             </Card>
           </div>
 
+          {/* Quick Sections Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Quick Teachers card */}
             <Card className="p-5 space-y-4">
@@ -412,11 +813,11 @@ export default function AdminDashboard() {
                 <h3 className="font-bold text-base flex items-center gap-2">
                   <Users className="size-4 text-primary" /> Giáo viên gần đây
                 </h3>
-                <Button variant="ghost" size="sm" onClick={() => setActiveTab("teachers")}>
+                <Button variant="ghost" size="sm" onClick={() => setActiveTab("teachers")} className="text-xs">
                   Xem tất cả ({teachers.length})
                 </Button>
               </div>
-              <div className="divide-y">
+              <div className="divide-y text-sm">
                 {teachers.slice(0, 5).map((t) => (
                   <div key={t.id} className="py-2.5 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -442,13 +843,13 @@ export default function AdminDashboard() {
             <Card className="p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-base flex items-center gap-2">
-                  <FileText className="size-4 text-primary" /> Bài thi mới nhất
+                  <FileText className="size-4 text-primary" /> Đề thi mới nhất
                 </h3>
-                <Button variant="ghost" size="sm" onClick={() => setActiveTab("exams")}>
+                <Button variant="ghost" size="sm" onClick={() => setActiveTab("exams")} className="text-xs">
                   Xem tất cả ({exams.length})
                 </Button>
               </div>
-              <div className="divide-y">
+              <div className="divide-y text-sm">
                 {exams.slice(0, 5).map((e) => (
                   <div key={e.id} className="py-2.5 flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -469,11 +870,192 @@ export default function AdminDashboard() {
           </div>
         </TabsContent>
 
-        {/* TAB 2: QUẢN LÝ GIÁO VIÊN */}
+        {/* ============================================================ */}
+        {/* TAB 2: QUẢN LÝ QUẢN TRỊ VIÊN (SUPER ADMIN ONLY) */}
+        {/* ============================================================ */}
+        {isSuperAdmin && (
+          <TabsContent value="admins" className="space-y-4">
+            <Card className="p-4 md:p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+                <div>
+                  <h2 className="text-lg font-bold flex items-center gap-2">
+                    <Crown className="size-5 text-amber-500" /> Danh sách Quản trị viên Hệ thống
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Super Admin gốc có quyền tạo, quản lý và phân quyền cho các tài khoản Quản trị viên (Admin).
+                  </p>
+                </div>
+                <Button
+                  onClick={() => setAddAdminOpen(true)}
+                  className="w-full sm:w-auto bg-gradient-to-r from-amber-600 to-primary text-white rounded-xl shadow-xs"
+                >
+                  <UserPlus className="size-4 mr-2" /> + Tạo Admin mới
+                </Button>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="relative w-full sm:w-80">
+                  <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Tìm admin theo tên, tài khoản, email..."
+                    value={adminQuery}
+                    onChange={(e) => setAdminQuery(e.target.value)}
+                    className="pl-9 rounded-xl"
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Tổng số: <span className="font-bold text-foreground">{filteredAdmins.length}</span> Quản trị viên
+                </div>
+              </div>
+
+              <div className="border rounded-xl overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40">
+                      <TableHead>Quản trị viên</TableHead>
+                      <TableHead>Tên đăng nhập</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead className="text-center">Vai trò</TableHead>
+                      <TableHead className="text-center">Trạng thái</TableHead>
+                      <TableHead className="text-right">Hành động</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAdmins.map((adm) => {
+                      const isRoot = adm.role === "super_admin" || adm.id === ROOT_SUPER_ADMIN_ID;
+                      return (
+                        <TableRow key={adm.id} className={isRoot ? "bg-amber-500/5 hover:bg-amber-500/10" : ""}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`size-9 rounded-full grid place-items-center font-bold text-sm shrink-0 ${
+                                  isRoot
+                                    ? "bg-gradient-to-br from-amber-500 to-rose-600 text-white shadow-xs"
+                                    : "bg-primary/10 text-primary"
+                                }`}
+                              >
+                                {isRoot ? <Crown className="size-4" /> : adm.name[0]?.toUpperCase() || "A"}
+                              </div>
+                              <div>
+                                <div className="font-bold text-sm flex items-center gap-1.5">
+                                  {adm.name}
+                                  {isRoot && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-black uppercase">
+                                      Gốc
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground font-mono">ID: {adm.id}</div>
+                              </div>
+                            </div>
+                          </TableCell>
+
+                          <TableCell className="font-mono text-xs font-semibold">@{adm.username}</TableCell>
+                          <TableCell className="text-xs">{adm.email}</TableCell>
+
+                          <TableCell className="text-center">
+                            {isRoot ? (
+                              <Badge className="bg-gradient-to-r from-amber-500 to-rose-600 text-white font-bold text-[10px]">
+                                SUPER ADMIN
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="font-semibold text-[10px]">
+                                ADMIN
+                              </Badge>
+                            )}
+                          </TableCell>
+
+                          <TableCell className="text-center">
+                            <Badge
+                              variant={adm.status === "active" ? "default" : "destructive"}
+                              className="text-[10px]"
+                            >
+                              {adm.status === "active" ? "Hoạt động" : "Đã khóa"}
+                            </Badge>
+                          </TableCell>
+
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {isRoot ? (
+                                <Badge variant="outline" className="text-[11px] text-amber-600 border-amber-500/30">
+                                  <ShieldCheck className="size-3 mr-1" /> Tài khoản gốc bảo vệ
+                                </Badge>
+                              ) : (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-2 text-xs"
+                                    onClick={() => handleToggleAdminStatus(adm)}
+                                    title={adm.status === "active" ? "Khóa tài khoản" : "Mở khóa"}
+                                  >
+                                    {adm.status === "active" ? (
+                                      <Lock className="size-3.5 text-amber-600" />
+                                    ) : (
+                                      <Unlock className="size-3.5 text-emerald-600" />
+                                    )}
+                                  </Button>
+
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-2 text-xs"
+                                    onClick={() => {
+                                      setResetPwdAdmin(adm);
+                                      setNewAdminPwd("");
+                                    }}
+                                    title="Đặt lại mật khẩu"
+                                  >
+                                    <KeyRound className="size-3.5 text-purple-600" />
+                                  </Button>
+
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-2 text-xs text-rose-600 hover:bg-rose-50"
+                                    onClick={() => setDeleteAdminTarget(adm)}
+                                    title="Xóa tài khoản"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </Card>
+          </TabsContent>
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB 3: QUẢN LÝ GIÁO VIÊN */}
+        {/* ============================================================ */}
         <TabsContent value="teachers" className="space-y-4">
           <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <Users className="size-5 text-primary" /> Quản lý Danh sách Giáo viên
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Toàn bộ tài khoản giáo viên tham gia tạo đề, chấm thi và quản lý học sinh trên hệ thống.
+                </p>
+              </div>
+              <Button
+                onClick={() => setAddTeacherOpen(true)}
+                className="w-full sm:w-auto bg-gradient-primary rounded-xl"
+              >
+                <UserPlus className="size-4 mr-2" /> Thêm giáo viên mới
+              </Button>
+            </div>
+
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="relative w-full sm:w-72">
+              <div className="relative w-full sm:w-80">
                 <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Tìm giáo viên (tên, tài khoản, trường)..."
@@ -482,9 +1064,9 @@ export default function AdminDashboard() {
                   className="pl-9 rounded-xl"
                 />
               </div>
-              <Button onClick={() => setAddTeacherOpen(true)} className="w-full sm:w-auto bg-gradient-primary rounded-xl">
-                <UserPlus className="size-4 mr-2" /> Thêm giáo viên mới
-              </Button>
+              <div className="text-xs text-muted-foreground">
+                Tổng số: <span className="font-bold text-foreground">{filteredTeachers.length}</span> giáo viên
+              </div>
             </div>
 
             <div className="border rounded-xl overflow-hidden">
@@ -519,73 +1101,80 @@ export default function AdminDashboard() {
                               )}
                             </div>
                             <div>
-                              <div className="font-semibold text-sm leading-tight">{t.name}</div>
-                              <div className="text-[11px] text-muted-foreground">{t.email}</div>
+                              <div className="font-bold text-sm">{t.name}</div>
+                              <div className="text-xs text-muted-foreground font-mono">ID: {t.id}</div>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="font-mono text-xs font-semibold text-primary">
-                          @{t.username}
+
+                        <TableCell className="font-mono text-xs font-semibold">@{t.username}</TableCell>
+
+                        <TableCell>
+                          <div className="text-xs font-medium text-primary">{t.subject}</div>
+                          <div className="text-xs text-muted-foreground">{t.school}</div>
                         </TableCell>
-                        <TableCell className="text-xs">
-                          <div className="font-medium">{t.subject || "Chưa phân môn"}</div>
-                          <div className="text-muted-foreground">{t.school || "Chưa cập nhật"}</div>
+
+                        <TableCell>
+                          <div className="text-xs">{t.email || "Chưa có"}</div>
+                          <div className="text-xs text-muted-foreground">{t.phone || "Chưa có"}</div>
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {t.phone || "—"}
-                        </TableCell>
+
                         <TableCell className="text-center">
                           <Badge
                             variant={t.status === "active" ? "default" : "destructive"}
-                            className="text-[11px]"
+                            className="text-[10px]"
                           >
-                            {t.status === "active" ? "Hoạt động" : "Bị khóa"}
+                            {t.status === "active" ? "Hoạt động" : "Đã khóa"}
                           </Badge>
                         </TableCell>
+
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
+                          <div className="flex items-center justify-end gap-1.5">
                             <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              title={t.status === "active" ? "Khóa tài khoản" : "Mở khóa tài khoản"}
-                              onClick={() => toggleTeacherStatus(t)}
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => setEditTeacher(t)}
+                              title="Chỉnh sửa thông tin"
+                            >
+                              <Edit className="size-3.5 text-blue-600" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => handleToggleTeacherStatus(t)}
+                              title={t.status === "active" ? "Khóa tài khoản" : "Mở khóa"}
                             >
                               {t.status === "active" ? (
-                                <Lock className="size-4 text-amber-600" />
+                                <Lock className="size-3.5 text-amber-600" />
                               ) : (
-                                <Unlock className="size-4 text-emerald-600" />
+                                <Unlock className="size-3.5 text-emerald-600" />
                               )}
                             </Button>
+
                             <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              title="Chỉnh sửa thông tin"
-                              onClick={() => setEditTeacher({ ...t })}
-                            >
-                              <Edit className="size-4 text-blue-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              title="Đặt lại mật khẩu"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs"
                               onClick={() => {
                                 setResetPwdTeacher(t);
                                 setNewPasswordVal("");
                               }}
+                              title="Đặt lại mật khẩu"
                             >
-                              <KeyRound className="size-4 text-purple-600" />
+                              <KeyRound className="size-3.5 text-purple-600" />
                             </Button>
+
                             <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-destructive hover:bg-destructive/10"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs text-rose-600 hover:bg-rose-50"
+                              onClick={() => handleDeleteTeacher(t.id, t.name)}
                               title="Xóa giáo viên"
-                              onClick={() => handleDeleteTeacher(t)}
                             >
-                              <Trash2 className="size-4" />
+                              <Trash2 className="size-3.5" />
                             </Button>
                           </div>
                         </TableCell>
@@ -598,151 +1187,56 @@ export default function AdminDashboard() {
           </Card>
         </TabsContent>
 
-        {/* TAB 3: TẤT CẢ BÀI THI */}
-        <TabsContent value="exams" className="space-y-4">
+        {/* ============================================================ */}
+        {/* TAB 4: QUẢN LÝ HỌC SINH */}
+        {/* ============================================================ */}
+        <TabsContent value="students" className="space-y-4">
           <Card className="p-4 md:p-6 space-y-4">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <div className="relative flex-1 md:w-72">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <GraduationCap className="size-5 text-emerald-600" /> Quản lý Học sinh & Tiến độ làm bài
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Tổng hợp danh sách học sinh tham gia làm bài, số lượt nộp và điểm trung bình tích lũy.
+                </p>
+              </div>
+              <Button asChild variant="outline" className="rounded-xl">
+                <Link to="/students">
+                  <Users className="size-4 mr-2" /> Xem Sổ danh sách học sinh
+                </Link>
+              </Button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-72">
                   <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    placeholder="Tìm tên bài thi hoặc giáo viên..."
-                    value={examQuery}
-                    onChange={(e) => setExamQuery(e.target.value)}
+                    placeholder="Tìm học sinh theo tên..."
+                    value={studentQuery}
+                    onChange={(e) => setStudentQuery(e.target.value)}
                     className="pl-9 rounded-xl"
                   />
                 </div>
-                <Select value={selectedTeacherFilter} onValueChange={setSelectedTeacherFilter}>
-                  <SelectTrigger className="w-56 rounded-xl">
-                    <SelectValue placeholder="Lọc theo giáo viên" />
+
+                <Select value={studentClassFilter} onValueChange={setStudentClassFilter}>
+                  <SelectTrigger className="w-36 rounded-xl">
+                    <SelectValue placeholder="Lọc theo lớp" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Tất cả giáo viên</SelectItem>
-                    {teachers.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name} (@{t.username})
+                    <SelectItem value="all">Tất cả các lớp</SelectItem>
+                    {uniqueClasses.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        Lớp {c}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="text-xs text-muted-foreground">
-                Hiển thị <b>{filteredExams.length}</b> / {exams.length} bài thi
-              </div>
-            </div>
 
-            <div className="border rounded-xl overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/40">
-                    <TableHead>Tên bài thi</TableHead>
-                    <TableHead>Giáo viên tạo</TableHead>
-                    <TableHead>Thời gian</TableHead>
-                    <TableHead className="text-center">Số bài nộp</TableHead>
-                    <TableHead className="text-center">Trạng thái</TableHead>
-                    <TableHead className="text-right">Hành động</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredExams.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                        Không có đề thi nào phù hợp.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredExams.map((e) => (
-                      <TableRow key={e.id}>
-                        <TableCell>
-                          <div className="font-semibold text-sm line-clamp-1">{e.title}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {e.subject_name || "Môn học"} • {e.duration_minutes} phút • Chế độ: {e.display_mode || "chuẩn"}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <div className="font-semibold text-primary">{getExamTeacherName(e)}</div>
-                          <div className="text-muted-foreground">{e.school_name || "THPT"}</div>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {new Date(e.created_at).toLocaleDateString("vi-VN")}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge variant="secondary" className="font-bold">
-                            {examSubCounts[e.id] || 0}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge variant={e.manual_closed ? "outline" : "default"} className="text-[10px]">
-                            {e.manual_closed ? "Đã đóng" : "Đang mở"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button asChild variant="ghost" size="icon" className="size-8" title="Xem kết quả">
-                              <Link to={`/exam/${e.id}/results`}>
-                                <BarChart3 className="size-4 text-blue-600" />
-                              </Link>
-                            </Button>
-                            <Button asChild variant="ghost" size="icon" className="size-8" title="Chỉnh sửa đề">
-                              <Link to={`/exam/${e.id}/edit`}>
-                                <Edit className="size-4 text-amber-600" />
-                              </Link>
-                            </Button>
-                            <Button asChild variant="ghost" size="icon" className="size-8" title="Link bài thi">
-                              <Link to={`/take/${e.id}`} target="_blank">
-                                <ExternalLink className="size-4 text-emerald-600" />
-                              </Link>
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-destructive hover:bg-destructive/10"
-                              title="Xóa đề thi"
-                              onClick={() => handleDeleteExam(e)}
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
-        </TabsContent>
-
-        {/* TAB 4: QUẢN LÝ KẾT QUẢ BÀI LÀM */}
-        <TabsContent value="results" className="space-y-4">
-          <Card className="p-4 md:p-6 space-y-4">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <div className="relative flex-1 md:w-72">
-                  <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Tìm theo tên học sinh hoặc lớp..."
-                    value={resultQuery}
-                    onChange={(e) => setResultQuery(e.target.value)}
-                    className="pl-9 rounded-xl"
-                  />
-                </div>
-                <Select value={resultExamFilter} onValueChange={setResultExamFilter}>
-                  <SelectTrigger className="w-64 rounded-xl">
-                    <SelectValue placeholder="Lọc theo bài thi" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Tất cả bài thi</SelectItem>
-                    {exams.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {e.title}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="text-xs text-muted-foreground">
-                Tổng cộng <b>{filteredResults.length}</b> lượt nộp bài
+                Hiển thị: <span className="font-bold text-foreground">{filteredStudents.length}</span> học sinh
               </div>
             </div>
 
@@ -752,64 +1246,407 @@ export default function AdminDashboard() {
                   <TableRow className="bg-muted/40">
                     <TableHead>Học sinh</TableHead>
                     <TableHead>Lớp</TableHead>
-                    <TableHead>Bài thi</TableHead>
-                    <TableHead className="text-center">Số câu đúng / sai</TableHead>
+                    <TableHead className="text-center">Số bài đã thi</TableHead>
+                    <TableHead className="text-center">Điểm trung bình</TableHead>
+                    <TableHead>Lần làm bài gần nhất</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredStudents.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                        Chưa có dữ liệu học sinh nào.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredStudents.map((st, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell>
+                          <div className="flex items-center gap-2.5">
+                            <div className="size-8 rounded-full bg-emerald-500/10 text-emerald-600 font-bold text-xs grid place-items-center">
+                              {st.name[0]?.toUpperCase() || "H"}
+                            </div>
+                            <span className="font-semibold text-sm">{st.name}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-bold">
+                            {st.klass}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center font-bold">{st.attempts}</TableCell>
+                        <TableCell className="text-center font-bold">
+                          <span
+                            className={
+                              st.avgScore >= 8
+                                ? "text-emerald-600 font-black"
+                                : st.avgScore >= 5
+                                ? "text-blue-600 font-semibold"
+                                : "text-rose-600 font-semibold"
+                            }
+                          >
+                            {st.avgScore}/10
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {new Date(st.lastActive).toLocaleString("vi-VN")}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* TAB 5: QUẢN LÝ TRƯỜNG HỌC */}
+        {/* ============================================================ */}
+        <TabsContent value="schools" className="space-y-4">
+          <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <School className="size-5 text-purple-600" /> Danh mục Trường học
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Quản lý danh sách các trường THPT / THCS trong hệ thống tạo đề thi.
+                </p>
+              </div>
+              <Button onClick={() => setAddSchoolOpen(true)} className="rounded-xl bg-purple-600 hover:bg-purple-700 text-white">
+                <Plus className="size-4 mr-1.5" /> Thêm trường học
+              </Button>
+            </div>
+
+            <div className="relative w-full sm:w-80">
+              <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Tìm tên trường học..."
+                value={schoolQuery}
+                onChange={(e) => setSchoolQuery(e.target.value)}
+                className="pl-9 rounded-xl"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              {filteredSchools.map((sch) => {
+                const countTeachers = teachers.filter((t) => t.school === sch).length;
+                const countExams = exams.filter((e) => e.school_name === sch).length;
+                return (
+                  <Card key={sch} className="p-4 flex flex-col justify-between border hover:border-purple-500/50 transition-all">
+                    <div>
+                      <div className="size-8 rounded-lg bg-purple-500/10 text-purple-600 grid place-items-center mb-2">
+                        <Building className="size-4" />
+                      </div>
+                      <h4 className="font-bold text-sm leading-snug line-clamp-2">{sch}</h4>
+                    </div>
+                    <div className="mt-3 pt-3 border-t text-xs text-muted-foreground flex items-center justify-between">
+                      <span>{countTeachers} Giáo viên</span>
+                      <span>{countExams} Đề thi</span>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* TAB 6: QUẢN LÝ MÔN HỌC */}
+        {/* ============================================================ */}
+        <TabsContent value="subjects" className="space-y-4">
+          <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <BookOpen className="size-5 text-cyan-600" /> Danh mục Môn học
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Quản lý danh sách các môn thi giảng dạy trên hệ thống.
+                </p>
+              </div>
+              <Button onClick={() => setAddSubjectOpen(true)} className="rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white">
+                <Plus className="size-4 mr-1.5" /> Thêm môn học
+              </Button>
+            </div>
+
+            <div className="relative w-full sm:w-80">
+              <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Tìm tên môn học..."
+                value={subjectQuery}
+                onChange={(e) => setSubjectQuery(e.target.value)}
+                className="pl-9 rounded-xl"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {filteredSubjects.map((sub) => {
+                const countExams = exams.filter((e) => e.subject_name === sub).length;
+                const countTeachers = teachers.filter((t) => t.subject === sub).length;
+                return (
+                  <Card key={sub} className="p-4 flex flex-col justify-between border hover:border-cyan-500/50 transition-all">
+                    <div>
+                      <div className="size-8 rounded-lg bg-cyan-500/10 text-cyan-600 grid place-items-center mb-2">
+                        <BookOpen className="size-4" />
+                      </div>
+                      <h4 className="font-bold text-sm truncate">{sub}</h4>
+                    </div>
+                    <div className="mt-3 pt-3 border-t text-xs text-muted-foreground flex items-center justify-between">
+                      <span>{countTeachers} GV</span>
+                      <span>{countExams} Đề thi</span>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* TAB 7: QUẢN LÝ ĐỀ THI */}
+        {/* ============================================================ */}
+        <TabsContent value="exams" className="space-y-4">
+          <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <FileText className="size-5 text-blue-600" /> Quản lý Đề thi Hệ thống
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Theo dõi trạng thái đóng/mở, bài nộp và quản trị toàn bộ đề thi trực tuyến.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-72">
+                  <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Tìm tên đề thi, giáo viên..."
+                    value={examQuery}
+                    onChange={(e) => setExamQuery(e.target.value)}
+                    className="pl-9 rounded-xl"
+                  />
+                </div>
+
+                <Select value={selectedTeacherFilter} onValueChange={setSelectedTeacherFilter}>
+                  <SelectTrigger className="w-48 rounded-xl">
+                    <SelectValue placeholder="Lọc theo giáo viên" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tất cả giáo viên</SelectItem>
+                    {teachers.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                Tổng số: <span className="font-bold text-foreground">{filteredExams.length}</span> đề thi
+              </div>
+            </div>
+
+            <div className="border rounded-xl overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/40">
+                    <TableHead>Tên đề thi</TableHead>
+                    <TableHead>Giáo viên tạo</TableHead>
+                    <TableHead>Môn học & Trường</TableHead>
+                    <TableHead className="text-center">Số bài nộp</TableHead>
+                    <TableHead className="text-center">Trạng thái</TableHead>
+                    <TableHead className="text-right">Hành động</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredExams.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                        Không tìm thấy đề thi nào.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredExams.map((e) => (
+                      <TableRow key={e.id}>
+                        <TableCell>
+                          <div className="font-bold text-sm text-foreground">{e.title}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {e.duration_minutes} phút • {Array.isArray(e.questions) ? e.questions.length : 0} câu hỏi
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="font-semibold text-xs">{getExamTeacherName(e)}</div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="text-xs text-primary font-medium">{e.subject_name || "Chưa chọn môn"}</div>
+                          <div className="text-xs text-muted-foreground">{e.school_name || "Chưa chọn trường"}</div>
+                        </TableCell>
+
+                        <TableCell className="text-center font-bold text-sm">
+                          {examSubCounts[e.id] || 0}
+                        </TableCell>
+
+                        <TableCell className="text-center">
+                          <Badge variant={e.manual_closed ? "destructive" : "default"} className="text-[10px]">
+                            {e.manual_closed ? "Đã khóa" : "Đang mở"}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button asChild size="sm" variant="outline" className="h-8 px-2 text-xs">
+                              <Link to={`/exam/${e.id}/results`}>
+                                <BarChart3 className="size-3.5 mr-1" /> Kết quả
+                              </Link>
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => handleToggleCloseExam(e)}
+                              title={e.manual_closed ? "Mở lại đề thi" : "Khóa đề thi"}
+                            >
+                              {e.manual_closed ? <Unlock className="size-3.5 text-emerald-600" /> : <Lock className="size-3.5 text-amber-600" />}
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs text-rose-600 hover:bg-rose-50"
+                              onClick={() => handleDeleteExam(e.id, e.title)}
+                              title="Xóa đề thi"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* TAB 8: KẾT QUẢ & BÁO CÁO (RESULTS) */}
+        {/* ============================================================ */}
+        <TabsContent value="results" className="space-y-4">
+          <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <Award className="size-5 text-amber-600" /> Dữ liệu & Kết quả bài làm trên hệ thống
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Xem chi tiết kết quả từng bài thi của học sinh trên toàn hệ thống.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-72">
+                  <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Tìm tên học sinh hoặc lớp..."
+                    value={resultQuery}
+                    onChange={(e) => setResultQuery(e.target.value)}
+                    className="pl-9 rounded-xl"
+                  />
+                </div>
+
+                <Select value={resultExamFilter} onValueChange={setResultExamFilter}>
+                  <SelectTrigger className="w-56 rounded-xl">
+                    <SelectValue placeholder="Lọc theo bài thi" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tất cả đề thi</SelectItem>
+                    {exams.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                Hiển thị: <span className="font-bold text-foreground">{filteredResults.length}</span> bài nộp
+              </div>
+            </div>
+
+            <div className="border rounded-xl overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/40">
+                    <TableHead>Học sinh</TableHead>
+                    <TableHead>Lớp</TableHead>
+                    <TableHead>Đề thi</TableHead>
                     <TableHead className="text-center">Điểm số</TableHead>
-                    <TableHead className="text-center">Vi phạm</TableHead>
-                    <TableHead className="text-right">Thời gian nộp</TableHead>
+                    <TableHead className="text-center">Đúng/Sai</TableHead>
+                    <TableHead>Thời gian nộp</TableHead>
+                    <TableHead className="text-right">Hành động</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredResults.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        Không có dữ liệu bài nộp nào.
+                        Chưa có bài thi nào được nộp.
                       </TableCell>
                     </TableRow>
                   ) : (
                     filteredResults.slice(0, 100).map((s) => {
-                      const exam = exams.find((e) => e.id === s.exam_id);
+                      const ex = exams.find((e) => e.id === s.exam_id);
                       return (
                         <TableRow key={s.id}>
-                          <TableCell className="font-semibold text-sm">
-                            {s.student_name}
+                          <TableCell className="font-semibold">{s.student_name || "Ẩn danh"}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{s.student_class || "—"}</Badge>
                           </TableCell>
-                          <TableCell className="text-xs">
-                            <Badge variant="outline">{s.student_class}</Badge>
+                          <TableCell className="max-w-[200px] truncate text-xs">
+                            {ex?.title || s.exam_id}
                           </TableCell>
-                          <TableCell className="text-xs max-w-xs truncate">
-                            {exam?.title || s.exam_id}
-                          </TableCell>
-                          <TableCell className="text-center text-xs">
-                            <span className="text-emerald-600 font-semibold">{s.correct_count}</span>
-                            {" / "}
-                            <span className="text-rose-500">{s.wrong_count}</span>
-                          </TableCell>
-                          <TableCell className="text-center font-bold text-sm">
+                          <TableCell className="text-center font-bold">
                             <span
                               className={
-                                s.score >= 8
-                                  ? "text-emerald-600"
-                                  : s.score >= 5
-                                  ? "text-blue-600"
-                                  : "text-rose-500"
+                                Number(s.score) >= 8
+                                  ? "text-emerald-600 font-black"
+                                  : Number(s.score) >= 5
+                                  ? "text-blue-600 font-semibold"
+                                  : "text-rose-600 font-semibold"
                               }
                             >
-                              {s.score}
+                              {s.score}/{s.max_score || 10}
                             </span>
-                            <span className="text-xs text-muted-foreground">/{s.max_score || 10}</span>
                           </TableCell>
-                          <TableCell className="text-center">
-                            {s.violation_count > 0 ? (
-                              <Badge variant="destructive" className="text-[10px]">
-                                {s.violation_count} lần
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">0</span>
-                            )}
+                          <TableCell className="text-center text-xs">
+                            <span className="text-emerald-600 font-bold">{s.correct_count ?? "—"}</span> /{" "}
+                            <span className="text-rose-600 font-bold">{s.wrong_count ?? "—"}</span>
                           </TableCell>
-                          <TableCell className="text-right text-xs text-muted-foreground">
-                            {new Date(s.submitted_at).toLocaleString("vi-VN")}
+                          <TableCell className="text-xs text-muted-foreground">
+                            {s.submitted_at ? new Date(s.submitted_at).toLocaleString("vi-VN") : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs"
+                              onClick={() => setSelectedSubDetail(s)}
+                            >
+                              <Eye className="size-3.5 mr-1" /> Chi tiết
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );
@@ -822,52 +1659,209 @@ export default function AdminDashboard() {
         </TabsContent>
       </Tabs>
 
-      {/* DIALOG 1: THÊM GIÁO VIÊN MỚI */}
-      <Dialog open={addTeacherOpen} onOpenChange={setAddTeacherOpen}>
+      {/* ============================================================ */}
+      {/* DIALOG: TẠO ADMIN MỚI (CHỈ SUPER ADMIN) */}
+      {/* ============================================================ */}
+      <Dialog open={addAdminOpen} onOpenChange={setAddAdminOpen}>
         <DialogContent className="max-w-md sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <UserPlus className="size-5 text-primary" /> Thêm tài khoản Giáo viên mới
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <Crown className="size-5 text-amber-500" /> Tạo tài khoản Quản trị viên (Admin)
             </DialogTitle>
             <DialogDescription>
-              Tạo tài khoản giáo viên mới. Giáo viên có thể dùng tên đăng nhập và mật khẩu này để đăng nhập ngay.
+              Tài khoản được tạo sẽ có quyền quản trị (Admin). Hệ thống chỉ cho phép tạo tài khoản vai trò <b>Admin</b>, không tạo thêm Super Admin gốc.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleCreateTeacher} className="space-y-3.5 py-2">
+          <form onSubmit={handleCreateAdmin} className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="af-name">Họ và tên Quản trị viên *</Label>
+              <Input
+                id="af-name"
+                required
+                placeholder="Nguyễn Văn Quản Trị"
+                value={afName}
+                onChange={(e) => setAfName(e.target.value)}
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label htmlFor="tf-user">Tên đăng nhập *</Label>
+                <Label htmlFor="af-user">Tên đăng nhập *</Label>
                 <Input
-                  id="tf-user"
+                  id="af-user"
                   required
-                  placeholder="giaovien_toan"
-                  value={tfUsername}
-                  onChange={(e) => setTfUsername(e.target.value)}
+                  placeholder="admin_phu"
+                  value={afUsername}
+                  onChange={(e) => setAfUsername(e.target.value)}
                 />
               </div>
+
               <div className="space-y-1">
-                <Label htmlFor="tf-pass">Mật khẩu ban đầu *</Label>
+                <Label htmlFor="af-email">Email đăng nhập *</Label>
                 <Input
-                  id="tf-pass"
+                  id="af-email"
+                  type="email"
                   required
-                  type="password"
-                  placeholder="Tối thiểu 6 ký tự"
-                  value={tfPassword}
-                  onChange={(e) => setTfPassword(e.target.value)}
+                  placeholder="admin_phu@school.edu.vn"
+                  value={afEmail}
+                  onChange={(e) => setAfEmail(e.target.value)}
                 />
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="af-pass">Mật khẩu ban đầu *</Label>
+                <Input
+                  id="af-pass"
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Tối thiểu 6 ký tự"
+                  value={afPassword}
+                  onChange={(e) => setAfPassword(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="af-status">Trạng thái tài khoản</Label>
+                <Select value={afStatus} onValueChange={(v: any) => setAfStatus(v)}>
+                  <SelectTrigger id="af-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Hoạt động</SelectItem>
+                    <SelectItem value="locked">Khóa</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="p-3 bg-amber-500/10 rounded-xl text-xs text-amber-900 dark:text-amber-200 border border-amber-500/20">
+              <span className="font-bold">Quyền hạn của tài khoản:</span> Quản trị viên này có quyền quản lý giáo viên, học sinh, đề thi, trường học và môn học; nhưng <b>không có quyền</b> quản lý danh sách Quản trị viên.
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setAddAdminOpen(false)}>
+                Hủy
+              </Button>
+              <Button type="submit" className="bg-gradient-to-r from-amber-600 to-primary text-white font-bold">
+                Xác nhận tạo Admin
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: ĐẶT LẠI MẬT KHẨU ADMIN */}
+      <Dialog open={!!resetPwdAdmin} onOpenChange={(val) => !val && setResetPwdAdmin(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="size-5 text-purple-600" /> Đặt lại mật khẩu Quản trị viên
+            </DialogTitle>
+            <DialogDescription>
+              Tài khoản: <b>{resetPwdAdmin?.name}</b> (@{resetPwdAdmin?.username})
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleResetAdminPassword} className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="admin-new-pwd-val">Mật khẩu mới *</Label>
+              <Input
+                id="admin-new-pwd-val"
+                type="password"
+                required
+                minLength={6}
+                placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
+                value={newAdminPwd}
+                onChange={(e) => setNewAdminPwd(e.target.value)}
+              />
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setResetPwdAdmin(null)}>
+                Hủy
+              </Button>
+              <Button type="submit" className="bg-gradient-primary">
+                Cập nhật mật khẩu
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: XÁC NHẬN XÓA ADMIN */}
+      <Dialog open={!!deleteAdminTarget} onOpenChange={(val) => !val && setDeleteAdminTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-rose-600">
+              <AlertTriangle className="size-5" /> Xác nhận xóa Quản trị viên
+            </DialogTitle>
+            <DialogDescription>
+              Bạn có chắc chắn muốn xóa tài khoản Quản trị viên <b>{deleteAdminTarget?.name}</b> (@{deleteAdminTarget?.username}) khỏi hệ thống? Hành động này không thể hoàn tác.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={() => setDeleteAdminTarget(null)}>
+              Hủy
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleDeleteAdmin}>
+              Xác nhận xóa
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: THÊM GIÁO VIÊN */}
+      <Dialog open={addTeacherOpen} onOpenChange={setAddTeacherOpen}>
+        <DialogContent className="max-w-md sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="size-5 text-primary" /> Thêm Giáo viên mới
+            </DialogTitle>
+            <DialogDescription>
+              Tạo tài khoản giáo viên trực tiếp vào hệ thống cơ sở dữ liệu nội bộ.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateTeacher} className="space-y-3.5 py-2">
             <div className="space-y-1">
               <Label htmlFor="tf-name">Họ và tên giáo viên *</Label>
               <Input
                 id="tf-name"
                 required
-                placeholder="Thầy Nguyễn Văn An"
+                placeholder="Thầy/Cô Nguyễn Văn A"
                 value={tfName}
                 onChange={(e) => setTfName(e.target.value)}
               />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="tf-username">Tên đăng nhập *</Label>
+                <Input
+                  id="tf-username"
+                  required
+                  placeholder="giaovien123"
+                  value={tfUsername}
+                  onChange={(e) => setTfUsername(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="tf-password">Mật khẩu ban đầu *</Label>
+                <Input
+                  id="tf-password"
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Ít nhất 6 ký tự"
+                  value={tfPassword}
+                  onChange={(e) => setTfPassword(e.target.value)}
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -876,7 +1870,7 @@ export default function AdminDashboard() {
                 <Input
                   id="tf-email"
                   type="email"
-                  placeholder="an.nv@school.edu.vn"
+                  placeholder="gv@school.edu.vn"
                   value={tfEmail}
                   onChange={(e) => setTfEmail(e.target.value)}
                 />
@@ -885,7 +1879,7 @@ export default function AdminDashboard() {
                 <Label htmlFor="tf-phone">Số điện thoại</Label>
                 <Input
                   id="tf-phone"
-                  placeholder="0912 345 678"
+                  placeholder="0912..."
                   value={tfPhone}
                   onChange={(e) => setTfPhone(e.target.value)}
                 />
@@ -909,12 +1903,11 @@ export default function AdminDashboard() {
                     <SelectValue placeholder="Chọn môn học" />
                   </SelectTrigger>
                   <SelectContent>
-                    {SUBJECT_LIST.map((s) => (
+                    {allSubjects.map((s) => (
                       <SelectItem key={s} value={s}>
                         {s}
                       </SelectItem>
                     ))}
-                    <SelectItem value="Khác">Môn khác</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -925,14 +1918,14 @@ export default function AdminDashboard() {
                 Hủy
               </Button>
               <Button type="submit" className="bg-gradient-primary">
-                Tạo tài khoản
+                Tạo tài khoản giáo viên
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* DIALOG 2: CHỈNH SỬA GIÁO VIÊN */}
+      {/* DIALOG: CHỈNH SỬA GIÁO VIÊN */}
       <Dialog open={!!editTeacher} onOpenChange={(val) => !val && setEditTeacher(null)}>
         <DialogContent className="max-w-md sm:max-w-lg">
           <DialogHeader>
@@ -991,7 +1984,7 @@ export default function AdminDashboard() {
                       <SelectValue placeholder="Chọn môn" />
                     </SelectTrigger>
                     <SelectContent>
-                      {SUBJECT_LIST.map((s) => (
+                      {allSubjects.map((s) => (
                         <SelectItem key={s} value={s}>
                           {s}
                         </SelectItem>
@@ -1014,7 +2007,7 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* DIALOG 3: ĐẶT LẠI MẬT KHẨU GIÁO VIÊN */}
+      {/* DIALOG: ĐẶT LẠI MẬT KHẨU GIÁO VIÊN */}
       <Dialog open={!!resetPwdTeacher} onOpenChange={(val) => !val && setResetPwdTeacher(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -1048,6 +2041,132 @@ export default function AdminDashboard() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: THÊM TRƯỜNG HỌC */}
+      <Dialog open={addSchoolOpen} onOpenChange={setAddSchoolOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <School className="size-5 text-purple-600" /> Thêm Trường học mới
+            </DialogTitle>
+            <DialogDescription>
+              Nhập tên trường học để bổ sung vào danh mục trường trong toàn hệ thống.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddSchool} className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="school-name">Tên trường học *</Label>
+              <Input
+                id="school-name"
+                required
+                placeholder="VD: THPT Phan Châu Trinh"
+                value={newSchoolName}
+                onChange={(e) => setNewSchoolName(e.target.value)}
+              />
+            </div>
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setAddSchoolOpen(false)}>
+                Hủy
+              </Button>
+              <Button type="submit" className="bg-purple-600 hover:bg-purple-700 text-white">
+                Thêm trường
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: THÊM MÔN HỌC */}
+      <Dialog open={addSubjectOpen} onOpenChange={setAddSubjectOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BookOpen className="size-5 text-cyan-600" /> Thêm Môn học mới
+            </DialogTitle>
+            <DialogDescription>
+              Nhập tên môn học mới để giáo viên có thể chọn khi tạo đề thi.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddSubject} className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="sub-name">Tên môn học *</Label>
+              <Input
+                id="sub-name"
+                required
+                placeholder="VD: Khoa học tự nhiên"
+                value={newSubjectName}
+                onChange={(e) => setNewSubjectName(e.target.value)}
+              />
+            </div>
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setAddSubjectOpen(false)}>
+                Hủy
+              </Button>
+              <Button type="submit" className="bg-cyan-600 hover:bg-cyan-700 text-white">
+                Thêm môn
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: CHI TIẾT BÀI NỘP */}
+      <Dialog open={!!selectedSubDetail} onOpenChange={(val) => !val && setSelectedSubDetail(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Award className="size-5 text-amber-500" /> Chi tiết bài nộp học sinh
+            </DialogTitle>
+            <DialogDescription>
+              Thông tin chi tiết kết quả làm bài của học sinh
+            </DialogDescription>
+          </DialogHeader>
+          {selectedSubDetail && (
+            <div className="space-y-3 py-2 text-sm">
+              <div className="grid grid-cols-2 gap-2 p-3 bg-muted/40 rounded-xl">
+                <div>
+                  <span className="text-muted-foreground text-xs">Học sinh:</span>
+                  <div className="font-bold">{selectedSubDetail.student_name || "Ẩn danh"}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Lớp:</span>
+                  <div className="font-bold">{selectedSubDetail.student_class || "—"}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Điểm số:</span>
+                  <div className="font-black text-primary text-base">
+                    {selectedSubDetail.score}/{selectedSubDetail.max_score || 10}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Thời gian làm:</span>
+                  <div className="font-semibold">
+                    {Math.round((selectedSubDetail.duration_seconds || 0) / 60)} phút
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Số câu đúng / sai:</span>
+                  <div className="font-semibold text-xs">
+                    <span className="text-emerald-600 font-bold">{selectedSubDetail.correct_count ?? 0} đúng</span>,{" "}
+                    <span className="text-rose-600 font-bold">{selectedSubDetail.wrong_count ?? 0} sai</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Vi phạm tab:</span>
+                  <div className="font-semibold text-xs text-rose-500">
+                    {selectedSubDetail.violation_count || 0} lần
+                  </div>
+                </div>
+              </div>
+              <DialogFooter className="pt-2">
+                <Button variant="outline" onClick={() => setSelectedSubDetail(null)}>
+                  Đóng
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

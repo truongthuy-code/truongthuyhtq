@@ -26,6 +26,8 @@ import {
   hashPassword,
   getTeacherByUsernameOrEmail,
   getAdminAccount,
+  getAdminByUsernameOrEmail,
+  getRootAdmin,
   setCurrentAuthUser,
   upsertTeacher,
   TeacherUser,
@@ -98,31 +100,49 @@ export default function AuthPage() {
     try {
       // 1. ADMIN LOGIN FLOW
       if (selectedRole === "admin") {
-        const adminAcc = getAdminAccount();
         const normInput = identifier.trim().toLowerCase();
         const inputHash = hashPassword(password);
 
-        // Check if credentials match the single admin account
-        if (
-          (normInput === adminAcc.username.toLowerCase() || normInput === adminAcc.email.toLowerCase()) &&
-          inputHash === adminAcc.passwordHash
-        ) {
-          setCurrentAuthUser({
-            id: adminAcc.id,
-            username: adminAcc.username,
-            name: adminAcc.name,
-            email: adminAcc.email,
-            role: "admin",
-          });
-          toast.success("Đăng nhập thành công với quyền Quản trị viên (Admin)");
-          setBusy(false);
-          navigate("/admin", { replace: true });
-          return;
+        // Check against registered admins (root super_admin or secondary admin)
+        const matchedAdmin = getAdminByUsernameOrEmail(normInput);
+
+        if (matchedAdmin) {
+          if (matchedAdmin.status === "locked") {
+            setBusy(false);
+            toast.error("Tài khoản Quản trị viên này đã bị khóa. Vui lòng liên hệ Super Admin!");
+            return;
+          }
+
+          if (matchedAdmin.passwordHash === inputHash) {
+            setCurrentAuthUser({
+              id: matchedAdmin.id,
+              username: matchedAdmin.username,
+              name: matchedAdmin.name,
+              email: matchedAdmin.email,
+              role: matchedAdmin.role,
+              mustChangePassword: !!matchedAdmin.mustChangePassword,
+            });
+
+            if (matchedAdmin.mustChangePassword) {
+              toast.info("Đăng nhập thành công! Bạn bắt buộc phải đổi mật khẩu lần đầu tiên để tiếp tục.");
+            } else {
+              toast.success(
+                `Đăng nhập thành công với quyền ${
+                  matchedAdmin.role === "super_admin"
+                    ? "Super Admin (Quản trị viên gốc)"
+                    : "Quản trị viên (Admin)"
+                }`
+              );
+            }
+            setBusy(false);
+            navigate("/admin", { replace: true });
+            return;
+          }
         }
 
         // If not matched, strictly refuse wrong role/credentials
         setBusy(false);
-        toast.error("Tài khoản hoặc mật khẩu Quản trị viên không chính xác");
+        toast.error("Tên đăng nhập hoặc mật khẩu Quản trị viên không chính xác");
         return;
       }
 
@@ -197,8 +217,22 @@ export default function AuthPage() {
     }
 
     const normUsername = (signupUsername || signupEmail.split("@")[0] || "").trim().toLowerCase();
+    const normEmail = signupEmail.trim().toLowerCase();
     if (!normUsername) {
       toast.error("Vui lòng nhập tên đăng nhập");
+      return;
+    }
+
+    // Strictly forbid registration of admin or super_admin identifiers
+    if (
+      normUsername === "admin" ||
+      normUsername === "super_admin" ||
+      normUsername === "root" ||
+      normEmail === "admin@admin.com" ||
+      getAdminByUsernameOrEmail(normUsername) ||
+      getAdminByUsernameOrEmail(normEmail)
+    ) {
+      toast.error("Không được phép đăng ký tên tài khoản hoặc email của Quản trị viên hệ thống!");
       return;
     }
 
@@ -327,9 +361,9 @@ export default function AuthPage() {
           <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
             <ShieldCheck className="size-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Khu vực dành riêng cho Quản trị viên (Admin):</span>
+              <span className="font-semibold">Khu vực dành riêng cho Quản trị viên (Super Admin / Admin):</span>
               <p className="mt-0.5 text-muted-foreground">
-                Đăng nhập tài khoản Admin để quản lý danh sách giáo viên, bài thi và toàn bộ dữ liệu hệ thống.
+                Tài khoản quản trị nội bộ của hệ thống. Không hỗ trợ đăng ký công khai tài khoản Quản trị viên.
               </p>
             </div>
           </div>
@@ -506,7 +540,7 @@ export default function AuthPage() {
                 required
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="admin"
+                placeholder="admin hoặc admin@admin.com"
                 className="h-10"
               />
             </div>

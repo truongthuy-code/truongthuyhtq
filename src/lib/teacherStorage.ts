@@ -1,7 +1,7 @@
 /**
- * Teacher Account Registry & Management System
+ * Teacher & Admin Account Registry & Management System
  * Provides authentication, profile management, password hashing,
- * admin initialization, and role isolation for Teachers and the single Admin account.
+ * admin initialization, and role isolation for Super Admin, Admins, and Teachers.
  */
 
 export interface TeacherUser {
@@ -24,14 +24,22 @@ export interface AdminUser {
   username: string;
   name: string;
   email: string;
-  role: "admin";
+  role: "super_admin" | "admin";
   passwordHash: string;
+  mustChangePassword?: boolean;
+  status: "active" | "locked";
+  createdAt: string;
+  updatedAt?: string;
+  createdBy?: string;
 }
 
 const STORAGE_KEYS = {
   TEACHERS: "qc_teachers_registry_v2",
   ADMIN: "qc_admin_account_v2",
+  ADMINS_LIST: "qc_admin_accounts_list_v3",
   CURRENT_USER: "qc_current_auth_user_v2",
+  SCHOOLS: "qc_schools_registry_v1",
+  SUBJECTS: "qc_custom_subjects_v1",
 };
 
 // Simple yet secure salt+FNV1a hash for local credentials
@@ -55,14 +63,20 @@ export function normalizeUsername(u: string): string {
   return (u || "").trim().toLowerCase();
 }
 
-/** Initial default admin account credentials: admin / Admin@123 */
-const DEFAULT_ADMIN: AdminUser = {
-  id: "admin-system-root-001",
+/** Root Super Admin default constants */
+export const ROOT_SUPER_ADMIN_ID = "super-admin-system-root-001";
+export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Admin@123456");
+
+export const DEFAULT_ROOT_ADMIN: AdminUser = {
+  id: ROOT_SUPER_ADMIN_ID,
   username: "admin",
-  name: "Quản trị viên Hệ thống",
-  email: "admin@quizcheck.edu.vn",
-  role: "admin",
-  passwordHash: hashPassword("Admin@123"),
+  name: "Quản trị viên hệ thống",
+  email: "admin@admin.com",
+  role: "super_admin",
+  passwordHash: DEFAULT_ROOT_ADMIN_PASSWORD_HASH,
+  mustChangePassword: true,
+  status: "active",
+  createdAt: "2026-01-01T00:00:00.000Z",
 };
 
 /** Initial default demo teacher account: giaovien / 123456 */
@@ -79,19 +93,266 @@ const DEFAULT_TEACHER: TeacherUser = {
   createdAt: new Date().toISOString(),
 };
 
-export function getAdminAccount(): AdminUser {
+/**
+ * Get all administrators.
+ * Guarantees that the root Super Admin exists once and only once.
+ * Preserves custom password if Super Admin already changed password.
+ */
+export function getAllAdmins(): AdminUser[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.ADMIN);
-    if (raw) return JSON.parse(raw);
+    const raw = localStorage.getItem(STORAGE_KEYS.ADMINS_LIST);
+    if (raw) {
+      const parsed: AdminUser[] = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Find the root super admin
+        const rootIdx = parsed.findIndex(
+          (a) =>
+            a.id === ROOT_SUPER_ADMIN_ID ||
+            normalizeUsername(a.username) === "admin" ||
+            normalizeUsername(a.email) === "admin@admin.com"
+        );
+
+        if (rootIdx >= 0) {
+          const currentRoot = parsed[rootIdx];
+          // Protect root admin integrity while PRESERVING updated password & mustChangePassword flag!
+          parsed[rootIdx] = {
+            ...currentRoot,
+            id: ROOT_SUPER_ADMIN_ID,
+            username: "admin",
+            name: currentRoot.name || "Quản trị viên hệ thống",
+            email: currentRoot.email || "admin@admin.com",
+            role: "super_admin", // Strictly super_admin
+            status: "active", // Never locked
+            mustChangePassword: currentRoot.mustChangePassword ?? false,
+            passwordHash: currentRoot.passwordHash || DEFAULT_ROOT_ADMIN.passwordHash,
+          };
+        } else {
+          // If missing, unshift the default root admin
+          parsed.unshift(DEFAULT_ROOT_ADMIN);
+        }
+
+        // Filter out any duplicate root admin records if any
+        const cleaned: AdminUser[] = [];
+        let hasRoot = false;
+        for (const adm of parsed) {
+          const isRoot =
+            adm.id === ROOT_SUPER_ADMIN_ID ||
+            (normalizeUsername(adm.username) === "admin" && adm.role === "super_admin");
+          if (isRoot) {
+            if (!hasRoot) {
+              cleaned.push(adm);
+              hasRoot = true;
+            }
+          } else {
+            cleaned.push(adm);
+          }
+        }
+
+        localStorage.setItem(STORAGE_KEYS.ADMINS_LIST, JSON.stringify(cleaned));
+        return cleaned;
+      }
+    }
   } catch {}
-  localStorage.setItem(STORAGE_KEYS.ADMIN, JSON.stringify(DEFAULT_ADMIN));
-  return DEFAULT_ADMIN;
+
+  // Fallback: Check legacy v2 admin key to preserve already changed passwords
+  let initialRoot = { ...DEFAULT_ROOT_ADMIN };
+  try {
+    const legacyRaw = localStorage.getItem(STORAGE_KEYS.ADMIN);
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw);
+      if (
+        legacy &&
+        legacy.passwordHash &&
+        legacy.passwordHash !== hashPassword("Admin@123") &&
+        legacy.passwordHash !== DEFAULT_ROOT_ADMIN_PASSWORD_HASH
+      ) {
+        // Legacy admin already changed password! Keep their new password.
+        initialRoot = {
+          ...DEFAULT_ROOT_ADMIN,
+          name: legacy.name || DEFAULT_ROOT_ADMIN.name,
+          passwordHash: legacy.passwordHash,
+          mustChangePassword: false,
+        };
+      }
+    }
+  } catch {}
+
+  const initial = [initialRoot];
+  localStorage.setItem(STORAGE_KEYS.ADMINS_LIST, JSON.stringify(initial));
+  localStorage.setItem(STORAGE_KEYS.ADMIN, JSON.stringify(initialRoot));
+  return initial;
+}
+
+export function saveAllAdmins(admins: AdminUser[]) {
+  // Ensure the root super admin is never deleted or demoted
+  const rootIdx = admins.findIndex(
+    (a) => a.id === ROOT_SUPER_ADMIN_ID || a.role === "super_admin"
+  );
+  if (rootIdx === -1) {
+    admins.unshift({ ...DEFAULT_ROOT_ADMIN });
+  } else {
+    admins[rootIdx].role = "super_admin";
+    admins[rootIdx].status = "active";
+    admins[rootIdx].id = ROOT_SUPER_ADMIN_ID;
+  }
+  localStorage.setItem(STORAGE_KEYS.ADMINS_LIST, JSON.stringify(admins));
+
+  const root = admins.find((a) => a.id === ROOT_SUPER_ADMIN_ID) || admins[0];
+  if (root) {
+    localStorage.setItem(STORAGE_KEYS.ADMIN, JSON.stringify(root));
+  }
+  window.dispatchEvent(new Event("admin_registry_changed"));
+}
+
+export function getRootAdmin(): AdminUser {
+  const admins = getAllAdmins();
+  return (
+    admins.find((a) => a.id === ROOT_SUPER_ADMIN_ID || a.role === "super_admin") ||
+    admins[0] ||
+    DEFAULT_ROOT_ADMIN
+  );
+}
+
+// Backward-compatible alias
+export function getAdminAccount(): AdminUser {
+  return getRootAdmin();
 }
 
 export function saveAdminAccount(adm: AdminUser) {
-  localStorage.setItem(STORAGE_KEYS.ADMIN, JSON.stringify(adm));
+  const admins = getAllAdmins();
+  const idx = admins.findIndex((a) => a.id === adm.id);
+  if (idx >= 0) {
+    admins[idx] = {
+      ...admins[idx],
+      ...adm,
+      updatedAt: new Date().toISOString(),
+    };
+  } else {
+    admins.push(adm);
+  }
+  saveAllAdmins(admins);
 }
 
+export function getAdminById(id: string): AdminUser | null {
+  const admins = getAllAdmins();
+  return admins.find((a) => a.id === id) || null;
+}
+
+export function getAdminByUsernameOrEmail(identifier: string): AdminUser | null {
+  const norm = normalizeUsername(identifier);
+  if (!norm) return null;
+  const admins = getAllAdmins();
+  return (
+    admins.find(
+      (a) => normalizeUsername(a.username) === norm || normalizeUsername(a.email) === norm
+    ) || null
+  );
+}
+
+export function upsertAdmin(adm: AdminUser): { ok: boolean; message?: string } {
+  const normUname = normalizeUsername(adm.username);
+  const normEmail = normalizeUsername(adm.email);
+
+  if (!normUname || !normEmail) {
+    return { ok: false, message: "Vui lòng nhập đầy đủ tên đăng nhập và email" };
+  }
+
+  // Prevent conflict with teachers
+  const existingTeacher = getTeacherByUsernameOrEmail(normUname) || getTeacherByUsernameOrEmail(normEmail);
+  if (existingTeacher) {
+    return { ok: false, message: "Tên đăng nhập hoặc Email đã thuộc về một tài khoản Giáo viên!" };
+  }
+
+  const admins = getAllAdmins();
+  const existingIdx = admins.findIndex((a) => a.id === adm.id);
+
+  // Check duplicate username or email with other admins
+  const dup = admins.find(
+    (a) =>
+      a.id !== adm.id &&
+      (normalizeUsername(a.username) === normUname || normalizeUsername(a.email) === normEmail)
+  );
+  if (dup) {
+    return { ok: false, message: "Tên đăng nhập hoặc Email này đã tồn tại trong danh sách Quản trị viên!" };
+  }
+
+  if (existingIdx >= 0) {
+    // Cannot demote root super admin
+    if (admins[existingIdx].id === ROOT_SUPER_ADMIN_ID && adm.role !== "super_admin") {
+      return { ok: false, message: "Không thể hạ quyền của tài khoản Super Admin gốc!" };
+    }
+    admins[existingIdx] = {
+      ...admins[existingIdx],
+      ...adm,
+      updatedAt: new Date().toISOString(),
+    };
+  } else {
+    // Only standard 'admin' role can be created. Never create secondary super_admin!
+    if (adm.role === "super_admin") {
+      return { ok: false, message: "Hệ thống chỉ có duy nhất 01 tài khoản Super Admin gốc!" };
+    }
+    admins.push({
+      ...adm,
+      role: "admin",
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  saveAllAdmins(admins);
+  return { ok: true };
+}
+
+export function deleteAdmin(id: string): { ok: boolean; message?: string } {
+  if (id === ROOT_SUPER_ADMIN_ID) {
+    return { ok: false, message: "Tuyệt đối không thể xóa tài khoản Super Admin gốc của hệ thống!" };
+  }
+  const admins = getAllAdmins();
+  const target = admins.find((a) => a.id === id);
+  if (!target) {
+    return { ok: false, message: "Không tìm thấy tài khoản quản trị viên để xóa!" };
+  }
+  if (target.role === "super_admin") {
+    return { ok: false, message: "Không thể xóa tài khoản Super Admin!" };
+  }
+
+  const next = admins.filter((a) => a.id !== id);
+  saveAllAdmins(next);
+  return { ok: true };
+}
+
+/** Update an admin's password and reset mustChangePassword flag */
+export function changeAdminPassword(
+  adminId: string,
+  newPasswordPlain: string
+): { ok: boolean; message?: string } {
+  const admins = getAllAdmins();
+  const idx = admins.findIndex((a) => a.id === adminId);
+  if (idx < 0) {
+    return { ok: false, message: "Không tìm thấy thông tin Quản trị viên!" };
+  }
+
+  admins[idx] = {
+    ...admins[idx],
+    passwordHash: hashPassword(newPasswordPlain),
+    mustChangePassword: false,
+    updatedAt: new Date().toISOString(),
+  };
+
+  saveAllAdmins(admins);
+
+  // Sync current auth session user if this admin is currently logged in
+  const authUser = getCurrentAuthUser();
+  if (authUser && authUser.id === adminId) {
+    setCurrentAuthUser({
+      ...authUser,
+      mustChangePassword: false,
+    });
+  }
+
+  return { ok: true };
+}
+
+/** Teachers Registry & Management */
 export function getAllTeachers(): TeacherUser[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.TEACHERS);
@@ -118,6 +379,7 @@ export function getTeacherById(id: string): TeacherUser | null {
 
 export function getTeacherByUsernameOrEmail(identifier: string): TeacherUser | null {
   const norm = normalizeUsername(identifier);
+  if (!norm) return null;
   const teachers = getAllTeachers();
   return teachers.find((t) => normalizeUsername(t.username) === norm || normalizeUsername(t.email) === norm) || null;
 }
@@ -138,13 +400,14 @@ export function deleteTeacher(id: string) {
   saveAllTeachers(teachers);
 }
 
-// Current authenticated user session (Teacher or Admin)
+// Current authenticated user session (Super Admin, Admin, or Teacher)
 export interface AuthSessionUser {
   id: string;
   username: string;
   name: string;
   email: string;
-  role: "admin" | "teacher";
+  role: "super_admin" | "admin" | "teacher";
+  mustChangePassword?: boolean;
   phone?: string;
   school?: string;
   subject?: string;

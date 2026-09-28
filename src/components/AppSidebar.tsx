@@ -21,11 +21,11 @@ const items = [
 export default function AppSidebar() {
   const { state } = useSidebar();
   const { pathname } = useLocation();
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, isSuperAdmin } = useAuth();
   const collapsed = state === "collapsed";
 
   const allMenuItems = isAdmin
-    ? [{ title: "Quản trị Admin", url: "/admin", icon: ShieldCheck }, ...items]
+    ? [{ title: isSuperAdmin ? "Quản trị Super Admin" : "Quản trị Admin", url: "/admin", icon: ShieldCheck }, ...items]
     : items;
 
   return (

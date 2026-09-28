@@ -1,10 +1,10 @@
 import { useEffect, useState, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useStudentAuth } from "@/hooks/useStudentAuth";
 import {
   StudentSubmissionRecord,
@@ -12,6 +12,8 @@ import {
   getPublishedExamAnswerKey,
   isExamOfficiallyClosed,
 } from "@/lib/studentStorage";
+import { findAssignmentOrExamByCode, ExamAssignment } from "@/lib/examAssignments";
+import QRScannerModal from "@/components/QRScannerModal";
 import { supabase } from "@/integrations/supabase/client";
 import { getTFValue } from "@/lib/grading";
 import { stripRich } from "@/lib/docxParser";
@@ -34,6 +36,12 @@ import {
   Check,
   X,
   AlertCircle,
+  QrCode,
+  Sparkles,
+  Camera,
+  Loader2,
+  AlertTriangle,
+  UserCheck,
 } from "lucide-react";
 
 export default function StudentDashboard() {
@@ -44,6 +52,14 @@ export default function StudentDashboard() {
   const [search, setSearch] = useState("");
   const [filterClosed, setFilterClosed] = useState<"all" | "closed" | "open">("all");
   const [examInput, setExamInput] = useState("");
+  const [checkingCode, setCheckingCode] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [confirmExamModal, setConfirmExamModal] = useState<{
+    open: boolean;
+    exam: any;
+    assignment?: ExamAssignment;
+    code: string;
+  } | null>(null);
 
   // Review modal state
   const [selectedSub, setSelectedSub] = useState<StudentSubmissionRecord | null>(null);
@@ -53,7 +69,8 @@ export default function StudentDashboard() {
   // Redirect to login if not logged in
   useEffect(() => {
     if (!student) {
-      navigate("/student/auth", { replace: true, state: { from: "/student" } });
+      const fullPath = window.location.pathname + window.location.search;
+      navigate("/student/auth", { replace: true, state: { from: fullPath } });
     }
   }, [student, navigate]);
 
@@ -76,16 +93,58 @@ export default function StudentDashboard() {
     };
   }, [student]);
 
-  // Open exam by code or full URL
+  // Check URL params for ?join=CODE or ?code=CODE
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinCode = params.get("join") || params.get("code");
+    if (joinCode) {
+      setExamInput(joinCode.toUpperCase());
+      handleProcessCode(joinCode);
+    }
+    // eslint-disable-next-line
+  }, []);
+
+  // Process exam code or QR content
+  const handleProcessCode = async (rawCode: string) => {
+    const val = (rawCode || "").trim();
+    if (!val) {
+      toast.error("Vui lòng nhập mã bài thi hoặc quét mã QR");
+      return;
+    }
+    setCheckingCode(true);
+    try {
+      const res = await findAssignmentOrExamByCode(val);
+      if (!res.success || !res.exam) {
+        toast.error(res.error || "Mã bài thi không tồn tại hoặc đã hết hạn.");
+        return;
+      }
+      setConfirmExamModal({
+        open: true,
+        exam: res.exam,
+        assignment: res.assignment,
+        code: val.toUpperCase(),
+      });
+    } catch (e: any) {
+      toast.error("Lỗi kiểm tra mã bài thi: " + e.message);
+    } finally {
+      setCheckingCode(false);
+    }
+  };
+
   const handleOpenExam = (e: React.FormEvent) => {
     e.preventDefault();
-    const val = examInput.trim();
-    if (!val) return;
-    let examId = val;
-    // Extract ID if a full URL was pasted
-    const match = val.match(/\/take\/([a-zA-Z0-9-]+)/);
-    if (match) examId = match[1];
-    navigate(`/take/${examId}`);
+    handleProcessCode(examInput);
+  };
+
+  const startExamConfirmed = () => {
+    if (!confirmExamModal?.exam) return;
+    const { exam, code, assignment } = confirmExamModal;
+    setConfirmExamModal(null);
+    let targetUrl = `/take/${exam.id}?code=${encodeURIComponent(code)}`;
+    if (assignment?.className) {
+      targetUrl += `&targetClass=${encodeURIComponent(assignment.className)}`;
+    }
+    navigate(targetUrl);
   };
 
   // Inspect submission & determine if exam is closed
@@ -279,22 +338,67 @@ export default function StudentDashboard() {
           </Card>
         </div>
 
-        {/* QUICK EXAM ENTRY */}
-        <Card className="p-4 sm:p-5 rounded-2xl shadow-soft border-border/70">
-          <form onSubmit={handleOpenExam} className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
-            <div className="flex items-center gap-2 flex-1">
-              <Play className="size-4 text-primary shrink-0" />
+        {/* THAM GIA BÀI THI: NHẬP MÃ BÀI THI & QUÉT MÃ QR */}
+        <Card className="p-5 sm:p-7 rounded-3xl shadow-xl border-2 border-primary/40 bg-card relative overflow-hidden">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-primary">
+                <Sparkles className="size-4" />
+                <span>THAM GIA BÀI THI</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-foreground mt-0.5">
+                Nhập mã bài thi hoặc Quét mã QR
+              </h2>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Bạn có thể nhập mã bài thi do giáo viên cung cấp hoặc quét mã QR để tham gia.
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleOpenExam} className="flex flex-col sm:flex-row gap-3 items-stretch">
+            <div className="relative flex-1">
               <Input
-                placeholder="Dán link bài thi hoặc mã đề thi giáo viên gửi..."
+                placeholder="Nhập mã bài thi (ví dụ: TIN12-7A3K9, A1K8P2)..."
                 value={examInput}
-                onChange={(e) => setExamInput(e.target.value)}
-                className="rounded-xl flex-1"
+                onChange={(e) => setExamInput(e.target.value.toUpperCase())}
+                className="h-13 rounded-2xl text-base font-bold font-mono tracking-wider pl-4 border-2 uppercase bg-background"
+                disabled={checkingCode}
               />
             </div>
-            <Button type="submit" className="rounded-xl bg-gradient-primary shrink-0">
-              Vào làm bài ngay
+
+            <Button
+              type="submit"
+              disabled={checkingCode || !examInput.trim()}
+              className="h-13 px-6 rounded-2xl font-black text-sm bg-gradient-to-r from-primary to-sky-600 text-white shadow-md gap-2 shrink-0 hover:scale-[1.01] active:scale-[0.99] transition-all"
+            >
+              {checkingCode ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" /> Đang kiểm tra...
+                </>
+              ) : (
+                <>
+                  <Play className="size-4" /> Vào bài thi
+                </>
+              )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setQrModalOpen(true)}
+              className="h-13 px-5 rounded-2xl font-black text-sm border-2 border-primary/40 text-primary hover:bg-primary/10 gap-2 shrink-0 transition-all"
+            >
+              <Camera className="size-4.5" />
+              <span>Quét mã QR</span>
             </Button>
           </form>
+
+          <div className="mt-3 text-[11px] text-muted-foreground flex items-center gap-1.5">
+            <UserCheck className="size-3.5 text-primary" />
+            <span>
+              Hệ thống sẽ tự động liên kết bài làm với tài khoản: <b>{student.fullName} (Lớp {student.className})</b>
+            </span>
+          </div>
         </Card>
 
         {/* SUBMISSION HISTORY */}
@@ -513,6 +617,132 @@ export default function StudentDashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* QR SCANNER MODAL */}
+      <QRScannerModal
+        open={qrModalOpen}
+        onOpenChange={setQrModalOpen}
+        onScanSuccess={(scannedText) => {
+          setExamInput(scannedText);
+          handleProcessCode(scannedText);
+        }}
+      />
+
+      {/* CONFIRMATION DIALOG FOR ENTERING EXAM */}
+      {confirmExamModal && (
+        <Dialog
+          open={confirmExamModal.open}
+          onOpenChange={(o) => {
+            if (!o) setConfirmExamModal(null);
+          }}
+        >
+          <DialogContent className="max-w-lg rounded-3xl p-6 sm:p-8 border-2 shadow-2xl">
+            <DialogHeader>
+              <div className="flex items-center gap-2 text-primary font-black text-xs uppercase tracking-wider mb-1">
+                <Sparkles className="size-4" />
+                <span>XÁC NHẬN THAM GIA BÀI THI</span>
+              </div>
+              <DialogTitle className="text-xl sm:text-2xl font-black text-foreground">
+                {confirmExamModal.exam.title}
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                Kiểm tra thông tin bài thi trước khi bắt đầu làm bài.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 my-2">
+              <div className="rounded-2xl bg-muted/60 p-4 border space-y-2.5 text-xs sm:text-sm">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Mã bài thi:</span>
+                  <span className="font-mono font-black text-base text-primary">
+                    {confirmExamModal.code}
+                  </span>
+                </div>
+                {confirmExamModal.assignment?.className && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Đối tượng:</span>
+                    <span className="font-bold text-foreground">
+                      Lớp {confirmExamModal.assignment.className}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Giáo viên ra đề:</span>
+                  <span className="font-semibold text-foreground">
+                    {confirmExamModal.exam.teacher_name || "Giáo viên"}
+                    {confirmExamModal.exam.school_name ? ` (${confirmExamModal.exam.school_name})` : ""}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Thời gian làm bài:</span>
+                  <span className="font-bold text-foreground">
+                    {confirmExamModal.exam.duration_minutes} phút
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Số câu hỏi:</span>
+                  <span className="font-bold text-foreground">
+                    {(confirmExamModal.exam.questions?.partI?.length || 0) +
+                      (confirmExamModal.exam.questions?.partII?.length || 0) +
+                      (confirmExamModal.exam.questions?.partIII?.length || 0)}{" "}
+                    câu
+                  </span>
+                </div>
+              </div>
+
+              {/* Status Warning if closed or not open */}
+              {confirmExamModal.exam.manual_closed === true || confirmExamModal.exam.status === "closed" ? (
+                <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2">
+                  <AlertTriangle className="size-4 shrink-0 text-rose-500" />
+                  <span>Đề thi này hiện đã đóng nhận bài làm.</span>
+                </div>
+              ) : confirmExamModal.exam.status === "not_open" ? (
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
+                  <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                  <span>Đề thi chưa đến giờ mở làm bài. Vui lòng quay lại sau.</span>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                  <span>Bài thi đang mở. Bạn đã sẵn sàng làm bài!</span>
+                </div>
+              )}
+
+              {/* Account Confirmation */}
+              <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3.5 text-xs text-foreground flex items-center gap-2.5">
+                <UserCheck className="size-4 text-primary shrink-0" />
+                <div>
+                  <div className="font-bold text-primary">Tài khoản dự thi của bạn:</div>
+                  <div className="font-medium text-foreground">
+                    {student.fullName} • Lớp: {student.className} • TK: {student.account}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4 flex-col sm:flex-row gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmExamModal(null)}
+                className="rounded-xl font-bold"
+              >
+                Hủy bỏ
+              </Button>
+              <Button
+                onClick={startExamConfirmed}
+                disabled={
+                  confirmExamModal.exam.manual_closed === true ||
+                  confirmExamModal.exam.status === "closed" ||
+                  confirmExamModal.exam.status === "not_open"
+                }
+                className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white shadow-md gap-1.5"
+              >
+                <Play className="size-4" /> Bắt đầu làm bài
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

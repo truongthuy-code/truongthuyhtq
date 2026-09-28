@@ -17,7 +17,9 @@ import {
   hashPassword,
   getTeacherById,
   upsertTeacher,
-  getAdminAccount,
+  getAdminById,
+  getRootAdmin,
+  changeAdminPassword,
   saveAdminAccount,
   getCurrentAuthUser,
 } from "@/lib/teacherStorage";
@@ -70,14 +72,18 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
       // Case 1: Custom local teacher/admin account
       if (authUser) {
         if (isAdmin) {
-          const adm = getAdminAccount();
+          const adm = getAdminById(authUser.id) || getRootAdmin();
           if (adm.passwordHash !== hashPassword(currentPassword)) {
             toast.error("Mật khẩu hiện tại không đúng");
             setBusy(false);
             return;
           }
-          adm.passwordHash = hashPassword(newPassword);
-          saveAdminAccount(adm);
+          const res = changeAdminPassword(adm.id, newPassword);
+          if (!res.ok) {
+            toast.error(res.message || "Không thể đổi mật khẩu");
+            setBusy(false);
+            return;
+          }
           toast.success("Đổi mật khẩu Quản trị viên thành công!");
           resetForm();
           onOpenChange(false);

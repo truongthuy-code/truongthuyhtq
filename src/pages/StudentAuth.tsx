@@ -27,7 +27,9 @@ export default function StudentAuth() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [busy, setBusy] = useState(false);
-  const redirectTo = location.state?.from || "/student";
+  const searchParams = new URLSearchParams(location.search);
+  const redirectParam = searchParams.get("redirect") || searchParams.get("from");
+  const redirectTo = redirectParam || location.state?.from || "/student";
 
   // If already logged in, show quick switch / continue
   if (student) {

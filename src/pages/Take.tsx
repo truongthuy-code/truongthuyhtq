@@ -658,65 +658,87 @@ export default function Take() {
             </div>
           )}
 
-          {/* Form nhập thông tin thí sinh */}
-          <div className="mt-6 space-y-3.5">
-            <div>
-              <Label className="font-bold text-sm text-foreground">Họ và tên học sinh *</Label>
-              <Input
-                placeholder="Nhập đầy đủ họ và tên..."
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="mt-1.5 h-12 rounded-xl text-base font-medium px-4 border-2"
-                autoFocus
-              />
-            </div>
-            <div>
-              <Label className="font-bold text-sm text-foreground">Lớp học *</Label>
-              <Input
-                placeholder="Ví dụ: 12A1, 11B2..."
-                value={klass}
-                onChange={(e) => setKlass(e.target.value)}
-                className="mt-1.5 h-12 rounded-xl text-base font-medium px-4 border-2"
-              />
-            </div>
-            <div>
-              <Label className="font-bold text-sm text-foreground">Tài khoản hoặc Email (tùy chọn)</Label>
-              <Input
-                placeholder="Nhập email hoặc mã học sinh nếu có..."
-                value={account}
-                onChange={(e) => setAccount(e.target.value)}
-                className="mt-1.5 h-12 rounded-xl text-base font-medium px-4 border-2"
-              />
-            </div>
-          </div>
-
+          {/* Thông tin thí sinh & Tài khoản */}
           {student ? (
-            <div className="mt-4 rounded-2xl border border-primary/30 bg-primary/5 p-3.5 text-xs sm:text-sm flex items-center justify-between">
-              <div>
-                <span className="font-bold text-primary">Tài khoản đăng nhập:</span> {student.fullName} ({student.className})
-                <div className="text-muted-foreground text-xs">{student.account}</div>
+            <div className="mt-6 rounded-2xl border-2 border-emerald-500/40 bg-emerald-500/10 p-4 text-xs sm:text-sm space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-black text-emerald-800 dark:text-emerald-300">
+                  <UserCheck className="size-5 text-emerald-600" />
+                  <span>Tài khoản thí sinh đã xác thực</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground hover:text-foreground font-semibold"
+                  onClick={() => {
+                    studentLogout();
+                    setName("");
+                    setKlass("");
+                    setAccount("");
+                  }}
+                >
+                  Đổi tài khoản
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-xs h-8 text-muted-foreground hover:text-foreground font-semibold"
-                onClick={() => {
-                  studentLogout();
-                  setName("");
-                  setKlass("");
-                  setAccount("");
-                }}
-              >
-                Đổi tài khoản
-              </Button>
+              <div className="text-foreground font-extrabold text-lg">
+                {student.fullName} • Lớp: {student.className}
+              </div>
+              <div className="text-muted-foreground text-xs font-mono">
+                Tài khoản: {student.account}
+              </div>
+              <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
+                <span>Toàn bộ kết quả thi, điểm số và bài làm sẽ được lưu chính xác vào tài khoản này.</span>
+              </div>
             </div>
           ) : (
-            <div className="mt-4 text-xs text-muted-foreground text-center">
-              Đã có tài khoản học sinh?{" "}
-              <Link to="/student/auth" state={{ from: `/take/${id}` }} className="text-primary font-bold hover:underline">
-                Đăng nhập để đồng bộ kết quả
-              </Link>
+            <div className="mt-6 space-y-4">
+              <div className="rounded-2xl border-2 border-amber-500/40 bg-amber-500/10 p-4 text-xs sm:text-sm space-y-2.5">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="size-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-amber-900 dark:text-amber-200">
+                      Bạn chưa đăng nhập tài khoản học sinh
+                    </div>
+                    <div className="text-amber-800 dark:text-amber-300 text-xs mt-0.5">
+                      Để kết quả thi được lưu tự động vào học bạ cá nhân và xem lại lời giải sau khi nộp, bạn nên đăng nhập trước khi làm bài.
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  asChild
+                  size="sm"
+                  className="w-full rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs"
+                >
+                  <Link to="/student/auth" state={{ from: window.location.pathname + window.location.search }}>
+                    Đăng nhập tài khoản học sinh ngay
+                  </Link>
+                </Button>
+              </div>
+
+              {/* Form nhập thông tin thủ công nếu chưa đăng nhập */}
+              <div className="space-y-3 pt-1">
+                <div>
+                  <Label className="font-bold text-sm text-foreground">Họ và tên học sinh *</Label>
+                  <Input
+                    placeholder="Nhập đầy đủ họ và tên..."
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="mt-1.5 h-12 rounded-xl text-base font-medium px-4 border-2"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <Label className="font-bold text-sm text-foreground">Lớp học *</Label>
+                  <Input
+                    placeholder="Ví dụ: 12A1, 11B2..."
+                    value={klass}
+                    onChange={(e) => setKlass(e.target.value)}
+                    className="mt-1.5 h-12 rounded-xl text-base font-medium px-4 border-2"
+                  />
+                </div>
+              </div>
             </div>
           )}
 

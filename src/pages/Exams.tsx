@@ -14,13 +14,14 @@ import {
 } from "@/components/ui/dialog";
 import {
   FileText, Plus, Search, Copy, Share2, Trash2, Settings, FileDown, BarChart3,
-  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock, Trophy, Music,
+  Play, RotateCcw, CopyPlus, Activity, Lock, Unlock, Trophy, Music, QrCode,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
 import { useAuth } from "@/hooks/useAuth";
+import QuickExamShareModal from "@/components/QuickExamShareModal";
 
 const PAGE_SIZE = 10;
 
@@ -34,6 +35,7 @@ export default function Exams() {
   const [page, setPage] = useState(1);
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<any | null>(null);
+  const [shareModalExam, setShareModalExam] = useState<any | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -312,6 +314,16 @@ export default function Exams() {
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
+                  {/* NÚT TẠO LINK LÀM BÀI & MÃ QR NỔI BẬT */}
+                  <Button
+                    size="sm"
+                    className="rounded-xl col-span-2 bg-gradient-to-r from-primary to-sky-600 hover:from-primary/90 hover:to-sky-600/90 text-white font-black shadow-md py-2.5 h-10 text-xs flex items-center justify-center gap-1.5 active:scale-[0.99] transition-all"
+                    onClick={() => setShareModalExam(e)}
+                  >
+                    <QrCode className="size-4" />
+                    <span>TẠO LINK LÀM BÀI & MÃ QR</span>
+                  </Button>
+
                   {e.display_mode === "team" && (
                     <Button
                       size="sm"
@@ -424,6 +436,15 @@ export default function Exams() {
           />
         </div>
       )}
+
+      {/* MODAL TẠO LINK LÀM BÀI, MÃ BÀI THI & QR TRỰC TIẾP */}
+      <QuickExamShareModal
+        open={!!shareModalExam}
+        onOpenChange={(op) => {
+          if (!op) setShareModalExam(null);
+        }}
+        exam={shareModalExam}
+      />
     </div>
   );
 }
