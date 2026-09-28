@@ -22,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
+import { isUuid } from "@/lib/teacherStorage";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
@@ -39,7 +40,9 @@ export default function Reports() {
     setLoading(true);
     let exQ = supabase.from("exams").select("id,title,max_attempts,scoring,created_by").order("created_at", { ascending: false });
     if (!isAdmin && user) {
-      exQ = exQ.eq("created_by", user.id);
+      if (isUuid(user.id)) {
+        exQ = exQ.eq("created_by", user.id);
+      }
     }
     const { data: ex } = await exQ;
     const loadedExams = ex || [];

@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { BookOpen, FileText, School, GraduationCap, Activity, Star } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { isUuid } from "@/lib/teacherStorage";
 
 export default function Subjects() {
   const { isAdmin, user } = useAuth();
@@ -13,7 +14,9 @@ export default function Subjects() {
   useEffect(() => {
     (async () => {
       let q = supabase.from("exams").select("id,subject_name,school_name,teacher_name,created_by");
-      if (!isAdmin && user) q = q.eq("created_by", user.id);
+      if (!isAdmin && user) {
+        if (isUuid(user.id)) q = q.eq("created_by", user.id);
+      }
       const [{ data: ex }, { data: s }] = await Promise.all([
         q,
         supabase.from("submissions").select("exam_id,score,student_name,student_class"),

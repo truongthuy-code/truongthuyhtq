@@ -15,6 +15,7 @@ import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import { isUuid } from "@/lib/teacherStorage";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -37,7 +38,9 @@ export default function Index() {
 
       // Teacher data isolation: If not admin and user exists, isolate exams to teacher
       if (!isAdmin && user) {
-        q = q.eq("created_by", user.id);
+        if (isUuid(user.id)) {
+          q = q.eq("created_by", user.id);
+        }
       }
 
       const { data: ex } = await q;

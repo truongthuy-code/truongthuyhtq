@@ -23,6 +23,7 @@ import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import { isUuid } from "@/lib/teacherStorage";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -186,11 +187,19 @@ export default function Teacher() {
     const currentUser = user;
     if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
     setSaving(true);
+
+    // Get current Supabase auth user to ensure valid UUID matching auth.uid()
+    const { data: u } = await supabase.auth.getUser();
+    const targetCreatedBy = (u?.user?.id && isUuid(u.user.id))
+      ? u.user.id
+      : (isUuid(currentUser?.id) ? currentUser.id : null);
+
     let original_file_url: string | null = null;
     let original_file_name: string | null = null;
     let original_file_path: string | null = null;
     if (originalFile) {
-      const path = `${currentUser.id}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
+      const folder = (targetCreatedBy || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
+      const path = `${folder}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
       const up = await supabase.storage.from("exam-files").upload(path, originalFile, {
         contentType: originalFile.type || "application/octet-stream",
         upsert: false,
@@ -225,7 +234,7 @@ export default function Teacher() {
         original_file_url,
         original_file_name,
         original_file_path,
-        created_by: currentUser.id,
+        created_by: targetCreatedBy,
         teacher_name: profile?.full_name || "Giáo viên",
         school_name: profile?.school_name || "",
         subject_name: profile?.subject_name || "",

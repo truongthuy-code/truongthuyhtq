@@ -14,6 +14,7 @@ import { generateVariants, estimateMaxVariants } from "@/lib/shuffleEngine";
 import { generateExamCodes } from "@/lib/examCodeGenerator";
 import { exportExams, exportAnswerKey, exportExamsAndKey, type ExamMeta, type ExportOptions } from "@/lib/examExporter";
 import { useAuth } from "@/hooks/useAuth";
+import { isUuid } from "@/lib/teacherStorage";
 
 export default function Shuffle() {
   const { user, isAdmin } = useAuth();
@@ -60,7 +61,9 @@ export default function Shuffle() {
     (async () => {
       let q = supabase.from("exams").select("id,title,questions,subject_name,duration_minutes,created_by").order("created_at", { ascending: false });
       if (!isAdmin && user) {
-        q = q.eq("created_by", user.id);
+        if (isUuid(user.id)) {
+          q = q.eq("created_by", user.id);
+        }
       }
       const { data } = await q;
       setExams(data || []);

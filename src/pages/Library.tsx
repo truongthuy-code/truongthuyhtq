@@ -8,6 +8,7 @@ import { ChevronRight, ChevronDown, BookOpen, School, GraduationCap, FileText, S
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { isUuid } from "@/lib/teacherStorage";
 
 type Exam = {
   id: string; title: string; created_at: string; duration_minutes: number;
@@ -29,7 +30,9 @@ export default function Library() {
       let q = supabase.from("exams")
         .select("id,title,created_at,duration_minutes,subject_name,school_name,teacher_name,created_by,original_file_path,original_file_url")
         .order("created_at", { ascending: false });
-      if (!isAdmin && user) q = q.eq("created_by", user.id);
+      if (!isAdmin && user) {
+        if (isUuid(user.id)) q = q.eq("created_by", user.id);
+      }
       const { data } = await q;
       setExams((data as any) || []);
       const { data: subs } = await supabase.from("submissions").select("exam_id");

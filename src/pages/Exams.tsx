@@ -23,6 +23,7 @@ import TeamLeaderboard from "./TeamLeaderboard";
 import { useAuth } from "@/hooks/useAuth";
 import QuickExamShareModal from "@/components/QuickExamShareModal";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import { isUuid } from "@/lib/teacherStorage";
 
 const PAGE_SIZE = 10;
 
@@ -45,7 +46,9 @@ export default function Exams() {
       .order("created_at", { ascending: false });
 
     if (!isAdmin && user) {
-      q = q.eq("created_by", user.id);
+      if (isUuid(user.id)) {
+        q = q.eq("created_by", user.id);
+      }
     }
 
     const { data: ex } = await q;
@@ -160,11 +163,14 @@ export default function Exams() {
     }
 
     const { data: u } = await supabase.auth.getUser();
+    const createdByUuid = (u.user?.id && isUuid(u.user.id))
+      ? u.user.id
+      : (isUuid(user?.id) ? user.id : null);
     const { error } = await supabase.from("exams").insert({
       ...rest,
       team_config: finalTeamConfig,
       title: `${exam.title} (Bản sao)`,
-      created_by: u.user?.id,
+      created_by: createdByUuid,
     } as any);
     if (error) return toast.error(error.message);
     toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");

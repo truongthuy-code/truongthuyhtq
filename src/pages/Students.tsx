@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
+import { isUuid } from "@/lib/teacherStorage";
 
 type Student = {
   id: string;
@@ -59,13 +60,15 @@ export default function Students() {
       let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,submitted_at");
 
       if (!isAdmin && user) {
-        const { data: myExams } = await supabase.from("exams").select("id").eq("created_by", user.id);
-        const myExamIds = (myExams || []).map((e) => e.id);
-        if (myExamIds.length > 0) {
-          subQ = subQ.in("exam_id", myExamIds);
-        } else {
-          setFromSubs([]);
-          return;
+        if (isUuid(user.id)) {
+          const { data: myExams } = await supabase.from("exams").select("id").eq("created_by", user.id);
+          const myExamIds = (myExams || []).map((e) => e.id);
+          if (myExamIds.length > 0) {
+            subQ = subQ.in("exam_id", myExamIds);
+          } else {
+            setFromSubs([]);
+            return;
+          }
         }
       }
 

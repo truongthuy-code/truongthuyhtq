@@ -32,6 +32,8 @@ import {
   upsertTeacher,
   TeacherUser,
   getAllTeachers,
+  isUuid,
+  generateUuid,
 } from "@/lib/teacherStorage";
 
 export default function AuthPage() {
@@ -161,6 +163,31 @@ export default function AuthPage() {
 
           // Check password
           if (teacher.passwordHash === inputHash) {
+            // Ensure Supabase Auth session exists for RLS policies
+            const effectiveEmail = teacher.email?.trim() || `${teacher.username.toLowerCase()}@school.edu.vn`;
+            try {
+              let { data: signData } = await supabase.auth.signInWithPassword({
+                email: effectiveEmail,
+                password,
+              });
+              if (!signData?.user) {
+                const { data: suData } = await supabase.auth.signUp({
+                  email: effectiveEmail,
+                  password,
+                  options: {
+                    data: { full_name: teacher.name, subject_name: teacher.subject },
+                  },
+                });
+                signData = suData;
+              }
+              if (signData?.user?.id && (!teacher.id || !isUuid(teacher.id))) {
+                teacher.id = signData.user.id;
+                upsertTeacher(teacher);
+              }
+            } catch (err) {
+              console.warn("Supabase auth sync warning on login:", err);
+            }
+
             setCurrentAuthUser({
               id: teacher.id,
               username: teacher.username,
@@ -245,11 +272,32 @@ export default function AuthPage() {
 
     setBusy(true);
 
+    const effectiveEmail = normEmail || `${normUsername}@school.edu.vn`;
+    let sbUserId: string | null = null;
+
+    // Attempt Supabase signup for backend sync so RLS policies and table constraints succeed
+    try {
+      const { data: sbData } = await supabase.auth.signUp({
+        email: effectiveEmail,
+        password: signupPassword,
+        options: {
+          data: { full_name: fullName.trim(), subject_name: subjectName },
+        },
+      });
+      if (sbData?.user?.id && isUuid(sbData.user.id)) {
+        sbUserId = sbData.user.id;
+      }
+    } catch (sbErr) {
+      console.warn("Supabase signup warning:", sbErr);
+    }
+
+    const teacherId = sbUserId || generateUuid();
+
     const newTeacher: TeacherUser = {
-      id: `teacher-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: teacherId,
       username: normUsername,
       name: fullName.trim(),
-      email: signupEmail.trim(),
+      email: signupEmail.trim() || effectiveEmail,
       phone: signupPhone.trim(),
       school: signupSchool.trim() || "Trường THPT",
       subject: subjectName,
@@ -259,19 +307,6 @@ export default function AuthPage() {
     };
 
     upsertTeacher(newTeacher);
-
-    // Also attempt Supabase signup for backend sync if email is provided
-    try {
-      if (signupEmail) {
-        await supabase.auth.signUp({
-          email: signupEmail,
-          password: signupPassword,
-          options: {
-            data: { full_name: fullName.trim(), subject_name: subjectName },
-          },
-        });
-      }
-    } catch {}
 
     // Auto login
     setCurrentAuthUser({

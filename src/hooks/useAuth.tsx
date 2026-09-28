@@ -9,6 +9,7 @@ import {
   upsertTeacher,
   AuthSessionUser,
   TeacherUser,
+  isUuid,
 } from "@/lib/teacherStorage";
 
 export type Role = "super_admin" | "admin" | "teacher";
@@ -70,14 +71,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Sync profile & user from either custom storage or Supabase Auth
   const syncState = useCallback(async () => {
+    let sbSession: Session | null = null;
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      sbSession = s;
+      setSession(s);
+    } catch {}
+
     const customUser = getCurrentAuthUser();
     if (customUser) {
       const isSuper = customUser.role === "super_admin";
       const isAdm = isSuper || customUser.role === "admin";
       const roleVal: Role = isSuper ? "super_admin" : (isAdm ? "admin" : "teacher");
 
+      // Prefer Supabase Auth UUID if available and valid
+      const effectiveId = (sbSession?.user?.id && isUuid(sbSession.user.id))
+        ? sbSession.user.id
+        : customUser.id;
+
       setUser({
-        id: customUser.id,
+        id: effectiveId,
         email: customUser.email,
         role: roleVal,
         mustChangePassword: !!customUser.mustChangePassword,
@@ -87,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isAdm) {
         setProfile({
-          id: customUser.id,
+          id: effectiveId,
           email: customUser.email,
           username: customUser.username,
           full_name: customUser.name || (isSuper ? "Quản trị viên hệ thống" : "Quản trị viên"),
@@ -100,9 +113,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           status: "active",
         });
       } else {
-        const teacher = getTeacherById(customUser.id);
+        const teacher = getTeacherById(customUser.id) || getTeacherById(effectiveId);
         setProfile({
-          id: customUser.id,
+          id: effectiveId,
           email: teacher?.email || customUser.email,
           username: teacher?.username || customUser.username,
           full_name: teacher?.name || customUser.name,

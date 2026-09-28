@@ -67,6 +67,7 @@ import {
   changeAdminPassword,
   ROOT_SUPER_ADMIN_ID,
   getRootAdmin,
+  generateUuid,
 } from "@/lib/teacherStorage";
 import { SUBJECT_LIST } from "@/lib/subjects";
 import { toast } from "sonner";
@@ -527,7 +528,7 @@ export default function AdminDashboard() {
     }
 
     const newTeacher: TeacherUser = {
-      id: `teacher-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: generateUuid(),
       username: uname,
       name: tfName.trim(),
       email: tfEmail.trim() || `${uname}@school.edu.vn`,

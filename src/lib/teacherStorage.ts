@@ -59,12 +59,24 @@ export function hashPassword(plain: string): string {
   return `sha_v2_${s1}${s2}`;
 }
 
+export function isUuid(val?: string | null): val is string {
+  return typeof val === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+}
+
+export function generateUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "00000000-0000-4000-8000-" + Math.random().toString(16).slice(2, 14).padEnd(12, "0");
+}
+
 export function normalizeUsername(u: string): string {
   return (u || "").trim().toLowerCase();
 }
 
 /** Root Super Admin default constants */
-export const ROOT_SUPER_ADMIN_ID = "super-admin-system-root-001";
+export const ROOT_SUPER_ADMIN_ID = "00000000-0000-4000-8000-000000000000";
+export const LEGACY_ROOT_SUPER_ADMIN_ID = "super-admin-system-root-001";
 export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Admin@123456");
 
 export const DEFAULT_ROOT_ADMIN: AdminUser = {
@@ -80,8 +92,11 @@ export const DEFAULT_ROOT_ADMIN: AdminUser = {
 };
 
 /** Initial default demo teacher account: giaovien / 123456 */
+export const DEFAULT_TEACHER_ID = "00000000-0000-4000-8000-000000000001";
+export const LEGACY_DEFAULT_TEACHER_ID = "teacher-default-001";
+
 const DEFAULT_TEACHER: TeacherUser = {
-  id: "teacher-default-001",
+  id: DEFAULT_TEACHER_ID,
   username: "giaovien",
   name: "Trương Thị Bích Thủy",
   email: "thuy.tb@pbc.danang.edu.vn",
@@ -108,6 +123,7 @@ export function getAllAdmins(): AdminUser[] {
         const rootIdx = parsed.findIndex(
           (a) =>
             a.id === ROOT_SUPER_ADMIN_ID ||
+            a.id === LEGACY_ROOT_SUPER_ADMIN_ID ||
             normalizeUsername(a.username) === "admin" ||
             normalizeUsername(a.email) === "admin@admin.com"
         );
@@ -357,8 +373,25 @@ export function getAllTeachers(): TeacherUser[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.TEACHERS);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const parsed: TeacherUser[] = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        let changed = false;
+        const normalized = parsed.map((t) => {
+          if (t.id === LEGACY_DEFAULT_TEACHER_ID) {
+            changed = true;
+            return { ...t, id: DEFAULT_TEACHER_ID };
+          }
+          if (!isUuid(t.id)) {
+            changed = true;
+            return { ...t, id: generateUuid() };
+          }
+          return t;
+        });
+        if (changed) {
+          localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(normalized));
+        }
+        return normalized;
+      }
     }
   } catch {}
   // Seed with default teacher if empty
@@ -374,7 +407,7 @@ export function saveAllTeachers(teachers: TeacherUser[]) {
 
 export function getTeacherById(id: string): TeacherUser | null {
   const teachers = getAllTeachers();
-  return teachers.find((t) => t.id === id) || null;
+  return teachers.find((t) => t.id === id || (id === LEGACY_DEFAULT_TEACHER_ID && t.id === DEFAULT_TEACHER_ID)) || null;
 }
 
 export function getTeacherByUsernameOrEmail(identifier: string): TeacherUser | null {
@@ -418,7 +451,25 @@ export function getCurrentAuthUser(): AuthSessionUser | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const user: AuthSessionUser = JSON.parse(raw);
+    if (user && !isUuid(user.id)) {
+      if (user.id === LEGACY_DEFAULT_TEACHER_ID || user.username === "giaovien") {
+        user.id = DEFAULT_TEACHER_ID;
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      } else if (user.id === LEGACY_ROOT_SUPER_ADMIN_ID || user.username === "admin") {
+        user.id = ROOT_SUPER_ADMIN_ID;
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      } else {
+        const matched = getTeacherByUsernameOrEmail(user.username || user.email);
+        if (matched && isUuid(matched.id)) {
+          user.id = matched.id;
+        } else {
+          user.id = generateUuid();
+        }
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      }
+    }
+    return user;
   } catch {
     return null;
   }
