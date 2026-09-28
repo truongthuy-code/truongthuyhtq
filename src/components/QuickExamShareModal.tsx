@@ -27,6 +27,7 @@ import {
   deleteAssignment,
   getExamPrimaryCode,
   getExamShareUrl,
+  syncExamAssignmentCodes,
 } from "@/lib/examAssignments";
 
 interface QuickExamShareModalProps {
@@ -63,6 +64,7 @@ export default function QuickExamShareModal({
     if (open && exam?.id) {
       const pCode = getExamPrimaryCode(exam);
       setPrimaryCode(pCode);
+      syncExamAssignmentCodes(exam).catch(() => {});
       getAssignmentsForExam(exam.id, exam).then((list) => {
         setAssignments(list);
       });

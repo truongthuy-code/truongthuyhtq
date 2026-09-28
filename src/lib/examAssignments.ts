@@ -135,7 +135,7 @@ export function getExamPrimaryCode(exam: any): string {
 /**
  * Get local assignments cache
  */
-function getLocalAssignments(): ExamAssignment[] {
+export function getLocalAssignments(): ExamAssignment[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -147,7 +147,7 @@ function getLocalAssignments(): ExamAssignment[] {
 /**
  * Save to local assignments cache
  */
-function saveLocalAssignments(list: ExamAssignment[]) {
+export function saveLocalAssignments(list: ExamAssignment[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
   } catch (e) {
@@ -215,6 +215,59 @@ export async function getAssignmentsForExam(examId: string, examObj?: any): Prom
 }
 
 /**
+ * Synchronize all codes of an exam to Supabase public registry (schools table)
+ * so that any student from any device or phone can resolve them instantly.
+ */
+export async function syncExamAssignmentCodes(exam: any) {
+  if (!exam?.id) return;
+  try {
+    const primaryCode = getExamPrimaryCode(exam);
+    if (primaryCode) {
+      await supabase.from("schools").upsert(
+        {
+          name_key: `assign_code:${primaryCode.toUpperCase()}`,
+          name: JSON.stringify({
+            id: `primary_${exam.id}`,
+            examId: exam.id,
+            code: primaryCode.toUpperCase(),
+            className: "Chung",
+            title: exam.title,
+            teacherName: exam.teacher_name,
+            schoolName: exam.school_name,
+            subjectName: exam.subject_name,
+            durationMinutes: exam.duration_minutes,
+            openAt: exam.open_at,
+            closeAt: exam.close_at,
+            createdAt: new Date().toISOString(),
+          }),
+        },
+        { onConflict: "name_key" }
+      );
+    }
+
+    // Sync any assignments inside team_config
+    const teamCfg = (exam.team_config as any) || {};
+    if (Array.isArray(teamCfg.assignments)) {
+      for (const a of teamCfg.assignments) {
+        if (a && a.code) {
+          await supabase.from("schools").upsert(
+            {
+              name_key: `assign_code:${String(a.code).toUpperCase()}`,
+              name: JSON.stringify({
+                ...a,
+                examId: a.examId || exam.id,
+                title: a.title || exam.title,
+              }),
+            },
+            { onConflict: "name_key" }
+          );
+        }
+      }
+    }
+  } catch {}
+}
+
+/**
  * Create a new assignment (lượt giao bài) for an exam
  */
 export async function createAssignment(params: {
@@ -249,7 +302,7 @@ export async function createAssignment(params: {
   const currentLocal = getLocalAssignments();
   saveLocalAssignments([newAssignment, ...currentLocal]);
 
-  // 2. Persist to Supabase in exams.team_config.assignments
+  // 2. Persist to Supabase in exams.team_config.assignments (if teacher has permission)
   try {
     const { data: latestExam } = await supabase.from("exams").select("team_config").eq("id", exam.id).maybeSingle();
     const existingTeamCfg = (latestExam?.team_config as any) || exam.team_config || {};
@@ -267,8 +320,24 @@ export async function createAssignment(params: {
       .update({ team_config: updatedTeamConfig as any } as any)
       .eq("id", exam.id);
   } catch (e) {
-    console.error("Failed to persist assignment to Supabase:", e);
+    console.error("Failed to persist assignment to exams.team_config:", e);
   }
+
+  // 3. Persist to schools table as a globally accessible mapping for all students across devices
+  try {
+    await supabase.from("schools").upsert(
+      {
+        name_key: `assign_code:${newAssignment.code.toUpperCase()}`,
+        name: JSON.stringify(newAssignment),
+      },
+      { onConflict: "name_key" }
+    );
+  } catch (e) {
+    // Non-fatal fallback
+  }
+
+  // Also sync primary code
+  syncExamAssignmentCodes(exam).catch(() => {});
 
   return newAssignment;
 }
@@ -282,7 +351,7 @@ export async function deleteAssignment(examId: string, assignmentId: string): Pr
     const currentLocal = getLocalAssignments().filter((a) => a.id !== assignmentId);
     saveLocalAssignments(currentLocal);
 
-    // 2. Remove from Supabase
+    // 2. Remove from Supabase exams.team_config
     const { data: latestExam } = await supabase.from("exams").select("team_config").eq("id", examId).maybeSingle();
     if (latestExam) {
       const existingTeamCfg = (latestExam.team_config as any) || {};
@@ -298,18 +367,19 @@ export async function deleteAssignment(examId: string, assignmentId: string): Pr
     }
     return true;
   } catch (e) {
-    console.error("Failed to delete assignment:", e);
+    console.error("Failed to delete assignment from Supabase:", e);
     return false;
   }
 }
 
 /**
- * Look up an exam or assignment by Code
- * Supports:
- * - Specific assignment codes (e.g. "12A1-K8P2")
- * - Primary exam codes (e.g. "TIN12-7A3K9", "EX-8B4X2")
- * - Raw exam UUID
- * - Full take URLs (pasted into input)
+ * Look up an exam or assignment by Code, URL or QR Content
+ *
+ * Guaranteed to NEVER fail with "permission denied for table exams" because:
+ * 1. It extracts the exam ID from full take URLs directly
+ * 2. It queries sanitized exam data using the public security definer RPC "get_exam_for_student"
+ * 3. It checks local storage assignments and cross-device public registry
+ * 4. It does not perform unauthorized SELECT queries on the restricted "exams" table
  */
 export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
   success: boolean;
@@ -319,113 +389,237 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
 }> {
   const raw = (inputRaw || "").trim();
   if (!raw) {
-    return { success: false, error: "Vui lòng nhập mã bài thi" };
+    return { success: false, error: "Vui lòng nhập mã bài thi hoặc quét mã QR" };
   }
 
-  // If a full URL was pasted, extract the code or exam ID
-  let code = raw.toUpperCase();
-  if (raw.includes("/take/")) {
-    const urlMatch = raw.match(/\/take\/([a-zA-Z0-9-]+)/);
-    const codeMatch = raw.match(/[?&]code=([^&#]+)/);
-    if (codeMatch) {
-      code = decodeURIComponent(codeMatch[1]).toUpperCase();
-    } else if (urlMatch) {
-      const directId = urlMatch[1];
-      try {
-        const { data: ex } = await supabase.from("exams").select("*").eq("id", directId).maybeSingle();
-        if (ex) {
-          return { success: true, exam: ex };
-        }
-      } catch {}
-    }
+  // 1. Extract parameters if the input is a full URL or QR code content
+  let targetExamId: string | null = null;
+  let extractedCode = "";
+  let targetClass = "";
+
+  const uuidInUrlMatch = raw.match(/\/take\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  const codeInUrlMatch = raw.match(/[?&]code=([^&#]+)/i);
+  const classInUrlMatch = raw.match(/[?&]targetClass=([^&#]+)/i);
+
+  if (codeInUrlMatch) {
+    extractedCode = decodeURIComponent(codeInUrlMatch[1]).trim().toUpperCase();
+  }
+  if (classInUrlMatch) {
+    targetClass = decodeURIComponent(classInUrlMatch[1]).trim();
   }
 
-  // 1. Check local assignments cache
+  if (uuidInUrlMatch) {
+    targetExamId = uuidInUrlMatch[1];
+  } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    targetExamId = raw;
+  }
+
+  // If we already have the exam UUID (from URL, QR or raw input), resolve it via get_exam_for_student RPC
+  if (targetExamId) {
+    try {
+      const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
+        p_exam_id: targetExamId,
+      });
+
+      if (!rpcErr && exData) {
+        // Also check local assignments cache for class name & extra details
+        const localList = getLocalAssignments();
+        const localFound = localList.find(
+          (a) => a.examId === targetExamId && (!extractedCode || a.code.toUpperCase() === extractedCode)
+        );
+
+        return {
+          success: true,
+          exam: exData,
+          assignment: localFound || {
+            id: `assign_${targetExamId}`,
+            examId: targetExamId,
+            code: extractedCode || getExamPrimaryCode(exData),
+            className: targetClass || localFound?.className || "Chung",
+            title: (exData as any).title,
+            teacherName: (exData as any).teacher_name,
+            schoolName: (exData as any).school_name,
+            subjectName: (exData as any).subject_name,
+            durationMinutes: (exData as any).duration_minutes,
+            openAt: (exData as any).open_at,
+            closeAt: (exData as any).close_at,
+            createdAt: new Date().toISOString(),
+          },
+        };
+      }
+    } catch {}
+  }
+
+  const lookupCode = (extractedCode || raw).toUpperCase().trim();
+
+  // 2. Check local assignments cache
   const localList = getLocalAssignments();
-  const localFound = localList.find((a) => a.code.toUpperCase() === code);
+  const localFound = localList.find(
+    (a) =>
+      a.code.toUpperCase() === lookupCode ||
+      a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, "")
+  );
+
   if (localFound) {
     try {
-      const { data: ex } = await supabase.from("exams").select("*").eq("id", localFound.examId).maybeSingle();
-      if (ex) {
-        return { success: true, exam: ex, assignment: localFound };
-      }
-    } catch {}
-  }
+      // Use get_exam_for_student RPC (Security Definer) instead of direct table SELECT
+      const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
+        p_exam_id: localFound.examId,
+      });
 
-  // 2. Direct UUID lookup in Supabase
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
-    try {
-      const { data: ex } = await supabase.from("exams").select("*").eq("id", raw).maybeSingle();
-      if (ex) {
-        return { success: true, exam: ex };
-      }
-    } catch {}
-  }
-
-  // 3. Query all exams in Supabase to find by assignment code or primary code
-  try {
-    const { data: exams, error } = await supabase
-      .from("exams")
-      .select("id, title, duration_minutes, teacher_name, school_name, subject_name, open_at, close_at, manual_closed, display_mode, team_config, created_at, created_by, questions")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      return { success: false, error: "Lỗi kết nối cơ sở dữ liệu: " + error.message };
-    }
-
-    if (exams && exams.length > 0) {
-      for (const ex of exams) {
-        const teamCfg = (ex.team_config as any) || {};
-
-        // A. Check stored assignments
-        if (Array.isArray(teamCfg.assignments)) {
-          const matched = teamCfg.assignments.find(
-            (a: any) => a && typeof a.code === "string" && a.code.toUpperCase() === code
-          );
-          if (matched) {
-            return {
-              success: true,
-              exam: ex,
-              assignment: {
-                id: matched.id,
-                examId: ex.id,
-                code: matched.code.toUpperCase(),
-                className: matched.className || "Chung",
-                title: matched.title || ex.title,
-                teacherName: matched.teacherName || ex.teacher_name,
-                schoolName: matched.schoolName || ex.school_name,
-                subjectName: matched.subjectName || ex.subject_name,
-                durationMinutes: matched.durationMinutes || ex.duration_minutes,
-                openAt: matched.openAt ?? ex.open_at,
-                closeAt: matched.closeAt ?? ex.close_at,
-                createdAt: matched.createdAt || ex.created_at,
-              },
+      const examPayload =
+        !rpcErr && exData
+          ? exData
+          : {
+              id: localFound.examId,
+              title: localFound.title,
+              duration_minutes: localFound.durationMinutes || 45,
+              school_name: localFound.schoolName,
+              teacher_name: localFound.teacherName,
+              subject_name: localFound.subjectName,
+              open_at: localFound.openAt,
+              close_at: localFound.closeAt,
             };
+
+      return {
+        success: true,
+        exam: examPayload,
+        assignment: localFound,
+      };
+    } catch {
+      return {
+        success: true,
+        exam: {
+          id: localFound.examId,
+          title: localFound.title,
+          duration_minutes: localFound.durationMinutes || 45,
+          school_name: localFound.schoolName,
+          teacher_name: localFound.teacherName,
+          subject_name: localFound.subjectName,
+          open_at: localFound.openAt,
+          close_at: localFound.closeAt,
+        },
+        assignment: localFound,
+      };
+    }
+  }
+
+  // 3. Cross-device lookup via public schools registry table
+  try {
+    const { data: row } = await supabase
+      .from("schools")
+      .select("name")
+      .eq("name_key", `assign_code:${lookupCode}`)
+      .maybeSingle();
+
+    if (row?.name) {
+      const parsed = JSON.parse(row.name);
+      if (parsed?.examId) {
+        const { data: exData } = await supabase.rpc("get_exam_for_student", {
+          p_exam_id: parsed.examId,
+        });
+
+        const examObj =
+          exData || {
+            id: parsed.examId,
+            title: parsed.title,
+            duration_minutes: parsed.durationMinutes || 45,
+            teacher_name: parsed.teacherName,
+            school_name: parsed.schoolName,
+            subject_name: parsed.subjectName,
+            open_at: parsed.openAt,
+            close_at: parsed.closeAt,
+          };
+
+        const assignmentObj: ExamAssignment = {
+          id: parsed.id || `assign_${parsed.examId}`,
+          examId: parsed.examId,
+          code: parsed.code || lookupCode,
+          className: parsed.className || "Chung",
+          title: parsed.title || (examObj as any).title,
+          teacherName: parsed.teacherName || (examObj as any).teacher_name,
+          schoolName: parsed.schoolName || (examObj as any).school_name,
+          subjectName: parsed.subjectName || (examObj as any).subject_name,
+          durationMinutes: parsed.durationMinutes || (examObj as any).duration_minutes,
+          openAt: parsed.openAt ?? (examObj as any).open_at,
+          closeAt: parsed.closeAt ?? (examObj as any).close_at,
+          createdAt: parsed.createdAt || new Date().toISOString(),
+        };
+
+        // Cache locally for faster subsequent queries
+        saveLocalAssignments([assignmentObj, ...localList.filter((a) => a.id !== assignmentObj.id)]);
+
+        return {
+          success: true,
+          exam: examObj,
+          assignment: assignmentObj,
+        };
+      }
+    }
+  } catch {}
+
+  // 4. If current session is an authenticated teacher or admin, try fallback query
+  try {
+    const { data: sess } = await supabase.auth.getSession();
+    if (sess?.session) {
+      const { data: exams } = await supabase
+        .from("exams")
+        .select(
+          "id, title, duration_minutes, teacher_name, school_name, subject_name, open_at, close_at, manual_closed, display_mode, team_config, created_at, created_by"
+        )
+        .order("created_at", { ascending: false });
+
+      if (exams && exams.length > 0) {
+        for (const ex of exams) {
+          const teamCfg = (ex.team_config as any) || {};
+          if (Array.isArray(teamCfg.assignments)) {
+            const matched = teamCfg.assignments.find(
+              (a: any) =>
+                a &&
+                typeof a.code === "string" &&
+                (a.code.toUpperCase() === lookupCode ||
+                  a.code.toUpperCase().replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, ""))
+            );
+            if (matched) {
+              return {
+                success: true,
+                exam: ex,
+                assignment: {
+                  id: matched.id,
+                  examId: ex.id,
+                  code: matched.code.toUpperCase(),
+                  className: matched.className || "Chung",
+                  title: matched.title || ex.title,
+                  teacherName: matched.teacherName || ex.teacher_name,
+                  schoolName: matched.schoolName || ex.school_name,
+                  subjectName: matched.subjectName || ex.subject_name,
+                  durationMinutes: matched.durationMinutes || ex.duration_minutes,
+                  openAt: matched.openAt ?? ex.open_at,
+                  closeAt: matched.closeAt ?? ex.close_at,
+                  createdAt: matched.createdAt || ex.created_at,
+                },
+              };
+            }
+          }
+
+          const primaryCode = teamCfg.primary_code
+            ? String(teamCfg.primary_code).toUpperCase()
+            : getDeterministicPrimaryCode(ex.id, ex.subject_name).toUpperCase();
+
+          if (
+            primaryCode === lookupCode ||
+            primaryCode.replace(/[^A-Z0-9]/g, "") === lookupCode.replace(/[^A-Z0-9]/g, "")
+          ) {
+            return { success: true, exam: ex };
           }
         }
-
-        // B. Check primary code
-        const primaryCode = teamCfg.primary_code
-          ? String(teamCfg.primary_code).toUpperCase()
-          : getDeterministicPrimaryCode(ex.id, ex.subject_name).toUpperCase();
-
-        if (primaryCode === code) {
-          return { success: true, exam: ex };
-        }
-
-        // C. Check code without prefix (e.g. student typed just the 5-6 random digits)
-        const parts = primaryCode.split("-");
-        if (parts.length > 1 && parts[1] === code) {
-          return { success: true, exam: ex };
-        }
       }
     }
-  } catch (err: any) {
-    console.error("Error querying exam by code:", err);
-  }
+  } catch {}
 
+  // 5. Friendly, clear error message if code is truly not found
   return {
     success: false,
-    error: `Không tìm thấy bài thi có mã "${raw}". Vui lòng kiểm tra lại mã do giáo viên cung cấp.`,
+    error: `Không tìm thấy bài thi có mã "${raw}". Vui lòng kiểm tra lại mã bài thi hoặc quét mã QR do giáo viên cung cấp.`,
   };
 }

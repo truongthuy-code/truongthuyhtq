@@ -32,6 +32,7 @@ import {
   deleteAssignment,
   getExamPrimaryCode,
   getExamShareUrl,
+  syncExamAssignmentCodes,
 } from "@/lib/examAssignments";
 
 export default function Share() {
@@ -71,6 +72,7 @@ export default function Share() {
         setExam(data);
         const pCode = getExamPrimaryCode(data);
         setPrimaryCode(pCode);
+        syncExamAssignmentCodes(data).catch(() => {});
         const list = await getAssignmentsForExam(id, data);
         setAssignments(list);
       });
