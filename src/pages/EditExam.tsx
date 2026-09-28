@@ -16,6 +16,7 @@ import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -68,24 +69,27 @@ export default function EditExam() {
   const onSave = async () => {
     if (!id) return;
     setSaving(true);
-    const { error } = await supabase.from("exams").update({
-      title,
-      duration_minutes: duration,
-      max_attempts: maxAttempts,
-      shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-      shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-      shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-      shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-      scoring: scoring as any,
-      allow_review: allowReview,
-      display_mode: displayMode,
-      instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
+    const { error } = await withSupabaseAuthRetry(async () => {
+      return await supabase.from("exams").update({
+        title,
+        duration_minutes: duration,
+        max_attempts: maxAttempts,
+        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+        scoring: scoring as any,
+        allow_review: allowReview,
+        display_mode: displayMode,
+        instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
         team_config: teamConfig as any,
-      lock_mode: lockMode as any,
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      auto_submit_on_close: schedule.auto_submit_on_close,
-    } as any).eq("id", id);
+        lock_mode: lockMode as any,
+        open_at: schedule.open_at,
+        close_at: schedule.close_at,
+        auto_submit_on_close: schedule.auto_submit_on_close,
+      } as any).eq("id", id);
+    }, user);
+
     setSaving(false);
     if (error) { toast.error("Lỗi lưu: " + error.message); return; }
     syncExamAssignmentCodes({

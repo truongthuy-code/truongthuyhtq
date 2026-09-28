@@ -24,6 +24,7 @@ import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig 
 import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
+import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -188,17 +189,14 @@ export default function Teacher() {
     if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
     setSaving(true);
 
-    // Get current Supabase auth user to ensure valid UUID matching auth.uid()
-    const { data: u } = await supabase.auth.getUser();
-    const targetCreatedBy = (u?.user?.id && isUuid(u.user.id))
-      ? u.user.id
-      : (isUuid(currentUser?.id) ? currentUser.id : null);
+    // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
+    const activeUserId = await ensureSupabaseSession(currentUser);
 
     let original_file_url: string | null = null;
     let original_file_name: string | null = null;
     let original_file_path: string | null = null;
     if (originalFile) {
-      const folder = (targetCreatedBy || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
+      const folder = (activeUserId || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
       const path = `${folder}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
       const up = await supabase.storage.from("exam-files").upload(path, originalFile, {
         contentType: originalFile.type || "application/octet-stream",
@@ -211,39 +209,47 @@ export default function Teacher() {
         original_file_name = originalFile.name;
       }
     }
-    const { data, error } = await supabase
-      .from("exams")
-      .insert({
-        title,
-        questions: exam as any,
-        duration_minutes: duration,
-        max_attempts: maxAttempts,
-        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-        scoring: scoring as any,
-        allow_review: allowReview,
-        display_mode: displayMode,
-        instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
-        team_config: teamConfig as any,
-        lock_mode: lockMode as any,
-        open_at: schedule.open_at,
-        close_at: schedule.close_at,
-        auto_submit_on_close: schedule.auto_submit_on_close,
-        original_file_url,
-        original_file_name,
-        original_file_path,
-        created_by: targetCreatedBy,
-        teacher_name: profile?.full_name || "Giáo viên",
-        school_name: profile?.school_name || "",
-        subject_name: profile?.subject_name || "",
-      } as any)
-      .select("id")
-      .single();
+
+    const { data, error } = await withSupabaseAuthRetry(async (uid) => {
+      const targetCreatedBy = isUuid(uid)
+        ? uid
+        : (isUuid(currentUser?.id) ? currentUser.id : null);
+
+      return await supabase
+        .from("exams")
+        .insert({
+          title,
+          questions: exam as any,
+          duration_minutes: duration,
+          max_attempts: maxAttempts,
+          shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+          shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+          shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+          shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+          scoring: scoring as any,
+          allow_review: allowReview,
+          display_mode: displayMode,
+          instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
+          team_config: teamConfig as any,
+          lock_mode: lockMode as any,
+          open_at: schedule.open_at,
+          close_at: schedule.close_at,
+          auto_submit_on_close: schedule.auto_submit_on_close,
+          original_file_url,
+          original_file_name,
+          original_file_path,
+          created_by: targetCreatedBy,
+          teacher_name: profile?.full_name || "Giáo viên",
+          school_name: profile?.school_name || "",
+          subject_name: profile?.subject_name || "",
+        } as any)
+        .select("id")
+        .single();
+    }, currentUser);
+
     setSaving(false);
-    if (error) {
-      toast.error("Lỗi tạo đề: " + error.message);
+    if (error || !data) {
+      toast.error("Lỗi tạo đề: " + (error?.message || "Không thể tạo đề thi"));
       return;
     }
 

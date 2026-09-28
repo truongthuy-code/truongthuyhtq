@@ -35,6 +35,7 @@ import {
   isUuid,
   generateUuid,
 } from "@/lib/teacherStorage";
+import { ensureSupabaseSession } from "@/lib/supabaseAuthSync";
 
 export default function AuthPage() {
   const navigate = useNavigate();
@@ -116,6 +117,31 @@ export default function AuthPage() {
           }
 
           if (matchedAdmin.passwordHash === inputHash) {
+            // Ensure Supabase Auth session exists for PostgreSQL RLS & table permissions
+            const adminEmail = matchedAdmin.email?.trim() || `${matchedAdmin.username.toLowerCase()}@admin.local`;
+            try {
+              let { data: signData } = await supabase.auth.signInWithPassword({
+                email: adminEmail,
+                password,
+              });
+              if (!signData?.user) {
+                const { data: suData } = await supabase.auth.signUp({
+                  email: adminEmail,
+                  password,
+                  options: {
+                    data: { role: matchedAdmin.role, full_name: matchedAdmin.name },
+                  },
+                });
+                signData = suData;
+              }
+              if (!signData?.session) {
+                await ensureSupabaseSession(matchedAdmin);
+              }
+            } catch (err) {
+              console.warn("Supabase admin auth sync error:", err);
+              await ensureSupabaseSession(matchedAdmin).catch(() => {});
+            }
+
             setCurrentAuthUser({
               id: matchedAdmin.id,
               username: matchedAdmin.username,

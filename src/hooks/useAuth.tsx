@@ -11,6 +11,7 @@ import {
   TeacherUser,
   isUuid,
 } from "@/lib/teacherStorage";
+import { ensureSupabaseSession } from "@/lib/supabaseAuthSync";
 
 export type Role = "super_admin" | "admin" | "teacher";
 
@@ -80,6 +81,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const customUser = getCurrentAuthUser();
     if (customUser) {
+      if (!sbSession?.user?.id) {
+        ensureSupabaseSession(customUser).then((uid) => {
+          if (uid) {
+            supabase.auth.getSession().then(({ data: { session: freshS } }) => {
+              if (freshS) setSession(freshS);
+            });
+          }
+        }).catch(() => {});
+      }
+
       const isSuper = customUser.role === "super_admin";
       const isAdm = isSuper || customUser.role === "admin";
       const roleVal: Role = isSuper ? "super_admin" : (isAdm ? "admin" : "teacher");

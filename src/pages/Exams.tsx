@@ -24,6 +24,7 @@ import { useAuth } from "@/hooks/useAuth";
 import QuickExamShareModal from "@/components/QuickExamShareModal";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
+import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 
 const PAGE_SIZE = 10;
 
@@ -132,7 +133,9 @@ export default function Exams() {
   const deleteExam = async (exam: any) => {
     if (!confirm(`Xóa đề "${exam.title}"?`)) return;
     await supabase.from("submissions").delete().eq("exam_id", exam.id);
-    const { error } = await supabase.from("exams").delete().eq("id", exam.id);
+    const { error } = await withSupabaseAuthRetry(async () => {
+      return await supabase.from("exams").delete().eq("id", exam.id);
+    }, user);
     if (error) return toast.error(error.message);
     toast.success("Đã xóa đề"); load();
   };
@@ -162,16 +165,19 @@ export default function Exams() {
       };
     }
 
-    const { data: u } = await supabase.auth.getUser();
-    const createdByUuid = (u.user?.id && isUuid(u.user.id))
-      ? u.user.id
-      : (isUuid(user?.id) ? user.id : null);
-    const { error } = await supabase.from("exams").insert({
-      ...rest,
-      team_config: finalTeamConfig,
-      title: `${exam.title} (Bản sao)`,
-      created_by: createdByUuid,
-    } as any);
+    const { error } = await withSupabaseAuthRetry(async (uid) => {
+      const createdByUuid = isUuid(uid)
+        ? uid
+        : (isUuid(user?.id) ? user.id : null);
+
+      return await supabase.from("exams").insert({
+        ...rest,
+        team_config: finalTeamConfig,
+        title: `${exam.title} (Bản sao)`,
+        created_by: createdByUuid,
+      } as any);
+    }, user);
+
     if (error) return toast.error(error.message);
     toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");
     setDuplicateTarget(null);
