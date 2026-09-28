@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import RichText from "@/components/RichText";
@@ -7,40 +7,78 @@ import QuizBackground from "@/components/QuizBackground";
 import { Check, X, GraduationCap, ArrowLeft, Trophy, Sparkles } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import { getTFValue } from "@/lib/grading";
-import { getPublishedExamAnswerKey } from "@/lib/studentStorage";
+import { getPublishedExamAnswerKey, getStudentSubmissions } from "@/lib/studentStorage";
+import { findSampleExam } from "@/lib/sampleExams";
 import confetti from "canvas-confetti";
 
 export default function Result() {
   const { id } = useParams();
-  const [sub, setSub] = useState<any>(null);
-  const [exam, setExam] = useState<any>(null);
+  const location = useLocation();
+  const [sub, setSub] = useState<any>(() => (location.state as any)?.submission || null);
+  const [exam, setExam] = useState<any>(() => (location.state as any)?.exam || null);
 
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase.rpc("get_submission_for_student", { p_submission_id: id! });
-      if (error || !data) return;
-      const payload: any = data;
-      const submission = payload.submission;
-      let examObj = payload.exam;
-
-      // If exam is closed via published answer key, unlock review
-      if (!examObj?.questions && submission?.exam_id) {
-        const pub = getPublishedExamAnswerKey(submission.exam_id);
-        if (pub?.questions) {
-          examObj = { ...examObj, allow_review: true, questions: pub.questions };
-        }
-      }
-
-      setSub(submission);
-      setExam(examObj);
-
       try {
-        if (submission?.score >= 5) {
-          confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+        const { data, error } = await supabase.rpc("get_submission_for_student", { p_submission_id: id! });
+        if (!error && data) {
+          const payload: any = data;
+          const submission = payload.submission;
+          let examObj = payload.exam;
+
+          // If exam is closed via published answer key, unlock review
+          if (!examObj?.questions && submission?.exam_id) {
+            const pub = getPublishedExamAnswerKey(submission.exam_id);
+            if (pub?.questions) {
+              examObj = { ...examObj, allow_review: true, questions: pub.questions };
+            }
+          }
+
+          setSub(submission);
+          setExam(examObj);
+
+          if (submission?.score >= 5) {
+            try {
+              confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+            } catch {}
+          }
+          return;
         }
       } catch {}
+
+      // Fallback: check location state or student submissions in local storage
+      const fromState = (location.state as any)?.submission;
+      if (fromState) {
+        setSub(fromState);
+        if ((location.state as any)?.exam) {
+          setExam((location.state as any).exam);
+        }
+        return;
+      }
+
+      const allSubs = getStudentSubmissions();
+      const matched = allSubs.find((s) => s.id === id);
+      if (matched) {
+        const sampleMatch = findSampleExam(matched.examId);
+        setSub({
+          id: matched.id,
+          student_name: matched.studentName,
+          student_class: matched.studentClass,
+          score: matched.score,
+          max_score: matched.maxScore,
+          correct_count: matched.correctCount,
+          wrong_count: matched.wrongCount,
+          answers: matched.answers,
+          exam_id: matched.examId,
+        });
+        setExam({
+          title: matched.examTitle,
+          allow_review: true,
+          questions: sampleMatch?.questions || null,
+        });
+      }
     })();
-  }, [id]);
+  }, [id, location]);
 
   if (!sub) return (
     <div className="min-h-screen grid place-items-center relative">

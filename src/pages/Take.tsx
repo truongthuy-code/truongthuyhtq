@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, Link, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getTFValue } from "@/lib/grading";
+import { getTFValue, gradeExam, DEFAULT_SCORING } from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
+import { findSampleExam, getSampleExamByCode, getSampleExamById } from "@/lib/sampleExams";
+import { findAssignmentOrExamByCode } from "@/lib/examAssignments";
 import {
   ChevronLeft,
   ChevronRight,
@@ -85,15 +87,97 @@ const OPTION_THEMES = [
   },
 ];
 
+function normalizeExamQuestions(rawExam: any) {
+  if (!rawExam) return [];
+  let qs = rawExam.questions;
+  if (typeof qs === "string") {
+    try {
+      qs = JSON.parse(qs);
+    } catch {
+      qs = [];
+    }
+  }
+  if (!qs) return [];
+
+  if (qs.questions && !qs.partI && !qs.partII && !qs.partIII) {
+    qs = qs.questions;
+    if (typeof qs === "string") {
+      try {
+        qs = JSON.parse(qs);
+      } catch {}
+    }
+  }
+
+  // If questions is directly a flat array
+  if (Array.isArray(qs)) {
+    return qs.map((q: any, i: number) => ({
+      ...q,
+      id: q.id || `q_${i + 1}`,
+      type: q.type || (q.items ? "tf" : q.options?.length ? "mc" : "sa"),
+      _part: q._part || (q.type === "mc" ? 1 : q.type === "tf" ? 2 : 3),
+      options: Array.isArray(q.options) ? q.options : [],
+      items: Array.isArray(q.items) ? q.items : [],
+    }));
+  }
+
+  const sQ = {
+    p1: rawExam.shuffle_q_p1 ?? rawExam.shuffle_questions,
+    p2: rawExam.shuffle_q_p2 ?? rawExam.shuffle_questions,
+    p3: rawExam.shuffle_q_p3 ?? rawExam.shuffle_questions,
+  };
+
+  const p1Raw = qs.partI || qs.part1 || qs.part_1 || qs.PartI || [];
+  const p2Raw = qs.partII || qs.part2 || qs.part_2 || qs.PartII || [];
+  const p3Raw = qs.partIII || qs.part3 || qs.part_3 || qs.PartIII || [];
+
+  const p1 = (sQ.p1 ? shuffle(p1Raw) : p1Raw).map((q: any, i: number) => ({
+    ...q,
+    id: q.id || `p1_q_${i + 1}`,
+    type: "mc",
+    _part: 1,
+    options: Array.isArray(q.options) ? q.options : [],
+  }));
+  const p2 = (sQ.p2 ? shuffle(p2Raw) : p2Raw).map((q: any, i: number) => ({
+    ...q,
+    id: q.id || `p2_q_${i + 1}`,
+    type: "tf",
+    _part: 2,
+    items: Array.isArray(q.items) ? q.items : [],
+  }));
+  const p3 = (sQ.p3 ? shuffle(p3Raw) : p3Raw).map((q: any, i: number) => ({
+    ...q,
+    id: q.id || `p3_q_${i + 1}`,
+    type: "sa",
+    _part: 3,
+  }));
+
+  return [...p1, ...p2, ...p3];
+}
+
 export default function Take() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { student, logout: studentLogout } = useStudentAuth();
-  const [exam, setExam] = useState<any>(null);
+
+  // 1. Initial exam state: check location.state.exam or sample exams registry immediately
+  const [exam, setExam] = useState<any>(() => {
+    const fromState = (location.state as any)?.exam;
+    if (fromState) return fromState;
+    if (id) {
+      const sample = findSampleExam(id) || getSampleExamById(id) || getSampleExamByCode(id);
+      if (sample) return sample;
+    }
+    return null;
+  });
+
   const [started, setStarted] = useState(false);
-  const [name, setName] = useState("");
-  const [klass, setKlass] = useState("");
-  const [account, setAccount] = useState("");
+  const [name, setName] = useState(() => student?.fullName || "");
+  const [klass, setKlass] = useState(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return student?.className || searchParams.get("targetClass") || (location.state as any)?.assignment?.className || "";
+  });
+  const [account, setAccount] = useState(() => student?.account || "");
   const [questions, setQuestions] = useState<any[]>([]);
   const [optionOrders, setOptionOrders] = useState<Record<string, string[]>>({});
   const [idx, setIdx] = useState(0);
@@ -119,10 +203,13 @@ export default function Take() {
   useEffect(() => {
     if (student) {
       if (!name) setName(student.fullName);
-      if (!klass) setKlass(student.className);
+      if (!klass) {
+        const searchParams = new URLSearchParams(location.search);
+        setKlass(student.className || searchParams.get("targetClass") || (location.state as any)?.assignment?.className || "Chung");
+      }
       if (!account) setAccount(student.account);
     }
-  }, [student]);
+  }, [student, location]);
 
   // Snapshot of live state for unload handler
   const liveRef = useRef<any>({});
@@ -136,19 +223,63 @@ export default function Take() {
     },
   });
 
+  // Fetch or resolve exam data
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: id! });
-      if (error) {
-        toast.error("Không tải được đề: " + error.message);
-        return;
+      // 1. If id matches a sample exam, use it directly
+      if (id) {
+        const sample = findSampleExam(id) || getSampleExamById(id) || getSampleExamByCode(id);
+        if (sample) {
+          if (!cancelled) setExam(sample);
+          return;
+        }
       }
-      if ((data as any)?.display_mode === "team") {
-        navigate(`/team/${id}`, { replace: true });
-        return;
+
+      // 2. Query Supabase RPC get_exam_for_student
+      try {
+        const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: id! });
+        if (!error && data) {
+          if ((data as any)?.display_mode === "team") {
+            navigate(`/team/${id}`, { replace: true });
+            return;
+          }
+          if (!cancelled) setExam(data);
+          return;
+        }
+      } catch (e) {
+        console.warn("RPC get_exam_for_student failed, attempting fallbacks:", e);
       }
-      setExam(data);
+
+      // 3. Fallback: check query parameter code
+      const searchParams = new URLSearchParams(window.location.search);
+      const codeParam = searchParams.get("code");
+      if (codeParam) {
+        const sampleByCode = findSampleExam(codeParam) || getSampleExamByCode(codeParam);
+        if (sampleByCode) {
+          if (!cancelled) setExam(sampleByCode);
+          return;
+        }
+        const res = await findAssignmentOrExamByCode(codeParam);
+        if (res.success && res.exam) {
+          if (!cancelled) setExam(res.exam);
+          return;
+        }
+      }
+
+      // 4. Fallback: findAssignmentOrExamByCode by id
+      if (id) {
+        const resId = await findAssignmentOrExamByCode(id);
+        if (resId.success && resId.exam) {
+          if (!cancelled) setExam(resId.exam);
+          return;
+        }
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [id, navigate]);
 
   // Persist progress
@@ -237,27 +368,55 @@ export default function Take() {
     // eslint-disable-next-line
   }, [started, id]);
 
-  const start = async () => {
-    if (!name.trim() || !klass.trim()) {
-      toast.error("Vui lòng nhập họ tên và lớp để bắt đầu");
-      return;
-    }
+  // Auto-start exam if requested from dashboard
+  const autoStartRequested = useMemo(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return (
+      (location.state as any)?.autoStart === true ||
+      searchParams.get("autoStart") === "1" ||
+      searchParams.get("autoStart") === "true"
+    );
+  }, [location]);
 
-    const key = `take:${id}:${name}:${klass}`;
+  useEffect(() => {
+    if (!started && exam && autoStartRequested) {
+      // Auto-start once exam data is available
+      start();
+    }
+    // eslint-disable-next-line
+  }, [exam, autoStartRequested, started]);
+
+  const start = async () => {
+    if (!exam) return;
+
+    const studentName = (name || student?.fullName || student?.account || "Học sinh").trim();
+    const searchParams = new URLSearchParams(window.location.search);
+    const studentClass = (
+      klass ||
+      student?.className ||
+      searchParams.get("targetClass") ||
+      (location.state as any)?.assignment?.className ||
+      "Chung"
+    ).trim();
+
+    setName(studentName);
+    setKlass(studentClass);
+
+    const key = `take:${id}:${studentName}:${studentClass}`;
     if (localStorage.getItem(`${key}:done`)) {
       toast.error("Lượt làm bài này đã được nộp (hoặc đã tự động nộp khi bạn thoát trang).");
       return;
     }
 
     if (exam?.lock_mode?.enabled) {
-      await lock.requestFullscreen();
+      await lock.requestFullscreen().catch(() => {});
     }
 
     // Khôi phục bài làm đang dở
     try {
       const raw =
         localStorage.getItem(key) ||
-        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${id}:${name}:${klass}`) : null);
+        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${id}:${studentName}:${studentClass}`) : null);
       if (raw) {
         const saved = JSON.parse(raw);
         if (saved.questions?.length) {
@@ -267,7 +426,7 @@ export default function Take() {
           setBookmarks(saved.bookmarks || {});
           setFeedback(saved.feedback || {});
           setIdx(saved.idx || 0);
-          setTimeLeft(saved.timeLeft ?? exam.duration_minutes * 60);
+          setTimeLeft(saved.timeLeft ?? (exam.duration_minutes || 45) * 60);
           startedAtRef.current = saved.startedAt || new Date().toISOString();
           setStarted(true);
           toast.info("Đã khôi phục bài làm đang dở của bạn. Chúc bạn làm bài tốt! 🎯");
@@ -276,29 +435,31 @@ export default function Take() {
       }
     } catch {}
 
-    const ex = exam.questions as any;
-    const sQ = {
-      p1: exam.shuffle_q_p1 ?? exam.shuffle_questions,
-      p2: exam.shuffle_q_p2 ?? exam.shuffle_questions,
-      p3: exam.shuffle_q_p3 ?? exam.shuffle_questions,
-    };
+    const qs = normalizeExamQuestions(exam);
+    if (!qs || qs.length === 0) {
+      toast.error("Không tìm thấy danh sách câu hỏi trong đề thi này.");
+      return;
+    }
+
     const sO = {
       p1: exam.shuffle_o_p1 ?? exam.shuffle_options,
       p2: exam.shuffle_o_p2 ?? exam.shuffle_options,
       p3: exam.shuffle_o_p3 ?? exam.shuffle_options,
     };
-    const p1 = (sQ.p1 ? shuffle(ex.partI || []) : ex.partI || []).map((q: any) => ({ ...q, type: "mc", _part: 1 }));
-    const p2 = (sQ.p2 ? shuffle(ex.partII || []) : ex.partII || []).map((q: any) => ({ ...q, type: "tf", _part: 2 }));
-    const p3 = (sQ.p3 ? shuffle(ex.partIII || []) : ex.partIII || []).map((q: any) => ({ ...q, type: "sa", _part: 3 }));
-    const qs = [...p1, ...p2, ...p3];
+
     const oo: Record<string, string[]> = {};
     qs.forEach((q: any) => {
-      if (q.type === "mc" && sO.p1) oo[q.id] = shuffle(q.options.map((o: any) => o.key));
-      if (q.type === "tf" && sO.p2) oo[q.id] = shuffle(q.items.map((it: any) => it.key));
+      if (q.type === "mc" && sO.p1 && Array.isArray(q.options) && q.options.length > 0) {
+        oo[q.id] = shuffle(q.options.map((o: any) => o.key));
+      }
+      if (q.type === "tf" && sO.p2 && Array.isArray(q.items) && q.items.length > 0) {
+        oo[q.id] = shuffle(q.items.map((it: any) => it.key));
+      }
     });
+
     setOptionOrders(oo);
     setQuestions(qs);
-    setTimeLeft(exam.duration_minutes * 60);
+    setTimeLeft((exam.duration_minutes || 45) * 60);
     startedAtRef.current = new Date().toISOString();
     setStarted(true);
   };
@@ -348,23 +509,50 @@ export default function Take() {
       });
     } catch {}
 
-    const { data, error } = await supabase.rpc("submit_student_exam", {
-      p_exam_id: id!,
-      p_student_name: name,
-      p_student_class: klass,
-      p_answers: answers as any,
-      p_violations: lock.violations as any,
-      p_violation_count: lock.violationCount,
-      p_started_at: startedAtRef.current,
-      p_duration_seconds: startedAtRef.current
-        ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
-        : null,
-    } as any);
-    if (error) {
-      toast.error(error.message);
-      submittedRef.current = false;
-      return;
+    let submissionId = "";
+    let sInfo: any = null;
+
+    try {
+      const { data, error } = await supabase.rpc("submit_student_exam", {
+        p_exam_id: id!,
+        p_student_name: name || "Học sinh",
+        p_student_class: klass || "Chung",
+        p_answers: answers as any,
+        p_violations: lock.violations as any,
+        p_violation_count: lock.violationCount,
+        p_started_at: startedAtRef.current,
+        p_duration_seconds: startedAtRef.current
+          ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
+          : null,
+      } as any);
+
+      if (!error && data) {
+        submissionId = data;
+        const { data: subData } = await supabase.rpc("get_submission_for_student", { p_submission_id: data });
+        sInfo = (subData as any)?.submission;
+      }
+    } catch {}
+
+    // Fallback: If Supabase submission failed or exam is sample/local, grade locally!
+    if (!submissionId) {
+      submissionId = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const gradeResult = gradeExam(
+        {
+          partI: questions.filter((q) => q._part === 1 || q.type === "mc"),
+          partII: questions.filter((q) => q._part === 2 || q.type === "tf"),
+          partIII: questions.filter((q) => q._part === 3 || q.type === "sa"),
+        } as any,
+        answers,
+        exam?.scoring || DEFAULT_SCORING
+      );
+      sInfo = {
+        score: gradeResult.score,
+        max_score: gradeResult.maxScore,
+        correct_count: gradeResult.correct,
+        wrong_count: gradeResult.wrong,
+      };
     }
+
     if (doneKey) {
       try {
         localStorage.setItem(doneKey, "1");
@@ -381,15 +569,13 @@ export default function Take() {
       const durSecs = startedAtRef.current
         ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
         : null;
-      const { data: subData } = await supabase.rpc("get_submission_for_student", { p_submission_id: data });
-      const sInfo = (subData as any)?.submission;
       saveStudentSubmission({
-        id: data,
+        id: submissionId,
         examId: id!,
         examTitle: exam?.title || "Đề kiểm tra",
         studentAccount: account.trim() || student?.account || `${name.trim()}_${klass.trim()}`,
-        studentName: name.trim(),
-        studentClass: klass.trim(),
+        studentName: name.trim() || "Học sinh",
+        studentClass: klass.trim() || "Chung",
         score: sInfo?.score ?? 0,
         maxScore: sInfo?.max_score ?? 10,
         correctCount: sInfo?.correct_count ?? 0,
@@ -404,8 +590,23 @@ export default function Take() {
       console.error("Failed to link student submission:", e);
     }
 
-    await lock.exitFullscreen();
-    navigate(`/result/${data}`);
+    await lock.exitFullscreen().catch(() => {});
+    navigate(`/result/${submissionId}`, {
+      state: {
+        submission: {
+          id: submissionId,
+          student_name: name.trim() || "Học sinh",
+          student_class: klass.trim() || "Chung",
+          score: sInfo?.score ?? 0,
+          max_score: sInfo?.max_score ?? 10,
+          correct_count: sInfo?.correct_count ?? 0,
+          wrong_count: sInfo?.wrong_count ?? 0,
+          answers,
+          exam_id: id!,
+        },
+        exam,
+      },
+    });
   };
 
   const confirmSubmit = async () => {
@@ -760,6 +961,27 @@ export default function Take() {
     );
   }
 
+  // If exam has started but no questions are found
+  if (started && questions.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
+        <QuizBackground />
+        <Card className="p-8 max-w-md w-full text-center space-y-4 rounded-3xl border-2 shadow-2xl bg-card">
+          <div className="size-16 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto">
+            <AlertTriangle className="size-8" />
+          </div>
+          <h2 className="text-xl font-bold">Không tìm thấy câu hỏi</h2>
+          <p className="text-sm text-muted-foreground">
+            Đề thi này hiện chưa có nội dung câu hỏi hoặc chưa cập nhật. Vui lòng liên hệ giáo viên ra đề.
+          </p>
+          <Button asChild className="w-full rounded-xl font-bold">
+            <Link to="/student">Quay lại trang cá nhân</Link>
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
   // Current question data
   const q = questions[idx];
   const mins = Math.max(0, Math.floor(timeLeft / 60));
@@ -970,6 +1192,7 @@ export default function Take() {
 
   // RENDER DẠNG CÂU HỎI & PHƯƠNG ÁN (Dùng chung cho cả Chế độ từng câu và Chế độ toàn bộ)
   const renderQuestionCard = (currentQ: any, questionIndex: number, isSingleView: boolean = true) => {
+    if (!currentQ) return null;
     const isCurrentMarked = !!bookmarks[currentQ.id];
     const qFb = feedback[currentQ.id];
 

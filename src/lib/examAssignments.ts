@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { findSampleExam, getSampleExamByCode, getSampleExamById, SampleExamData } from "@/lib/sampleExams";
 
 export interface ExamAssignment {
   id: string;
@@ -452,6 +453,29 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
 
   const lookupCode = (extractedCode || raw).toUpperCase().trim();
 
+  // 1.5. Check built-in sample exams (TIN12-7A3K9, A1K8P2, etc.)
+  const sample = findSampleExam(lookupCode) || (targetExamId ? findSampleExam(targetExamId) : null);
+  if (sample) {
+    return {
+      success: true,
+      exam: sample,
+      assignment: {
+        id: `sample_${sample.id}`,
+        examId: sample.id,
+        code: sample.code,
+        className: targetClass || sample.className,
+        title: sample.title,
+        teacherName: sample.teacher_name,
+        schoolName: sample.school_name,
+        subjectName: sample.subject_name,
+        durationMinutes: sample.duration_minutes,
+        openAt: sample.open_at,
+        closeAt: sample.close_at,
+        createdAt: new Date().toISOString(),
+      },
+    };
+  }
+
   // 2. Check local assignments cache
   const localList = getLocalAssignments();
   const localFound = localList.find(
@@ -461,6 +485,16 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
   );
 
   if (localFound) {
+    // Check if it's a sample exam by ID or code
+    const sampleMatch = findSampleExam(localFound.code) || findSampleExam(localFound.examId);
+    if (sampleMatch) {
+      return {
+        success: true,
+        exam: sampleMatch,
+        assignment: localFound,
+      };
+    }
+
     try {
       // Use get_exam_for_student RPC (Security Definer) instead of direct table SELECT
       const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {

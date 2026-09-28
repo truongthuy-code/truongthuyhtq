@@ -140,11 +140,18 @@ export default function StudentDashboard() {
     if (!confirmExamModal?.exam) return;
     const { exam, code, assignment } = confirmExamModal;
     setConfirmExamModal(null);
-    let targetUrl = `/take/${exam.id}?code=${encodeURIComponent(code)}`;
+    let targetUrl = `/take/${exam.id}?code=${encodeURIComponent(code)}&autoStart=1`;
     if (assignment?.className) {
       targetUrl += `&targetClass=${encodeURIComponent(assignment.className)}`;
     }
-    navigate(targetUrl);
+    navigate(targetUrl, {
+      state: {
+        exam,
+        assignment,
+        code,
+        autoStart: true,
+      },
+    });
   };
 
   // Inspect submission & determine if exam is closed
@@ -682,9 +689,12 @@ export default function StudentDashboard() {
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Số câu hỏi:</span>
                   <span className="font-bold text-foreground">
-                    {(confirmExamModal.exam.questions?.partI?.length || 0) +
-                      (confirmExamModal.exam.questions?.partII?.length || 0) +
-                      (confirmExamModal.exam.questions?.partIII?.length || 0)}{" "}
+                    {(() => {
+                      const qs = confirmExamModal.exam.questions;
+                      if (!qs) return 0;
+                      if (Array.isArray(qs)) return qs.length;
+                      return (qs.partI?.length || 0) + (qs.partII?.length || 0) + (qs.partIII?.length || 0);
+                    })()}{" "}
                     câu
                   </span>
                 </div>

@@ -72,6 +72,24 @@ describe("Exam Assignment & Code Resolution", () => {
     expect(res.exam.id).toBe("81286e88-a211-4cae-80ad-91fa214ed64b");
   });
 
+  it("should resolve sample exam TIN12-7A3K9 with complete questions across Part I, II, III", async () => {
+    const res = await findAssignmentOrExamByCode("TIN12-7A3K9");
+    expect(res.success).toBe(true);
+    expect(res.exam).toBeDefined();
+    expect(res.exam.questions).toBeDefined();
+    expect(res.exam.questions.partI.length).toBeGreaterThan(0);
+    expect(res.exam.questions.partII.length).toBeGreaterThan(0);
+    expect(res.exam.questions.partIII.length).toBeGreaterThan(0);
+    expect(res.assignment?.className).toBe("12A1");
+  });
+
+  it("should resolve sample exam A1K8P2 with questions", async () => {
+    const res = await findAssignmentOrExamByCode("A1K8P2");
+    expect(res.success).toBe(true);
+    expect(res.exam).toBeDefined();
+    expect(res.exam.questions.partI.length).toBeGreaterThan(0);
+  });
+
   it("should return friendly error message if code not found and never throw permission denied", async () => {
     const res = await findAssignmentOrExamByCode("INVALID-CODE-999");
     expect(res.success).toBe(false);
