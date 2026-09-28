@@ -136,11 +136,16 @@ export default function StudentDashboard() {
         toast.warning(`Bài thi chưa đến thời gian mở${timeStr ? ` (Bắt đầu lúc: ${timeStr})` : ""}.`);
       }
 
+      const resolvedCode =
+        res.assignment?.code ||
+        (res.exam as any)?.primary_code ||
+        (val.includes("/") ? res.exam?.id : val.trim().toUpperCase());
+
       setConfirmExamModal({
         open: true,
         exam: res.exam,
         assignment: res.assignment,
-        code: val.toUpperCase(),
+        code: resolvedCode,
       });
     } catch (e: any) {
       toast.error("Lỗi kiểm tra mã bài thi: " + e.message);
@@ -383,10 +388,10 @@ export default function StudentDashboard() {
           <form onSubmit={handleOpenExam} className="flex flex-col sm:flex-row gap-3 items-stretch">
             <div className="relative flex-1">
               <Input
-                placeholder="Nhập mã bài thi (ví dụ: TIN12-7A3K9, A1K8P2)..."
+                placeholder="Nhập mã bài thi hoặc dán link bài thi..."
                 value={examInput}
-                onChange={(e) => setExamInput(e.target.value.toUpperCase())}
-                className="h-13 rounded-2xl text-base font-bold font-mono tracking-wider pl-4 border-2 uppercase bg-background"
+                onChange={(e) => setExamInput(e.target.value)}
+                className="h-13 rounded-2xl text-base font-bold font-mono tracking-wider pl-4 border-2 bg-background"
                 disabled={checkingCode}
               />
             </div>

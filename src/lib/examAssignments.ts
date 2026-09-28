@@ -601,6 +601,25 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
       }
     }
 
+    // Smart fallback: query all assign_code entries and match normalized code
+    if (!rowData && cleanCode) {
+      const { data: rows } = await supabase
+        .from("schools")
+        .select("name_key, name")
+        .like("name_key", "assign_code:%");
+
+      if (rows && rows.length > 0) {
+        for (const r of rows) {
+          const rawKey = r.name_key.replace(/^assign_code:/i, "").trim().toUpperCase();
+          const cleanKey = rawKey.replace(/[^A-Z0-9]/g, "");
+          if (cleanKey === cleanCode || rawKey === lookupCode) {
+            rowData = r.name;
+            break;
+          }
+        }
+      }
+    }
+
     if (rowData) {
       const parsed = JSON.parse(rowData);
       if (parsed?.examId) {
@@ -631,17 +650,23 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
           p_exam_id: parsed.examId,
         });
 
-        const examObj =
-          exData || {
-            id: parsed.examId,
-            title: parsed.title,
-            duration_minutes: parsed.durationMinutes || 45,
-            teacher_name: parsed.teacherName,
-            school_name: parsed.schoolName,
-            subject_name: parsed.subjectName,
-            open_at: parsed.openAt,
-            close_at: parsed.closeAt,
-          };
+        const examObj = exData
+          ? {
+              ...exData,
+              teacher_name: parsed.teacherName || exData.teacher_name,
+              school_name: parsed.schoolName || exData.school_name,
+              subject_name: parsed.subjectName || exData.subject_name,
+            }
+          : {
+              id: parsed.examId,
+              title: parsed.title,
+              duration_minutes: parsed.durationMinutes || 45,
+              teacher_name: parsed.teacherName,
+              school_name: parsed.schoolName,
+              subject_name: parsed.subjectName,
+              open_at: parsed.openAt,
+              close_at: parsed.closeAt,
+            };
 
         const assignmentObj: ExamAssignment = {
           id: parsed.id || `assign_${parsed.examId}`,

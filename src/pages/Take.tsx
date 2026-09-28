@@ -173,6 +173,14 @@ export default function Take() {
     return null;
   });
 
+  const currentExamId = useMemo(() => {
+    if (exam?.id) return exam.id;
+    if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim())) {
+      return id.trim();
+    }
+    return id || "";
+  }, [exam, id]);
+
   const [loading, setLoading] = useState<boolean>(() => {
     const fromState = (location.state as any)?.exam;
     if (fromState) return false;
@@ -181,7 +189,7 @@ export default function Take() {
       const sample = findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId);
       if (sample) return false;
     }
-    return true;
+    return !!id;
   });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [manualCodeInput, setManualCodeInput] = useState("");
@@ -211,7 +219,7 @@ export default function Take() {
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
   const instantFb = isQuiz && !!exam?.instant_feedback;
-  const storageKey = useMemo(() => (id && name && klass ? `take:${id}:${name}:${klass}` : ""), [id, name, klass]);
+  const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
 
   // Auto-fill from student account if logged in
@@ -261,66 +269,19 @@ export default function Take() {
         return;
       }
 
-      setLoading(true);
-      setErrorMsg(null);
-
-      // 1. If cleanId or codeParam matches a sample exam, use it directly
-      const sample =
-        (cleanId ? findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId) : null) ||
-        (codeParam ? findSampleExam(codeParam) || getSampleExamByCode(codeParam) : null);
-
-      if (sample) {
+      // If neither id nor code is provided (e.g. visiting /take directly)
+      if (!cleanId && !codeParam) {
         if (!cancelled) {
-          setExam(sample);
           setLoading(false);
           setErrorMsg(null);
         }
         return;
       }
 
-      // 2. Try findAssignmentOrExamByCode with codeParam if provided
-      if (codeParam) {
-        try {
-          const res = await findAssignmentOrExamByCode(codeParam);
-          if (res.success && res.exam) {
-            if ((res.exam as any)?.display_mode === "team") {
-              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
-              return;
-            }
-            if (!cancelled) {
-              setExam(res.exam);
-              setLoading(false);
-              setErrorMsg(null);
-            }
-            return;
-          }
-        } catch (e) {
-          console.warn("Error finding exam by codeParam:", e);
-        }
-      }
+      setLoading(true);
+      setErrorMsg(null);
 
-      // 3. Try findAssignmentOrExamByCode with cleanId (which can be UUID, code, or path token)
-      if (cleanId) {
-        try {
-          const res = await findAssignmentOrExamByCode(cleanId);
-          if (res.success && res.exam) {
-            if ((res.exam as any)?.display_mode === "team") {
-              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
-              return;
-            }
-            if (!cancelled) {
-              setExam(res.exam);
-              setLoading(false);
-              setErrorMsg(null);
-            }
-            return;
-          }
-        } catch (e) {
-          console.warn("Error finding exam by cleanId:", e);
-        }
-      }
-
-      // 4. If cleanId is UUID, try RPC get_exam_for_student
+      // 1. If cleanId is UUID, directly fetch via public security definer RPC
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanId)) {
         try {
           const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanId });
@@ -337,11 +298,47 @@ export default function Take() {
             return;
           }
         } catch (e) {
-          console.warn("RPC get_exam_for_student failed:", e);
+          console.warn("Direct RPC by cleanId failed:", e);
         }
       }
 
-      // 5. If not found, display clear message
+      // 2. Try findSampleExam with cleanId or codeParam
+      const sample =
+        (cleanId ? findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId) : null) ||
+        (codeParam ? findSampleExam(codeParam) || getSampleExamByCode(codeParam) : null);
+
+      if (sample) {
+        if (!cancelled) {
+          setExam(sample);
+          setLoading(false);
+          setErrorMsg(null);
+        }
+        return;
+      }
+
+      // 3. Try findAssignmentOrExamByCode with codeParam or cleanId
+      const targetQuery = codeParam || cleanId;
+      if (targetQuery) {
+        try {
+          const res = await findAssignmentOrExamByCode(targetQuery);
+          if (res.success && res.exam) {
+            if ((res.exam as any)?.display_mode === "team") {
+              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
+              return;
+            }
+            if (!cancelled) {
+              setExam(res.exam);
+              setLoading(false);
+              setErrorMsg(null);
+            }
+            return;
+          }
+        } catch (e) {
+          console.warn("Error finding exam by targetQuery:", e);
+        }
+      }
+
+      // 4. If all lookup steps fail, display clear error message
       if (!cancelled) {
         setLoading(false);
         setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc không tồn tại.");
@@ -397,17 +394,16 @@ export default function Take() {
       const s = liveRef.current;
       if (!s.started || submittedRef.current) return;
       if (s.doneKey && localStorage.getItem(s.doneKey)) return;
+      const examTargetId = currentExamId || id;
+      if (!examTargetId) return;
       submittedRef.current = true;
-      try {
-        if (s.doneKey) localStorage.setItem(s.doneKey, "1");
-      } catch {}
       try {
         if (s.storageKey) localStorage.removeItem(s.storageKey);
       } catch {}
       const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/rpc/submit_student_exam`;
       const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const body = JSON.stringify({
-        p_exam_id: id,
+        p_exam_id: examTargetId,
         p_student_name: s.name,
         p_student_class: s.klass,
         p_answers: s.answers,
@@ -434,10 +430,9 @@ export default function Take() {
     return () => {
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("beforeunload", onBeforeUnload);
-      flush();
     };
     // eslint-disable-next-line
-  }, [started, id]);
+  }, [started, currentExamId, id]);
 
   // Auto-start exam if requested from dashboard
   const autoStartRequested = useMemo(() => {
@@ -497,21 +492,17 @@ export default function Take() {
     setKlass(studentClass);
 
     const activeName = studentName || "Học sinh";
-    const key = `take:${id}:${activeName}:${studentClass}`;
-    if (localStorage.getItem(`${key}:done`)) {
-      toast.error("Lượt làm bài này đã được nộp (hoặc đã tự động nộp khi bạn thoát trang).");
-      return;
-    }
+    const key = `take:${currentExamId}:${activeName}:${studentClass}`;
 
     if (exam?.lock_mode?.enabled) {
       await lock.requestFullscreen().catch(() => {});
     }
 
-    // Khôi phục bài làm đang dở
+    // Khôi phục bài làm đang dở nếu có
     try {
       const raw =
         localStorage.getItem(key) ||
-        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${id}:${activeName}:${studentClass}`) : null);
+        (exam.display_mode === "quizizz" ? localStorage.getItem(`quizizz:${currentExamId}:${activeName}:${studentClass}`) : null);
       if (raw) {
         const saved = JSON.parse(raw);
         if (saved.questions?.length) {
@@ -617,7 +608,7 @@ export default function Take() {
 
     try {
       const { data, error } = await supabase.rpc("submit_student_exam", {
-        p_exam_id: id!,
+        p_exam_id: currentExamId,
         p_student_name: name || "Học sinh",
         p_student_class: klass || "Chung",
         p_answers: answers as any,
@@ -674,7 +665,7 @@ export default function Take() {
         : null;
       saveStudentSubmission({
         id: submissionId,
-        examId: id!,
+        examId: currentExamId,
         examTitle: exam?.title || "Đề kiểm tra",
         studentAccount: account.trim() || student?.account || `${name.trim()}_${klass.trim()}`,
         studentName: name.trim() || "Học sinh",
@@ -705,7 +696,7 @@ export default function Take() {
           correct_count: sInfo?.correct_count ?? 0,
           wrong_count: sInfo?.wrong_count ?? 0,
           answers,
-          exam_id: id!,
+          exam_id: currentExamId,
         },
         exam,
       },
@@ -859,50 +850,83 @@ export default function Take() {
     );
   }
 
-  // Màn hình lỗi: Không tìm thấy bài thi hoặc link không hợp lệ
+  const handleJoinInput = (inputVal: string) => {
+    const raw = (inputVal || "").trim();
+    if (!raw) {
+      toast.error("Vui lòng nhập mã bài thi hoặc dán link bài thi");
+      return;
+    }
+    // Check if it's a URL
+    const pathMatch = raw.match(/\/(?:take|exam)\/([^/?#\s]+)/i);
+    const codeMatch = raw.match(/[?&](?:code|join)=([^&#\s]+)/i);
+    if (pathMatch) {
+      const seg = decodeURIComponent(pathMatch[1]).trim();
+      if (codeMatch) {
+        navigate(`/take/${seg}?code=${codeMatch[1]}`);
+      } else {
+        navigate(`/take/${seg}`);
+      }
+      return;
+    }
+    if (codeMatch) {
+      navigate(`/take?code=${codeMatch[1]}`);
+      return;
+    }
+    navigate(`/take/${encodeURIComponent(raw)}`);
+  };
+
+  // Màn hình lỗi hoặc màn hình nhập mã khi vào trực tiếp /take
   if (!exam || errorMsg) {
+    const isDirectEntry = !errorMsg && !id;
+
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
         <QuizBackground />
         <Card className="p-8 sm:p-10 max-w-md w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur space-y-5 animate-slide-up">
-          <div className="size-20 rounded-3xl mx-auto grid place-items-center bg-destructive/10 text-destructive shadow-lg shadow-rose-200/50">
-            <AlertCircle className="size-10 text-destructive" />
+          <div
+            className={`size-20 rounded-3xl mx-auto grid place-items-center shadow-lg ${
+              isDirectEntry
+                ? "bg-primary/10 text-primary shadow-primary/20"
+                : "bg-destructive/10 text-destructive shadow-rose-200/50"
+            }`}
+          >
+            {isDirectEntry ? <Sparkles className="size-10 text-primary" /> : <AlertCircle className="size-10 text-destructive" />}
           </div>
           <div className="space-y-2">
-            <h1 className="text-2xl font-black text-foreground">Không tìm thấy bài thi</h1>
+            <h1 className="text-2xl font-black text-foreground">
+              {isDirectEntry ? "Tham gia bài thi Online" : "Không tìm thấy bài thi"}
+            </h1>
             <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-              {errorMsg || "Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại trong hệ thống."}
+              {errorMsg ||
+                (isDirectEntry
+                  ? "Vui lòng nhập mã bài thi hoặc dán liên kết do giáo viên cung cấp để bắt đầu làm bài."
+                  : "Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại trong hệ thống.")}
             </p>
           </div>
 
-          {/* Ô nhập lại mã trực tiếp ngay tại đây */}
+          {/* Ô nhập mã hoặc dán link */}
           <div className="space-y-3 pt-2 text-left">
             <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-              Nhập mã bài thi được cung cấp:
+              {isDirectEntry ? "Mã bài thi hoặc Link bài thi:" : "Nhập mã bài thi được cung cấp:"}
             </div>
             <div className="flex gap-2">
               <Input
-                placeholder="Ví dụ: TIN12-7A3K9"
+                placeholder="Ví dụ: TIN12-7A3K9 hoặc dán link..."
                 value={manualCodeInput}
-                onChange={(e) => setManualCodeInput(e.target.value.toUpperCase())}
-                className="h-12 rounded-xl text-base font-bold uppercase tracking-wider px-4 border-2"
+                onChange={(e) => setManualCodeInput(e.target.value)}
+                className="h-12 rounded-xl text-base font-bold tracking-wider px-4 border-2"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && manualCodeInput.trim()) {
-                    navigate(`/take/${manualCodeInput.trim()}`);
+                  if (e.key === "Enter") {
+                    handleJoinInput(manualCodeInput);
                   }
                 }}
+                autoFocus
               />
               <Button
-                onClick={() => {
-                  if (manualCodeInput.trim()) {
-                    navigate(`/take/${manualCodeInput.trim()}`);
-                  } else {
-                    toast.error("Vui lòng nhập mã bài thi");
-                  }
-                }}
+                onClick={() => handleJoinInput(manualCodeInput)}
                 className="h-12 px-5 rounded-xl font-bold bg-primary text-primary-foreground shrink-0 shadow-md"
               >
-                Tìm
+                {isDirectEntry ? "Vào thi" : "Tìm"}
               </Button>
             </div>
           </div>
@@ -1193,7 +1217,7 @@ export default function Take() {
     if (!instantFb || fb || !isAnswered(q) || checking) return;
     setChecking(true);
     const { data, error } = await supabase.rpc("check_question_answer", {
-      p_exam_id: id!,
+      p_exam_id: currentExamId,
       p_question_id: q.id,
       p_answer: (answers[q.id] ?? null) as any,
     } as any);

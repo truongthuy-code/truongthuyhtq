@@ -22,6 +22,7 @@ import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
 import { useAuth } from "@/hooks/useAuth";
 import QuickExamShareModal from "@/components/QuickExamShareModal";
+import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 
 const PAGE_SIZE = 10;
 
@@ -50,6 +51,7 @@ export default function Exams() {
     const { data: ex } = await q;
     const loadedExams = ex || [];
     setExams(loadedExams);
+    loadedExams.forEach((e: any) => syncExamAssignmentCodes(e).catch(() => {}));
 
     const examIds = loadedExams.map((e: any) => e.id);
     let subQ = supabase.from("submissions").select("exam_id,student_class");

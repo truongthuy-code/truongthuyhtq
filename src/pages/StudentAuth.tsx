@@ -253,11 +253,19 @@ export default function StudentAuth() {
           </TabsContent>
         </Tabs>
 
-        <div className="mt-6 pt-4 border-t text-center text-xs text-muted-foreground">
-          Bạn là Giáo viên?{" "}
-          <Link to="/auth" className="text-primary font-medium hover:underline">
-            Đăng nhập Giáo viên tại đây
-          </Link>
+        <div className="mt-5 pt-4 border-t space-y-3">
+          <Button asChild variant="outline" className="w-full rounded-xl border-2 border-dashed border-primary/50 hover:bg-primary/5 text-primary font-bold text-xs h-11">
+            <Link to="/take">
+              🎯 Vào thi trực tiếp bằng Mã hoặc Link (Không cần tài khoản)
+            </Link>
+          </Button>
+
+          <div className="text-center text-xs text-muted-foreground">
+            Bạn là Giáo viên?{" "}
+            <Link to="/auth" className="text-primary font-medium hover:underline">
+              Đăng nhập Giáo viên tại đây
+            </Link>
+          </div>
         </div>
       </Card>
     </div>

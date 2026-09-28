@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
+import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -42,6 +43,7 @@ export default function Index() {
       const { data: ex } = await q;
       const loadedExams = ex || [];
       setExams(loadedExams);
+      loadedExams.forEach((e: any) => syncExamAssignmentCodes(e).catch(() => {}));
 
       const examIds = loadedExams.map((e: any) => e.id);
 
