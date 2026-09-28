@@ -80,7 +80,7 @@ export default function Share() {
 
   if (!exam) return <div className="container py-20 text-center text-muted-foreground">Đang tải…</div>;
 
-  const mainUrl = getExamShareUrl(id!, primaryCode);
+  const mainUrl = `${window.location.origin}/take/${id}`;
   const lbUrl = `${window.location.origin}/leaderboard/${id}`;
   const isTeam = exam.display_mode === "team";
 

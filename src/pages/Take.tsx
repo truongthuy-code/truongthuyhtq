@@ -29,6 +29,7 @@ import {
   AlertCircle,
   RotateCcw,
   Eye,
+  UserCheck,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
@@ -166,7 +167,7 @@ export default function Take() {
     const fromState = (location.state as any)?.exam;
     if (fromState) return fromState;
     if (id) {
-      const cleanId = id.trim();
+      const cleanId = decodeURIComponent(id).trim();
       const sample = findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId);
       if (sample) return sample;
     }
@@ -175,21 +176,27 @@ export default function Take() {
 
   const currentExamId = useMemo(() => {
     if (exam?.id) return exam.id;
-    if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim())) {
+    if (id) {
+      const uuidMatch = id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (uuidMatch) return uuidMatch[0];
       return id.trim();
     }
-    return id || "";
+    return "";
   }, [exam, id]);
 
   const [loading, setLoading] = useState<boolean>(() => {
     const fromState = (location.state as any)?.exam;
     if (fromState) return false;
-    if (id) {
-      const cleanId = id.trim();
-      const sample = findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId);
+    const rawParam = decodeURIComponent(id || "").trim();
+    if (rawParam) {
+      const sample = findSampleExam(rawParam) || getSampleExamById(rawParam) || getSampleExamByCode(rawParam);
       if (sample) return false;
+      return true;
     }
-    return !!id;
+    const searchParams = new URLSearchParams(location.search || window.location.search);
+    const codeParam = (searchParams.get("code") || searchParams.get("join") || "").trim();
+    if (codeParam) return true;
+    return false;
   });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [manualCodeInput, setManualCodeInput] = useState("");
@@ -250,18 +257,14 @@ export default function Take() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const cleanId = (id || "").trim();
-      const searchParams = new URLSearchParams(window.location.search);
-      const codeParam = (searchParams.get("code") || "").trim();
+      const rawParam = decodeURIComponent(id || "").trim();
+      const uuidMatch = rawParam.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      const cleanUuid = uuidMatch ? uuidMatch[0] : "";
+      const searchParams = new URLSearchParams(location.search || window.location.search);
+      const codeParam = (searchParams.get("code") || searchParams.get("join") || "").trim();
 
-      // If we already have the exam with valid questions, don't show loading
-      if (
-        exam &&
-        (exam.questions?.partI?.length ||
-          exam.questions?.partII?.length ||
-          exam.questions?.partIII?.length ||
-          (Array.isArray(exam.questions) && exam.questions.length > 0))
-      ) {
+      // If we already have the exam loaded with the same UUID or code, do not re-fetch
+      if (exam && cleanUuid && exam.id === cleanUuid) {
         if (!cancelled) {
           setLoading(false);
           setErrorMsg(null);
@@ -269,8 +272,8 @@ export default function Take() {
         return;
       }
 
-      // If neither id nor code is provided (e.g. visiting /take directly)
-      if (!cleanId && !codeParam) {
+      // If neither id nor code is provided (e.g. visiting /take or /join directly)
+      if (!rawParam && !codeParam) {
         if (!cancelled) {
           setLoading(false);
           setErrorMsg(null);
@@ -281,13 +284,15 @@ export default function Take() {
       setLoading(true);
       setErrorMsg(null);
 
-      // 1. If cleanId is UUID, directly fetch via public security definer RPC
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanId)) {
+      // CÁCH 1 — HỌC SINH MỞ LINK:
+      // Link -> Lấy examId (UUID) từ URL -> Gọi RPC get_exam_for_student -> Hiển thị bài thi.
+      // Cơ chế này độc lập, chuẩn xác, hoạt động cho cả đề cũ (chưa có mã) lẫn đề mới.
+      if (cleanUuid) {
         try {
-          const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanId });
+          const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanUuid });
           if (!error && data) {
             if ((data as any)?.display_mode === "team") {
-              navigate(`/team/${cleanId}`, { replace: true });
+              navigate(`/team/${cleanUuid}`, { replace: true });
               return;
             }
             if (!cancelled) {
@@ -298,13 +303,14 @@ export default function Take() {
             return;
           }
         } catch (e) {
-          console.warn("Direct RPC by cleanId failed:", e);
+          console.warn("Direct RPC by cleanUuid failed:", e);
         }
       }
 
-      // 2. Try findSampleExam with cleanId or codeParam
+      // 2. Kiểm tra danh mục đề mẫu (nếu mở đề mẫu thử nghiệm)
       const sample =
-        (cleanId ? findSampleExam(cleanId) || getSampleExamById(cleanId) || getSampleExamByCode(cleanId) : null) ||
+        (rawParam ? findSampleExam(rawParam) || getSampleExamById(rawParam) || getSampleExamByCode(rawParam) : null) ||
+        (cleanUuid ? findSampleExam(cleanUuid) || getSampleExamById(cleanUuid) : null) ||
         (codeParam ? findSampleExam(codeParam) || getSampleExamByCode(codeParam) : null);
 
       if (sample) {
@@ -316,14 +322,15 @@ export default function Take() {
         return;
       }
 
-      // 3. Try findAssignmentOrExamByCode with codeParam or cleanId
-      const targetQuery = codeParam || cleanId;
+      // CÁCH 2 — HỌC SINH NHẬP HOẶC DÙNG MÃ BÀI THI:
+      // Mã bài thi -> Tìm bài thi theo examCode -> Lấy examId -> Hiển thị bài thi.
+      const targetQuery = codeParam || rawParam;
       if (targetQuery) {
         try {
           const res = await findAssignmentOrExamByCode(targetQuery);
           if (res.success && res.exam) {
             if ((res.exam as any)?.display_mode === "team") {
-              navigate(`/team/${res.exam.id || cleanId}`, { replace: true });
+              navigate(`/team/${res.exam.id || cleanUuid || rawParam}`, { replace: true });
               return;
             }
             if (!cancelled) {
@@ -338,10 +345,10 @@ export default function Take() {
         }
       }
 
-      // 4. If all lookup steps fail, display clear error message
+      // 4. Nếu không tìm thấy bằng cả 2 cách
       if (!cancelled) {
         setLoading(false);
-        setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc không tồn tại.");
+        setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại.");
       }
     })();
 

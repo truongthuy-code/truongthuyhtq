@@ -73,7 +73,7 @@ export default function QuickExamShareModal({
 
   if (!exam) return null;
 
-  const mainUrl = getExamShareUrl(exam.id, primaryCode);
+  const mainUrl = `${window.location.origin}/take/${exam.id}`;
 
   const copyCode = (code: string) => {
     navigator.clipboard.writeText(code);
