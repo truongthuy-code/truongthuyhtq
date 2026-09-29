@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import {
   FileText, Users, BarChart3, Upload, Copy, Download, Share2, Trash2, FileDown,
   Settings, Plus, GraduationCap, ClipboardCheck, ShieldAlert, Activity, Star, Search,
-  Lock, Unlock, CalendarClock, Trophy, Music,
+  Lock, Unlock, CalendarClock, Trophy, Music, Bot,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -224,6 +224,12 @@ export default function Index() {
             </div>
             <Button asChild variant="outline" className="rounded-xl">
               <a href="/de-mau.docx" download><FileDown className="size-4 mr-1" /> Đề mẫu</a>
+            </Button>
+            <Button
+              asChild
+              className="rounded-xl text-white shadow-soft bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700"
+            >
+              <Link to="/ai-assistant"><Bot className="size-4 mr-1.5" /> Trợ lý AI</Link>
             </Button>
             <Button
               asChild

@@ -42,6 +42,8 @@ import {
   Loader2,
   AlertTriangle,
   UserCheck,
+  Bot,
+  ArrowRight,
 } from "lucide-react";
 
 export default function StudentDashboard() {
@@ -289,8 +291,17 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:block text-right">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Button
+              asChild
+              size="sm"
+              className="rounded-xl gap-1.5 text-xs bg-gradient-to-r from-violet-600 to-indigo-600 text-white hover:from-violet-700 hover:to-indigo-700 shadow-sm font-semibold"
+            >
+              <Link to="/student/assistant">
+                <Bot className="size-3.5 animate-bounce" /> 🤖 Trợ lý học tập AI
+              </Link>
+            </Button>
+            <div className="hidden md:block text-right">
               <div className="text-sm font-semibold">{student.fullName}</div>
               <div className="text-[11px] text-muted-foreground">
                 Lớp {student.className} • Tài khoản: {student.account}
@@ -367,6 +378,32 @@ export default function StudentDashboard() {
             </div>
           </Card>
         </div>
+
+        {/* AI LEARNING ASSISTANT HERO CARD */}
+        <Card className="p-5 sm:p-6 rounded-3xl shadow-lg border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/80 via-white to-violet-50/80 relative overflow-hidden">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1.5 max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold">
+                <Bot className="size-3.5" /> GIA SƯ HỌC TẬP AI
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-slate-800">
+                Ôn luyện cùng Trợ lý Học tập AI
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Học lý thuyết tóm tắt, làm kiểm tra nhanh 3–5 câu, luyện tập trắc nghiệm 10/20 câu và được Gia sư AI hướng dẫn chi tiết theo đúng tài liệu giáo viên giảng dạy.
+              </p>
+            </div>
+            <Button
+              asChild
+              className="h-12 px-6 rounded-2xl font-bold text-sm bg-gradient-to-r from-violet-600 via-indigo-600 to-sky-600 text-white shadow-md gap-2 shrink-0 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            >
+              <Link to="/student/assistant">
+                <span>Vào Trợ lý AI</span>
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </div>
+        </Card>
 
         {/* THAM GIA BÀI THI: NHẬP MÃ BÀI THI & QUÉT MÃ QR */}
         <Card className="p-5 sm:p-7 rounded-3xl shadow-xl border-2 border-primary/40 bg-card relative overflow-hidden">

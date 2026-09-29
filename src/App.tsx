@@ -25,6 +25,8 @@ import TeamLeaderboard from "./pages/TeamLeaderboard.tsx";
 import StudentAuth from "./pages/StudentAuth.tsx";
 import StudentDashboard from "./pages/StudentDashboard.tsx";
 import AdminDashboard from "./pages/AdminDashboard.tsx";
+import AiLearningAssistantTeacher from "./pages/AiLearningAssistantTeacher.tsx";
+import AiLearningAssistantStudent from "./pages/AiLearningAssistantStudent.tsx";
 
 const queryClient = new QueryClient();
 
@@ -40,6 +42,8 @@ const App = () => (
             {/* public student routes */}
             <Route path="/student" element={<StudentDashboard />} />
             <Route path="/student/auth" element={<StudentAuth />} />
+            <Route path="/student/assistant" element={<AiLearningAssistantStudent />} />
+            <Route path="/assistant" element={<AiLearningAssistantStudent />} />
             <Route path="/take" element={<Take />} />
             <Route path="/take/:id" element={<Take />} />
             <Route path="/exam/:id" element={<Take />} />
@@ -54,6 +58,7 @@ const App = () => (
             <Route path="/admin/*" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
             {/* teacher routes */}
             <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+            <Route path="/ai-assistant" element={<ProtectedRoute><AiLearningAssistantTeacher /></ProtectedRoute>} />
             <Route path="/teacher" element={<ProtectedRoute><Teacher /></ProtectedRoute>} />
             <Route path="/exams" element={<ProtectedRoute><Exams /></ProtectedRoute>} />
             <Route path="/library" element={<ProtectedRoute><Library /></ProtectedRoute>} />

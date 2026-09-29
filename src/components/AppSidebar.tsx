@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { GraduationCap, LayoutDashboard, FileText, Users, BarChart3, BookOpen, FolderTree, Shuffle, ShieldCheck } from "lucide-react";
+import { GraduationCap, LayoutDashboard, FileText, Users, BarChart3, BookOpen, FolderTree, Shuffle, ShieldCheck, Bot } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter, useSidebar,
@@ -9,6 +9,7 @@ import { UserAvatarMenu } from "./UserAvatarMenu";
 
 const items = [
   { title: "Trang chủ", url: "/", icon: LayoutDashboard },
+  { title: "🤖 Trợ lý học tập AI", url: "/ai-assistant", icon: Bot },
   { title: "Kho đề thi (Tree)", url: "/library", icon: FolderTree },
   { title: "Quản lý môn học", url: "/subjects", icon: BookOpen },
   { title: "Danh sách đề thi", url: "/exams", icon: FileText },
