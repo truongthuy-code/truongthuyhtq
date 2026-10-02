@@ -108,4 +108,81 @@ describe("Exam Assignment & Code Resolution", () => {
     expect(res.error).not.toContain("permission denied");
     expect(res.error).toBe("Mã bài thi không hợp lệ hoặc không tồn tại.");
   });
+
+  it("should generate strictly 6-digit numeric exam codes without letters or symbols", async () => {
+    const { generateNumericExamCode, generateUniqueNumericExamCode } = await import("@/lib/examAssignments");
+    for (let i = 0; i < 50; i++) {
+      const code = generateNumericExamCode();
+      expect(code).toMatch(/^\d{6}$/);
+      expect(code.length).toBe(6);
+      expect(/^[0-9]{6}$/.test(code)).toBe(true);
+      expect(/[a-zA-Z]/.test(code)).toBe(false);
+    }
+
+    const uniqueCode = await generateUniqueNumericExamCode();
+    expect(uniqueCode).toMatch(/^\d{6}$/);
+    expect(uniqueCode.length).toBe(6);
+  });
+
+  it("should generate distinct unique codes and avoid collisions", async () => {
+    const { generateUniqueNumericExamCode } = await import("@/lib/examAssignments");
+    const codeSet = new Set<string>();
+    for (let i = 0; i < 20; i++) {
+      const code = await generateUniqueNumericExamCode();
+      expect(code).toMatch(/^\d{6}$/);
+      codeSet.add(code);
+    }
+    // High probability of 20 unique codes in 1,000,000 space
+    expect(codeSet.size).toBe(20);
+  });
+
+  it("should resolve 6-digit numeric code with leading zero (e.g. 012345)", async () => {
+    const fakeAssignment = {
+      id: "assign_test_leading_zero",
+      examId: "99999999-0000-4000-8000-000000000001",
+      code: "012345", // Leading zero preserved as string
+      className: "12A2",
+      title: "Bài kiểm tra Toán học 12",
+      teacherName: "Trương Thị Bích Thủy",
+      schoolName: "THPT Phan Bội Châu",
+      subjectName: "Toán",
+      durationMinutes: 45,
+      openAt: null,
+      closeAt: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    saveLocalAssignments([fakeAssignment]);
+
+    const res = await findAssignmentOrExamByCode("012345");
+    expect(res.success).toBe(true);
+    expect(res.exam.id).toBe("99999999-0000-4000-8000-000000000001");
+    expect(res.assignment?.code).toBe("012345");
+    expect(res.assignment?.code.startsWith("0")).toBe(true);
+  });
+
+  it("should resolve standard 6-digit numeric code (e.g. 583214)", async () => {
+    const fakeAssignment = {
+      id: "assign_test_numeric",
+      examId: "88888888-0000-4000-8000-000000000002",
+      code: "583214",
+      className: "11B1",
+      title: "Bài kiểm tra Tin học 11",
+      teacherName: "Trương Thị Bích Thủy",
+      schoolName: "THPT Phan Bội Châu",
+      subjectName: "Tin học",
+      durationMinutes: 30,
+      openAt: null,
+      closeAt: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    saveLocalAssignments([fakeAssignment]);
+
+    // Student enters "583214"
+    const res = await findAssignmentOrExamByCode("583214");
+    expect(res.success).toBe(true);
+    expect(res.exam.id).toBe("88888888-0000-4000-8000-000000000002");
+    expect(res.assignment?.code).toBe("583214");
+  });
 });

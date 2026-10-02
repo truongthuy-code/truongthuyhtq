@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
-import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import { syncExamAssignmentCodes, getExamPrimaryCode } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 
 type Stats = {
@@ -317,7 +317,28 @@ export default function Index() {
                 {isAdmin && e.created_by && e.created_by !== user?.id && (
                   <div className="text-[10px] mt-2 px-1.5 py-0.5 rounded bg-muted inline-block w-fit">GV khác</div>
                 )}
-                <div className="mt-4 grid grid-cols-2 gap-2">
+
+                {/* Mã bài thi & Nút Sao chép mã */}
+                <div className="mt-3 flex items-center justify-between p-2.5 rounded-xl bg-primary/5 border border-primary/20">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-bold text-muted-foreground uppercase">Mã bài thi:</span>
+                    <span className="font-mono text-base font-black text-primary tracking-widest">{getExamPrimaryCode(e)}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2.5 text-xs font-bold text-primary hover:bg-primary/10 gap-1 shrink-0"
+                    onClick={() => {
+                      const c = getExamPrimaryCode(e);
+                      navigator.clipboard.writeText(c);
+                      toast.success(`Đã sao chép mã bài thi: ${c}`);
+                    }}
+                  >
+                    <Copy className="size-3.5" /> Sao chép mã
+                  </Button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   {e.display_mode === "team" && (
                     <Button
                       size="sm"

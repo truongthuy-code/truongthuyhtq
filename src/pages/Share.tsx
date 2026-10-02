@@ -282,17 +282,22 @@ export default function Share() {
             {/* Code & Actions */}
             <div className="flex-1 w-full space-y-4">
               <div>
-                <Label className="text-xs text-muted-foreground uppercase font-bold tracking-wider">
-                  Mã bài thi (Chính):
-                </Label>
+                <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                  <Label className="text-xs text-muted-foreground uppercase font-black tracking-wider">
+                    Mã bài thi:
+                  </Label>
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                    Mã 6 chữ số để học sinh nhập vào làm bài
+                  </span>
+                </div>
                 <div className="flex items-center gap-2 mt-1">
-                  <div className="px-4 py-2.5 rounded-xl bg-card border-2 font-mono text-2xl sm:text-3xl font-black text-primary tracking-widest flex-1 text-center sm:text-left select-all">
+                  <div className="px-4 py-3 rounded-2xl bg-card border-2 border-primary/30 font-mono text-3xl sm:text-4xl font-black text-primary tracking-widest flex-1 text-center select-all shadow-inner">
                     {primaryCode}
                   </div>
                   <Button
                     onClick={() => copyCode(primaryCode)}
                     size="sm"
-                    className="h-12 px-4 rounded-xl font-bold bg-primary text-primary-foreground gap-1.5 shrink-0"
+                    className="h-14 px-5 rounded-2xl font-black text-sm bg-gradient-to-r from-primary to-sky-600 hover:from-primary/90 hover:to-sky-600/90 text-white gap-2 shrink-0 shadow-md active:scale-[0.98] transition-all"
                   >
                     <Copy className="size-4" /> Sao chép mã
                   </Button>

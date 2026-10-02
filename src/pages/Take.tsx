@@ -674,7 +674,7 @@ export default function Take() {
         id: submissionId,
         examId: currentExamId,
         examTitle: exam?.title || "Đề kiểm tra",
-        studentAccount: account.trim() || student?.account || `${name.trim()}_${klass.trim()}`,
+        studentAccount: student?.account || account.trim() || `${name.trim()}_${klass.trim()}`,
         studentName: name.trim() || "Học sinh",
         studentClass: klass.trim() || "Chung",
         score: sInfo?.score ?? 0,
@@ -918,10 +918,23 @@ export default function Take() {
             </div>
             <div className="flex gap-2">
               <Input
-                placeholder="Ví dụ: TIN12-7A3K9 hoặc dán link..."
+                placeholder="Nhập mã bài thi (6 chữ số) hoặc dán link..."
                 value={manualCodeInput}
-                onChange={(e) => setManualCodeInput(e.target.value)}
-                className="h-12 rounded-xl text-base font-bold tracking-wider px-4 border-2"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.includes("http://") || val.includes("https://") || val.includes("/")) {
+                    setManualCodeInput(val.trim());
+                  } else if (/[a-zA-Z]/.test(val) && val.length > 5 && val.includes("-")) {
+                    setManualCodeInput(val.trim().toUpperCase());
+                  } else {
+                    const onlyNums = val.replace(/\D/g, "").slice(0, 6);
+                    setManualCodeInput(onlyNums);
+                  }
+                }}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={100}
+                className="h-12 rounded-xl text-base font-bold font-mono tracking-widest px-4 border-2 placeholder:font-normal placeholder:tracking-normal placeholder:text-sm"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     handleJoinInput(manualCodeInput);

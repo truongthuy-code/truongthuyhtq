@@ -225,17 +225,22 @@ export default function QuickExamShareModal({
               {/* Code & Links */}
               <div className="flex-1 w-full space-y-3">
                 <div>
-                  <Label className="text-[11px] text-muted-foreground uppercase font-bold tracking-wider">
-                    Mã bài thi:
-                  </Label>
+                  <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
+                    <Label className="text-[11px] text-muted-foreground uppercase font-black tracking-wider">
+                      Mã bài thi:
+                    </Label>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                      Mã 6 chữ số
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2 mt-1">
-                    <div className="px-3 py-2 rounded-xl bg-card border-2 font-mono text-2xl font-black text-primary tracking-widest flex-1 text-center sm:text-left select-all">
+                    <div className="px-3.5 py-2.5 rounded-xl bg-card border-2 border-primary/30 font-mono text-2xl sm:text-3xl font-black text-primary tracking-widest flex-1 text-center select-all shadow-inner">
                       {primaryCode}
                     </div>
                     <Button
                       onClick={() => copyCode(primaryCode)}
                       size="sm"
-                      className="h-11 px-3.5 rounded-xl font-bold bg-primary text-primary-foreground gap-1.5 shrink-0 text-xs"
+                      className="h-11 px-4 rounded-xl font-black bg-primary text-primary-foreground gap-1.5 shrink-0 text-xs shadow-md"
                     >
                       <Copy className="size-3.5" /> Sao chép mã
                     </Button>

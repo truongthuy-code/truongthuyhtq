@@ -22,7 +22,13 @@ import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
-import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import {
+  syncExamAssignmentCodes,
+  generateUniqueNumericExamCode,
+  saveLocalAssignments,
+  getLocalAssignments,
+  ExamAssignment,
+} from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 
@@ -210,6 +216,13 @@ export default function Teacher() {
       }
     }
 
+    // Auto-generate a strictly unique 6-digit numeric exam code (digits 0-9 only, e.g. "583214")
+    const examCode = await generateUniqueNumericExamCode();
+    const finalTeamConfig = {
+      ...(teamConfig || {}),
+      primary_code: examCode,
+    };
+
     const { data, error } = await withSupabaseAuthRetry(async (uid) => {
       const targetCreatedBy = isUuid(uid)
         ? uid
@@ -230,7 +243,7 @@ export default function Teacher() {
           allow_review: allowReview,
           display_mode: displayMode,
           instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
-          team_config: teamConfig as any,
+          team_config: finalTeamConfig as any,
           lock_mode: lockMode as any,
           open_at: schedule.open_at,
           close_at: schedule.close_at,
@@ -253,6 +266,24 @@ export default function Teacher() {
       return;
     }
 
+    // Cache primary assignment locally for instant resolution
+    const primaryAssign: ExamAssignment = {
+      id: `primary_${data.id}`,
+      examId: data.id,
+      code: examCode,
+      className: "Chung",
+      title,
+      teacherName: profile?.full_name || "Giáo viên",
+      schoolName: profile?.school_name || "",
+      subjectName: profile?.subject_name || "",
+      durationMinutes: duration,
+      openAt: schedule.open_at,
+      closeAt: schedule.close_at,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser?.id,
+    };
+    saveLocalAssignments([primaryAssign, ...getLocalAssignments().filter((a) => a.examId !== data.id)]);
+
     // Sync assignment codes immediately for students to join via code/link
     syncExamAssignmentCodes({
       id: data.id,
@@ -263,7 +294,7 @@ export default function Teacher() {
       subject_name: profile?.subject_name || "",
       open_at: schedule.open_at,
       close_at: schedule.close_at,
-      team_config: teamConfig as any,
+      team_config: finalTeamConfig as any,
     }).catch(() => {});
 
     navigate(`/exam/${data.id}/share`);

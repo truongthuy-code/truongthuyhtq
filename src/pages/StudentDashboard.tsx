@@ -425,10 +425,26 @@ export default function StudentDashboard() {
           <form onSubmit={handleOpenExam} className="flex flex-col sm:flex-row gap-3 items-stretch">
             <div className="relative flex-1">
               <Input
-                placeholder="Nhập mã bài thi hoặc dán link bài thi..."
+                placeholder="Nhập mã bài thi (gồm 6 chữ số, ví dụ: 583214) hoặc dán link..."
                 value={examInput}
-                onChange={(e) => setExamInput(e.target.value)}
-                className="h-13 rounded-2xl text-base font-bold font-mono tracking-wider pl-4 border-2 bg-background"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // If user pasted a URL, keep it
+                  if (val.includes("http://") || val.includes("https://") || val.includes("/")) {
+                    setExamInput(val.trim());
+                  } else if (/[a-zA-Z]/.test(val) && val.length > 5 && val.includes("-")) {
+                    // Legacy code paste support (e.g. TIN12-7A3K9)
+                    setExamInput(val.trim().toUpperCase());
+                  } else {
+                    // Only numbers 0-9 allowed, max 6 digits, preserves leading 0 (e.g. 012345)
+                    const onlyNums = val.replace(/\D/g, "").slice(0, 6);
+                    setExamInput(onlyNums);
+                  }
+                }}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={100}
+                className="h-13 rounded-2xl text-base font-bold font-mono tracking-widest pl-4 border-2 bg-background placeholder:font-normal placeholder:tracking-normal placeholder:text-sm"
                 disabled={checkingCode}
               />
             </div>

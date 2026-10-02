@@ -22,7 +22,11 @@ import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
 import { useAuth } from "@/hooks/useAuth";
 import QuickExamShareModal from "@/components/QuickExamShareModal";
-import { syncExamAssignmentCodes } from "@/lib/examAssignments";
+import {
+  syncExamAssignmentCodes,
+  getExamPrimaryCode,
+  generateUniqueNumericExamCode,
+} from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 
@@ -165,6 +169,12 @@ export default function Exams() {
       };
     }
 
+    const newExamCode = await generateUniqueNumericExamCode();
+    const finalTeamConfigWithCode = {
+      ...(finalTeamConfig || {}),
+      primary_code: newExamCode,
+    };
+
     const { error } = await withSupabaseAuthRetry(async (uid) => {
       const createdByUuid = isUuid(uid)
         ? uid
@@ -172,7 +182,7 @@ export default function Exams() {
 
       return await supabase.from("exams").insert({
         ...rest,
-        team_config: finalTeamConfig,
+        team_config: finalTeamConfigWithCode,
         title: `${exam.title} (Bản sao)`,
         created_by: createdByUuid,
       } as any);
@@ -327,7 +337,27 @@ export default function Exams() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-2">
+                {/* Mã bài thi & Nút Sao chép mã */}
+                <div className="mt-3 flex items-center justify-between p-2.5 rounded-xl bg-primary/5 border border-primary/20">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-bold text-muted-foreground uppercase">Mã bài thi:</span>
+                    <span className="font-mono text-base font-black text-primary tracking-widest">{getExamPrimaryCode(e)}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2.5 text-xs font-bold text-primary hover:bg-primary/10 gap-1 shrink-0"
+                    onClick={() => {
+                      const c = getExamPrimaryCode(e);
+                      navigator.clipboard.writeText(c);
+                      toast.success(`Đã sao chép mã bài thi: ${c}`);
+                    }}
+                  >
+                    <Copy className="size-3.5" /> Sao chép mã
+                  </Button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   {/* NÚT TẠO LINK LÀM BÀI & MÃ QR NỔI BẬT */}
                   <Button
                     size="sm"

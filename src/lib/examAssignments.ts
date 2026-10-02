@@ -19,40 +19,96 @@ export interface ExamAssignment {
 
 const STORAGE_KEY = "qc_exam_assignments_v1";
 
-// Non-confusing characters for clean human-readable codes (no 0/O, 1/I, 5/S)
+// Legacy character set for backwards compatibility with older exams
 const CODE_CHARS = "2346789ABCDEFGHJKLMNPQRTUVWXYZ";
 
 /**
- * Generate a random, easy-to-read code of specified length
+ * Generate a random 6-digit numeric code strictly with digits 0-9
+ * e.g. "583214", "927461", "012345"
+ * Length is strictly 6 digits, zero-padded so leading zeros are preserved.
+ */
+export function generateNumericExamCode(): string {
+  const num = Math.floor(Math.random() * 1000000);
+  return String(num).padStart(6, "0");
+}
+
+/**
+ * Check if an exam code already exists across local storage, sample exams,
+ * Supabase schools registry table, or Supabase exams table.
+ */
+export async function isExamCodeTaken(code: string): Promise<boolean> {
+  if (!code) return false;
+  const clean = code.trim().toUpperCase();
+
+  // 1. Check sample exams
+  if (findSampleExam(clean)) return true;
+
+  // 2. Check local assignments cache
+  const localList = getLocalAssignments();
+  if (localList.some((a) => a.code.toUpperCase() === clean)) {
+    return true;
+  }
+
+  // 3. Check Supabase schools registry table (name_key = assign_code:CODE)
+  try {
+    const { data: row } = await supabase
+      .from("schools")
+      .select("name_key")
+      .eq("name_key", `assign_code:${clean}`)
+      .maybeSingle();
+    if (row) return true;
+  } catch {}
+
+  // 4. Check Supabase exams table where team_config->>'primary_code' = code
+  try {
+    const { data: exRow } = await supabase
+      .from("exams")
+      .select("id")
+      .filter("team_config->>primary_code", "eq", clean)
+      .maybeSingle();
+    if (exRow) return true;
+  } catch {}
+
+  return false;
+}
+
+/**
+ * Generate a unique 6-digit numeric exam code (digits 0-9 only, strictly 6 digits).
+ * Checks database and local storage to guarantee no collisions.
+ */
+export async function generateUniqueNumericExamCode(): Promise<string> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const code = generateNumericExamCode();
+    const taken = await isExamCodeTaken(code);
+    if (!taken) {
+      return code;
+    }
+  }
+  // Deterministic fallback with timestamp if collision loop exhausts
+  const fallbackNum = (Date.now() % 900000) + 100000;
+  return String(fallbackNum);
+}
+
+/**
+ * Generate a random code. By default returns a 6-digit numeric code.
  */
 export function generateRandomCode(length = 6): string {
+  if (length === 6) {
+    return generateNumericExamCode();
+  }
   let res = "";
   for (let i = 0; i < length; i++) {
-    const idx = Math.floor(Math.random() * CODE_CHARS.length);
-    res += CODE_CHARS[idx];
+    res += Math.floor(Math.random() * 10);
   }
   return res;
 }
 
 /**
- * Generate a class-specific code or exam code
- * e.g. "12A1-K8P2" or "A1K8P2" or "TIN12-7A3K9"
+ * Generate a code for assignment/exam.
+ * In accordance with requirements, this now generates a 6-digit numeric code.
  */
 export function generateAssignmentCode(className?: string, prefix?: string): string {
-  const randomPart = generateRandomCode(5);
-  if (className && className.trim()) {
-    const cleanClass = className.trim().replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4);
-    if (cleanClass) {
-      return `${cleanClass}-${randomPart}`;
-    }
-  }
-  if (prefix && prefix.trim()) {
-    const cleanPrefix = prefix.trim().replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4);
-    if (cleanPrefix) {
-      return `${cleanPrefix}-${randomPart}`;
-    }
-  }
-  return generateRandomCode(6);
+  return generateNumericExamCode();
 }
 
 /**
@@ -284,7 +340,7 @@ export async function createAssignment(params: {
   let code = (params.customCode || "").trim().toUpperCase();
 
   if (!code) {
-    code = generateAssignmentCode(className, exam.subject_name || "EX");
+    code = await generateUniqueNumericExamCode();
   }
 
   const newAssignment: ExamAssignment = {

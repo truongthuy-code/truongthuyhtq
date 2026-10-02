@@ -194,6 +194,231 @@ function fallbackPracticeQuiz(materialText: string, subject: string, grade: stri
   return questions;
 }
 
+function heuristicSplitMultiLessonDocument(
+  text: string,
+  subject: string,
+  grade: string,
+  topicContext?: string,
+  title?: string
+) {
+  // 1. Check if text matches multi-lesson patterns (Bài 1, Bài 2, Tiết 1, Chương 1, etc.)
+  const lessonRegex = /(?:^|\n)\s*(?:Bài|BAI|Tiết|TIET|Chương|CHUONG|Phần|PHAN)\s*([0-9IVX]+)[\s:.\-–—]+([^\n]+)/gi;
+  const matches: { index: number; fullMatch: string; num: string; title: string }[] = [];
+  let m: RegExpExecArray | null;
+
+  while ((m = lessonRegex.exec(text)) !== null) {
+    matches.push({
+      index: m.index,
+      fullMatch: m[0],
+      num: m[1],
+      title: m[2].trim(),
+    });
+  }
+
+  // If we have >= 2 distinct lessons detected
+  if (matches.length >= 2) {
+    const lessons = [];
+    for (let i = 0; i < matches.length; i++) {
+      const start = matches[i].index;
+      const end = i < matches.length - 1 ? matches[i + 1].index : text.length;
+      const sliceContent = text.slice(start, end).trim();
+      const rawTitle = matches[i].title;
+      const lessonTitle = rawTitle.toLowerCase().startsWith("bài") ? rawTitle : `Bài ${matches[i].num}. ${rawTitle}`;
+      const kb = fallbackAnalyzeDocument(sliceContent, subject, grade, lessonTitle, lessonTitle);
+
+      lessons.push({
+        id: `lesson-${Date.now()}-${i + 1}-${Math.random().toString(36).slice(2, 6)}`,
+        lessonNumber: i + 1,
+        lessonTitle,
+        topic: topicContext || `Chủ đề ${subject} ${grade}`,
+        content: sliceContent,
+        isAiProposed: false,
+        knowledgeBase: kb,
+      });
+    }
+
+    return {
+      isMultiLesson: true,
+      isAiProposed: false,
+      lessons,
+      summary: `Đã tự động nhận diện và tách chính xác ${lessons.length} bài học riêng biệt từ tài liệu.`,
+    };
+  }
+
+  // 2. If matches < 2, check for major numbered sections (e.g. I., II. or 1., 2.)
+  const sectionRegex = /(?:^|\n)\s*([0-9IVX]+)[.)]\s*([^\n]{3,60})/gi;
+  const secMatches: { index: number; num: string; title: string }[] = [];
+  while ((m = sectionRegex.exec(text)) !== null) {
+    secMatches.push({ index: m.index, num: m[1], title: m[2].trim() });
+  }
+
+  if (secMatches.length >= 2 && text.length > 300) {
+    const lessons = [];
+    for (let i = 0; i < secMatches.length; i++) {
+      const start = secMatches[i].index;
+      const end = i < secMatches.length - 1 ? secMatches[i + 1].index : text.length;
+      const sliceContent = text.slice(start, end).trim();
+      const lessonTitle = `Bài ${i + 1}. ${secMatches[i].title}`;
+      const kb = fallbackAnalyzeDocument(sliceContent, subject, grade, lessonTitle, lessonTitle);
+
+      lessons.push({
+        id: `lesson-${Date.now()}-${i + 1}-${Math.random().toString(36).slice(2, 6)}`,
+        lessonNumber: i + 1,
+        lessonTitle,
+        topic: topicContext || title || `Chủ đề ${subject} ${grade}`,
+        content: sliceContent,
+        isAiProposed: true, // Marked as "AI đề xuất – cần giáo viên xác nhận"
+        knowledgeBase: kb,
+      });
+    }
+
+    return {
+      isMultiLesson: true,
+      isAiProposed: true,
+      lessons,
+      summary: `Tài liệu không có cấu trúc bài rõ ràng. AI đã đề xuất chia thành ${lessons.length} bài học tương ứng (cần giáo viên kiểm tra và xác nhận).`,
+    };
+  }
+
+  // 3. Single lesson
+  const singleTitle = topicContext || title || `Bài học ${subject} ${grade}`;
+  const kb = fallbackAnalyzeDocument(text, subject, grade, singleTitle, singleTitle);
+  return {
+    isMultiLesson: false,
+    isAiProposed: false,
+    lessons: [
+      {
+        id: `lesson-${Date.now()}-1-${Math.random().toString(36).slice(2, 6)}`,
+        lessonNumber: 1,
+        lessonTitle: singleTitle,
+        topic: topicContext || singleTitle,
+        content: text,
+        isAiProposed: false,
+        knowledgeBase: kb,
+      },
+    ],
+    summary: `Nhận diện 1 bài học: "${singleTitle}".`,
+  };
+}
+
+// -------------------------------------------------------------
+// 0. AI Tự nhận biết & Tách bài học từ tài liệu nhiều bài (Multi-Lesson Separation)
+// -------------------------------------------------------------
+app.post("/api/ai/split-lessons", async (req, res) => {
+  const { text, subject, grade, topic, title, imageBase64 } = req.body;
+
+  if (!text && !imageBase64) {
+    return res.status(400).json({ error: "Thiếu nội dung văn bản hoặc tài liệu để phân tích bài học." });
+  }
+
+  try {
+    const systemInstruction = `Bạn là Trợ lý AI Quản lý Kho Học liệu Sư phạm.
+Nhiệm vụ của bạn là:
+1. Đọc nội dung tài liệu do giáo viên tải lên hoặc nhập vào.
+2. Xác định tài liệu này chứa 1 bài học hay NHIỀU BÀI HỌC (ví dụ: Bài 1, Bài 2, Bài 3, Bài 4...).
+3. NẾU TÀI LIỆU CHỨA NHIỀU BÀI:
+   - Tự động xác định điểm bắt đầu và kết thúc của từng bài.
+   - Tách nội dung từng bài riêng biệt, tuyệt đối KHÔNG làm mất nội dung và KHÔNG trộn nội dung giữa các bài.
+   - Đặt tiêu đề chuẩn cho từng bài: "Bài [Số]. [Tên bài]".
+4. NẾU TÀI LIỆU KHÔNG CÓ TIÊU ĐỀ RÕ RÀNG:
+   - Phân tích nội dung và ĐỀ XUẤT CẤU TRÚC BÀI HỌC (đánh dấu isAiProposed = true để giáo viên kiểm tra và xác nhận).
+5. Trích xuất kiến thức trọng tâm cho từng bài.`;
+
+    const prompt = `Phân tích cấu trúc và tách bài học từ tài liệu sau:
+Môn: ${subject || "Tin học"} | Khối/Lớp: ${grade || "12"} | Chủ đề tham khảo: ${topic || ""} | Tiêu đề file: ${title || ""}
+
+NỘI DUNG TÀI LIỆU:
+"""
+${(text || "").slice(0, 100000)}
+"""`;
+
+    let parts: any[] = [];
+    if (imageBase64) {
+      const match = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        parts.push({
+          inlineData: {
+            mimeType: match[1],
+            data: match[2],
+          },
+        });
+      }
+    }
+    parts.push({ text: prompt });
+
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: { parts },
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isMultiLesson: { type: Type.BOOLEAN },
+            isAiProposed: { type: Type.BOOLEAN },
+            detectedTopic: { type: Type.STRING },
+            summary: { type: Type.STRING },
+            lessons: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  lessonNumber: { type: Type.INTEGER },
+                  lessonTitle: { type: Type.STRING },
+                  topic: { type: Type.STRING },
+                  content: { type: Type.STRING },
+                  isAiProposed: { type: Type.BOOLEAN },
+                },
+                required: ["lessonNumber", "lessonTitle", "content", "isAiProposed"],
+              },
+            },
+          },
+          required: ["isMultiLesson", "isAiProposed", "lessons", "summary"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    if (!parsed.lessons || parsed.lessons.length === 0) {
+      throw new Error("AI không trích xuất được bài học nào");
+    }
+
+    // Attach knowledge bases for each lesson
+    const enrichedLessons = parsed.lessons.map((l: any, idx: number) => {
+      const kb = fallbackAnalyzeDocument(l.content || "", subject || "Tin học", grade || "12", l.lessonTitle, l.lessonTitle);
+      return {
+        id: `lesson-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 6)}`,
+        lessonNumber: l.lessonNumber || idx + 1,
+        lessonTitle: l.lessonTitle || `Bài ${idx + 1}`,
+        topic: l.topic || topic || parsed.detectedTopic || `Chủ đề ${subject}`,
+        content: l.content || "",
+        isAiProposed: !!l.isAiProposed,
+        knowledgeBase: kb,
+      };
+    });
+
+    return res.json({
+      success: true,
+      isMultiLesson: parsed.isMultiLesson,
+      isAiProposed: parsed.isAiProposed,
+      summary: parsed.summary,
+      lessons: enrichedLessons,
+    });
+  } catch (err: any) {
+    console.warn("Gemini split-lessons error (quota/network), executing heuristic fallback:", err.message);
+    const fallback = heuristicSplitMultiLessonDocument(text || "", subject || "Tin học", grade || "12", topic || "", title || "");
+    return res.json({
+      success: true,
+      isMultiLesson: fallback.isMultiLesson,
+      isAiProposed: fallback.isAiProposed,
+      summary: fallback.summary,
+      lessons: fallback.lessons,
+      fallback: true,
+    });
+  }
+});
+
 // -------------------------------------------------------------
 // 1. Phân tích tài liệu & xây dựng kho kiến thức (Knowledge Extraction)
 // -------------------------------------------------------------
