@@ -81,7 +81,7 @@ export default function EditExam() {
         scoring: scoring as any,
         allow_review: allowReview,
         display_mode: displayMode,
-        instant_feedback: displayMode === "quizizz" ? instantFeedback : false,
+        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
         team_config: teamConfig as any,
         lock_mode: lockMode as any,
         open_at: schedule.open_at,
@@ -211,15 +211,31 @@ export default function EditExam() {
               </div>
             )}
 
-            {displayMode === "quizizz" && (
-              <div className="flex items-center justify-between rounded-lg border p-3 mt-3 bg-background">
+            {(displayMode === "standard" || displayMode === "quizizz") && (
+              <div className="flex items-center justify-between rounded-xl border-2 p-3.5 mt-3 bg-card shadow-xs">
                 <div className="pr-3">
-                  <Label htmlFor="instant-fb" className="text-sm font-medium">💬 Hiển thị đáp án và giải thích ngay sau khi học sinh trả lời</Label>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Khi bật, học sinh sẽ được xem kết quả đúng/sai, đáp án đúng và lời giải ngay sau khi trả lời từng câu hỏi.
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Label htmlFor="instant-fb" className="text-sm font-bold text-foreground cursor-pointer">
+                      💬 Hiển thị đáp án và giải thích ngay sau khi học sinh trả lời
+                    </Label>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-black tracking-wide border ${
+                      instantFeedback
+                        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                        : "bg-muted text-muted-foreground border-border"
+                    }`}>
+                      {instantFeedback ? "BẬT" : "TẮT"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Khi bật, học sinh sẽ được xem kết quả đúng/sai, đáp án đúng và lời giải ngay sau khi trả lời từng câu hỏi (hoạt động cho cả trắc nghiệm 4 lựa chọn, Đúng/Sai và trả lời ngắn).
                   </div>
                 </div>
-                <Switch id="instant-fb" checked={instantFeedback} onCheckedChange={setInstantFeedback} />
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs font-bold text-muted-foreground hidden sm:inline">
+                    {instantFeedback ? "BẬT" : "TẮT"}
+                  </span>
+                  <Switch id="instant-fb" checked={instantFeedback} onCheckedChange={setInstantFeedback} />
+                </div>
               </div>
             )}
           </div>

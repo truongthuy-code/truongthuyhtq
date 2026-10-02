@@ -30,6 +30,7 @@ import {
   RotateCcw,
   Eye,
   UserCheck,
+  Lock,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
@@ -217,15 +218,17 @@ export default function Take() {
   const [finished, setFinished] = useState(false);
   const [feedback, setFeedback] = useState<Record<string, any>>({});
   const [checking, setChecking] = useState(false);
+  const [checkingQId, setCheckingQId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   // View mode in Standard mode: "single" (focused) or "all" (full continuous list)
-  const [standardViewMode, setStandardViewMode] = useState<"single" | "all">("single");
+  const [standardViewMode, setStandardViewMode] = useState<"single" | "all">("all");
+  const [maxReachedIdx, setMaxReachedIdx] = useState(0);
 
   const submittedRef = useRef(false);
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
-  const instantFb = isQuiz && !!exam?.instant_feedback;
+  const instantFb = !!exam?.instant_feedback;
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
 
@@ -365,6 +368,7 @@ export default function Take() {
         storageKey,
         JSON.stringify({
           idx,
+          maxReachedIdx: Math.max(idx, maxReachedIdx),
           answers,
           bookmarks,
           timeLeft,
@@ -375,7 +379,7 @@ export default function Take() {
         })
       );
     } catch {}
-  }, [started, storageKey, idx, answers, bookmarks, timeLeft, questions, optionOrders, feedback]);
+  }, [started, storageKey, idx, maxReachedIdx, answers, bookmarks, timeLeft, questions, optionOrders, feedback]);
 
   // Keep a live snapshot for the unload auto-submit
   useEffect(() => {
@@ -440,6 +444,28 @@ export default function Take() {
     };
     // eslint-disable-next-line
   }, [started, currentExamId, id]);
+
+  // Ngăn chặn nút Quay lại (Back) của trình duyệt khi học sinh đang làm bài
+  useEffect(() => {
+    if (!started || finished) return;
+
+    try {
+      window.history.pushState(null, "", window.location.href);
+    } catch {}
+
+    const onPopState = (e: PopStateEvent) => {
+      e.preventDefault();
+      try {
+        window.history.pushState(null, "", window.location.href);
+      } catch {}
+      toast.warning("Chế độ thi trực tuyến: Không thể quay lại trang trước bằng nút trình duyệt!");
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, [started, finished]);
 
   // Auto-start exam if requested from dashboard
   const autoStartRequested = useMemo(() => {
@@ -518,7 +544,9 @@ export default function Take() {
           setAnswers(saved.answers || {});
           setBookmarks(saved.bookmarks || {});
           setFeedback(saved.feedback || {});
-          setIdx(saved.idx || 0);
+          const restoredIdx = Math.max(saved.maxReachedIdx || 0, saved.idx || 0);
+          setIdx(restoredIdx);
+          setMaxReachedIdx(restoredIdx);
           setTimeLeft(saved.timeLeft ?? (exam.duration_minutes || 45) * 60);
           startedAtRef.current = saved.startedAt || new Date().toISOString();
           setStarted(true);
@@ -717,7 +745,8 @@ export default function Take() {
 
   const setAns = (qId: string, v: any) => setAnswers({ ...answers, [qId]: v });
 
-  const setTF = (qq: any, key: string, val: boolean) =>
+  const setTF = (qq: any, key: string, val: boolean) => {
+    if (instantFb && feedback[qq.id]) return;
     setAnswers({
       ...answers,
       [qq.id]: {
@@ -725,6 +754,7 @@ export default function Take() {
         [key]: val,
       },
     });
+  };
 
   const toggleBookmark = (qId: string) => {
     setBookmarks((prev) => {
@@ -1067,9 +1097,9 @@ export default function Take() {
 
           {exam.display_mode === "quizizz" && (
             <div className="mt-4 text-xs sm:text-sm rounded-2xl bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/30 p-3.5 flex items-start gap-2.5">
-              <Flame className="size-5 shrink-0 text-amber-500 mt-0.5" />
+              <Lock className="size-5 shrink-0 text-amber-600 mt-0.5" />
               <div>
-                <b>Trải nghiệm Quizizz:</b> Mỗi lần hiển thị 1 câu hỏi tập trung. Hãy đọc kỹ và chọn phương án chính xác nhất trước khi chuyển câu!
+                <b>Lưu ý quan trọng:</b> Bài thi làm theo <b>chế độ từng câu hỏi một chiều</b>. Khi đã bấm chuyển sang câu tiếp theo, câu hỏi trước sẽ <b>tự động khóa và không thể quay lại</b>. Hãy kiểm tra kỹ câu trả lời trước khi chuyển câu!
               </div>
             </div>
           )}
@@ -1213,45 +1243,160 @@ export default function Take() {
 
   const goNext = () => {
     if (idx >= questions.length - 1) {
-      setFinished(true);
-      try {
-        confetti({ particleCount: 70, spread: 60, origin: { y: 0.5 } });
-      } catch {}
+      setConfirmOpen(true);
     } else {
-      setIdx(idx + 1);
+      const nextIdx = idx + 1;
+      setIdx(nextIdx);
+      setMaxReachedIdx((prev) => Math.max(prev, nextIdx));
     }
   };
 
   const goPrev = () => {
+    if (showSingleMode) {
+      toast.warning("Chế độ một chiều: Không thể quay lại câu hỏi trước!");
+      return;
+    }
     if (idx > 0) setIdx(idx - 1);
   };
 
   const onMcSelect = (qId: string, v: string) => {
     if (instantFb && feedback[qId]) return;
     setAns(qId, v);
+    if (instantFb) {
+      const targetQ = questions.find((item) => item.id === qId);
+      if (targetQ) {
+        checkQuestion(targetQ, v);
+      }
+    }
   };
 
   const fb = q ? feedback[q.id] : null;
 
-  const checkAnswer = async () => {
-    if (!instantFb || fb || !isAnswered(q) || checking) return;
-    setChecking(true);
-    const { data, error } = await supabase.rpc("check_question_answer", {
-      p_exam_id: currentExamId,
-      p_question_id: q.id,
-      p_answer: (answers[q.id] ?? null) as any,
-    } as any);
-    setChecking(false);
-    if (error) {
-      toast.error(error.message);
+  const checkQuestion = async (targetQ: any, specificAnswer?: any) => {
+    if (!targetQ || !instantFb || feedback[targetQ.id]) return;
+    const ansValue = specificAnswer !== undefined ? specificAnswer : answers[targetQ.id];
+    if (ansValue === undefined || ansValue === null || ansValue === "") {
+      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi kiểm tra!");
       return;
     }
-    setFeedback((f) => ({ ...f, [q.id]: data }));
-    if (data?.correct) {
-      try {
-        confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-      } catch {}
+
+    setChecking(true);
+    setCheckingQId(targetQ.id);
+
+    try {
+      // 1. Primary endpoint: server API
+      const response = await fetch("/api/check-question-answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          examId: currentExamId,
+          questionId: targetQ.id,
+          answer: ansValue,
+        }),
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
+        if (resData?.correct) {
+          try {
+            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+          } catch {}
+        }
+        setChecking(false);
+        setCheckingQId(null);
+        return;
+      }
+    } catch (e) {
+      console.warn("API check failed, trying fallback:", e);
     }
+
+    // 2. Supabase RPC fallback
+    try {
+      const { data, error } = await supabase.rpc("check_question_answer", {
+        p_exam_id: currentExamId,
+        p_question_id: targetQ.id,
+        p_answer: ansValue as any,
+      } as any);
+
+      if (!error && data) {
+        setFeedback((prev) => ({ ...prev, [targetQ.id]: data }));
+        if ((data as any)?.correct) {
+          try {
+            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+          } catch {}
+        }
+        setChecking(false);
+        setCheckingQId(null);
+        return;
+      }
+    } catch (e) {
+      console.warn("RPC check error:", e);
+    }
+
+    // 3. Fallback for sample exams
+    const sample = findSampleExam(currentExamId);
+    if (sample) {
+      const allSampleQ = [
+        ...(sample.questions?.partI || []).map((x: any) => ({ ...x, _part: 1 })),
+        ...(sample.questions?.partII || []).map((x: any) => ({ ...x, _part: 2 })),
+        ...(sample.questions?.partIII || []).map((x: any) => ({ ...x, _part: 3 })),
+      ];
+      const sq = allSampleQ.find((x: any) => x.id === targetQ.id);
+      if (sq) {
+        let resData: any = null;
+        if (sq._part === 1) {
+          resData = {
+            type: "mc",
+            correct: String(ansValue || "").toUpperCase() === String(sq.answer || "").toUpperCase(),
+            answer: sq.answer,
+            explanation: sq.explanation || "",
+          };
+        } else if (sq._part === 2) {
+          const items = sq.items || [];
+          let okItems = 0;
+          const evItems = items.map((it: any) => {
+            const stuVal = ansValue?.[it.key] ?? null;
+            const ok = stuVal !== null && stuVal === it.correct;
+            if (ok) okItems++;
+            return { key: it.key, correct: it.correct, student: stuVal };
+          });
+          resData = {
+            type: "tf",
+            correct: items.length > 0 && okItems === items.length,
+            okItems,
+            totalItems: items.length,
+            items: evItems,
+            explanation: sq.explanation || "",
+          };
+        } else if (sq._part === 3) {
+          const cAns = String(sq.answer || "").trim().toLowerCase();
+          const gAns = String(ansValue || "").trim().toLowerCase();
+          resData = {
+            type: "sa",
+            correct: cAns === gAns,
+            answer: sq.answer,
+            explanation: sq.explanation || "",
+          };
+        }
+        if (resData) {
+          setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
+          if (resData.correct) {
+            try {
+              confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+            } catch {}
+          }
+        }
+      }
+    }
+
+    setChecking(false);
+    setCheckingQId(null);
+  };
+
+  const checkAnswer = async () => {
+    if (!instantFb || fb || !isAnswered(q) || checking) return;
+    await checkQuestion(q);
   };
 
   const pct = questions.length ? Math.round(((idx + 1) / questions.length) * 100) : 0;
@@ -1297,20 +1442,43 @@ export default function Take() {
         </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap gap-4 text-xs text-muted-foreground mb-4 bg-muted/40 p-3 rounded-2xl">
-          <div className="flex items-center gap-1.5">
-            <span className="size-3.5 rounded-md bg-emerald-500" /> Đã trả lời ({answeredCount})
+        {showSingleMode ? (
+          <div className="space-y-2.5 mb-4">
+            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground bg-muted/40 p-3 rounded-2xl">
+              <div className="flex items-center gap-1.5 font-medium">
+                <span className="size-3.5 rounded-md bg-muted border border-border flex items-center justify-center text-[10px]">🔒</span>
+                <span>Đã khóa ({idx} câu)</span>
+              </div>
+              <div className="flex items-center gap-1.5 font-medium">
+                <span className="size-3.5 rounded-md border-2 border-primary bg-primary" />
+                <span className="text-primary font-bold">Đang làm (Câu {idx + 1})</span>
+              </div>
+              <div className="flex items-center gap-1.5 font-medium">
+                <span className="size-3.5 rounded-md bg-card border border-border" />
+                <span>Chưa làm ({Math.max(0, questions.length - idx - 1)} câu)</span>
+              </div>
+            </div>
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2">
+              <Lock className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>Chế độ một chiều: Câu hỏi đã chuyển sẽ tự động khóa, không thể quay lại làm lại hoặc sửa đáp án.</span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-3.5 rounded-md bg-amber-400" /> Đang đánh dấu ({bookmarkedCount})
+        ) : (
+          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground mb-4 bg-muted/40 p-3 rounded-2xl">
+            <div className="flex items-center gap-1.5">
+              <span className="size-3.5 rounded-md bg-emerald-500" /> Đã trả lời ({answeredCount})
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="size-3.5 rounded-md bg-amber-400" /> Đang đánh dấu ({bookmarkedCount})
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="size-3.5 rounded-md border-2 border-primary bg-primary/20" /> Đang xem
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="size-3.5 rounded-md bg-muted border border-border" /> Chưa làm ({unansweredCount})
+            </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-3.5 rounded-md border-2 border-primary bg-primary/20" /> Đang xem
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-3.5 rounded-md bg-muted border border-border" /> Chưa làm ({unansweredCount})
-          </div>
-        </div>
+        )}
 
         {/* Grid of question numbers */}
         <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2.5">
@@ -1318,6 +1486,45 @@ export default function Take() {
             const isDone = isAnswered(item);
             const isMarked = !!bookmarks[item.id];
             const isCurrent = i === idx;
+            const isPast = i < idx;
+            const isFuture = i > idx;
+
+            if (showSingleMode) {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    if (isPast) {
+                      toast.warning(`Câu ${i + 1} đã hoàn thành và được khóa, không thể quay lại!`);
+                    } else if (isFuture) {
+                      toast.info(`Vui lòng hoàn thành lần lượt từ câu ${idx + 1}.`);
+                    } else {
+                      setNavDrawerOpen(false);
+                    }
+                  }}
+                  className={`relative h-11 rounded-xl font-black text-sm transition-all duration-200 flex items-center justify-center border-2 ${
+                    isCurrent
+                      ? "border-primary bg-primary text-primary-foreground shadow-md scale-105 ring-2 ring-primary/30"
+                      : isPast
+                      ? "border-border/60 bg-muted/70 text-muted-foreground/60 cursor-not-allowed opacity-75"
+                      : "border-border/40 bg-card/40 text-muted-foreground/40 cursor-not-allowed opacity-50"
+                  }`}
+                  title={
+                    isCurrent
+                      ? `Câu ${i + 1} (Đang làm)`
+                      : isPast
+                      ? `Câu ${i + 1} (Đã khóa, không thể quay lại)`
+                      : `Câu ${i + 1} (Chưa làm)`
+                  }
+                >
+                  <span>{i + 1}</span>
+                  {isPast && (
+                    <span className="absolute -top-1.5 -right-1 text-[10px]" title="Đã khóa">🔒</span>
+                  )}
+                </button>
+              );
+            }
 
             return (
               <button
@@ -1389,24 +1596,13 @@ export default function Take() {
             </div>
           )}
 
-          <div className="mt-8 flex flex-col sm:flex-row gap-3">
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => {
-                setFinished(false);
-                setIdx(0);
-              }}
-              className="flex-1 rounded-2xl font-bold py-6 text-base"
-            >
-              <RotateCcw className="size-4 mr-2" /> Xem lại các câu
-            </Button>
+          <div className="mt-8 flex justify-center">
             <Button
               onClick={() => setConfirmOpen(true)}
               size="lg"
-              className="flex-1 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-lg py-6 rounded-2xl shadow-xl shadow-destructive/25 hover:scale-[1.02] active:scale-[0.98] transition-all"
+              className="w-full sm:w-auto bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-lg py-6 px-10 rounded-2xl shadow-xl shadow-destructive/25 hover:scale-[1.02] active:scale-[0.98] transition-all"
             >
-              <Send className="size-5 mr-2" /> NỘP BÀI THI
+              <Send className="size-5 mr-2" /> XÁC NHẬN NỘP BÀI THI
             </Button>
           </div>
         </Card>
@@ -1444,20 +1640,27 @@ export default function Take() {
               </div>
             </div>
 
-            {/* Nút đánh dấu xem lại */}
-            <button
-              type="button"
-              onClick={() => toggleBookmark(currentQ.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs sm:text-sm border transition-all ${
-                isCurrentMarked
-                  ? "border-amber-400 bg-amber-400/20 text-amber-700 dark:text-amber-300 shadow-sm"
-                  : "border-border text-muted-foreground hover:bg-muted"
-              }`}
-              title="Đánh dấu câu hỏi để xem lại"
-            >
-              <Bookmark className={`size-4 ${isCurrentMarked ? "fill-amber-500 text-amber-500" : ""}`} />
-              <span className="hidden sm:inline">{isCurrentMarked ? "Đã đánh dấu" : "Đánh dấu"}</span>
-            </button>
+            {/* Nút đánh dấu xem lại (chỉ hiển thị ở chế độ xem toàn bộ, ở chế độ từng câu hiển thị huy hiệu Khóa khi chuyển câu) */}
+            {isSingleView ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25">
+                <Lock className="size-3.5 text-amber-600 dark:text-amber-400" />
+                <span>Khóa khi chuyển câu</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => toggleBookmark(currentQ.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs sm:text-sm border transition-all ${
+                  isCurrentMarked
+                    ? "border-amber-400 bg-amber-400/20 text-amber-700 dark:text-amber-300 shadow-sm"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+                title="Đánh dấu câu hỏi để xem lại"
+              >
+                <Bookmark className={`size-4 ${isCurrentMarked ? "fill-amber-500 text-amber-500" : ""}`} />
+                <span className="hidden sm:inline">{isCurrentMarked ? "Đã đánh dấu" : "Đánh dấu"}</span>
+              </button>
+            )}
           </div>
 
           {/* 3. NỘI DUNG CÂU HỎI: Cỡ chữ lớn, rõ ràng, bảng kế thừa font size */}
@@ -1626,9 +1829,15 @@ export default function Take() {
               <Input
                 value={answers[currentQ.id] || ""}
                 onChange={(e) => setAns(currentQ.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && instantFb && !qFb && answers[currentQ.id]) {
+                    e.preventDefault();
+                    checkQuestion(currentQ);
+                  }
+                }}
                 disabled={!!qFb}
                 className="h-14 sm:h-18 text-xl sm:text-3xl font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground"
-                placeholder="Nhập câu trả lời hoặc số liệu..."
+                placeholder={instantFb ? "Nhập câu trả lời hoặc số liệu... (Nhấn Enter để kiểm tra)" : "Nhập câu trả lời hoặc số liệu..."}
                 autoFocus={isSingleView}
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
@@ -1643,12 +1852,44 @@ export default function Take() {
               </div>
               {qFb && (
                 <div className="mt-4 text-lg sm:text-xl font-bold rounded-2xl bg-muted/60 p-4 border">
-                  Đáp án chuẩn:{" "}
+                  {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <b className="text-emerald-600">
                     <RichText text={qFb.answer} />
                   </b>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Nút kiểm tra phản hồi tức thì nếu chưa có kết quả (áp dụng cho cả chế độ tiêu chuẩn và từng câu) */}
+          {instantFb && !qFb && (
+            <div className="mt-6 pt-4 border-t flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-2xl border border-dashed border-primary/30">
+              <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-1.5 font-medium">
+                <Sparkles className="size-4 text-primary shrink-0" />
+                <span>
+                  {isAnswered(currentQ)
+                    ? "Bấm Kiểm tra để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết"
+                    : "Chọn hoặc nhập câu trả lời để kiểm tra đáp án & lời giải"}
+                </span>
+              </div>
+              <Button
+                type="button"
+                onClick={() => checkQuestion(currentQ)}
+                disabled={!isAnswered(currentQ) || checkingQId === currentQ.id}
+                className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white hover:opacity-95 shadow-md flex items-center gap-2 px-5 py-2.5 h-11"
+              >
+                {checkingQId === currentQ.id ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    <span>Đang kiểm tra...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="size-4" />
+                    <span>KIỂM TRA CÂU NÀY</span>
+                  </>
+                )}
+              </Button>
             </div>
           )}
 
@@ -1660,7 +1901,7 @@ export default function Take() {
               }`}
             >
               <div className={`font-black text-xl sm:text-2xl ${qFb.correct ? "text-emerald-600" : "text-rose-600"}`}>
-                {qFb.correct ? "✅ CHÍNH XÁC!" : "❌ CHƯA CHÍNH XÁC"}
+                {qFb.correct ? "✓ Chính xác!" : "✗ Chưa chính xác!"}
                 {qFb.type === "tf" && (
                   <span className="ml-3 text-sm sm:text-base font-bold text-foreground">
                     (Đúng {qFb.okItems}/{qFb.totalItems} ý)
@@ -1669,7 +1910,7 @@ export default function Take() {
               </div>
               {qFb.type === "mc" && (
                 <div className="mt-2 text-base sm:text-lg font-bold text-foreground">
-                  Đáp án đúng:{" "}
+                  {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <span className="text-emerald-600">
                     <b>
                       {(() => {
@@ -1683,10 +1924,10 @@ export default function Take() {
                   </span>
                 </div>
               )}
-              {qFb.explanation && (
+              {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
                 <div className="mt-4 rounded-xl bg-card p-4 text-sm sm:text-base border">
                   <div className="font-black text-primary mb-1 flex items-center gap-1.5">
-                    <Sparkles className="size-4" /> GIẢI THÍCH CHI TIẾT:
+                    <Sparkles className="size-4" /> Lời giải:
                   </div>
                   <div className="whitespace-pre-wrap leading-relaxed font-medium">
                     <RichText text={qFb.explanation} />
@@ -1828,17 +2069,12 @@ export default function Take() {
 
           {/* 8. THANH ĐIỀU HƯỚNG HIỆN ĐẠI PHÍA DƯỚI (NAVIGATION BAR) */}
           <div className="mt-4 sm:mt-6 w-full flex items-center justify-between gap-3 bg-card/90 backdrop-blur p-3 sm:p-4 rounded-3xl border shadow-lg">
-            {/* Nút Câu trước */}
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={goPrev}
-              disabled={idx === 0}
-              className="rounded-2xl font-bold text-sm sm:text-base px-4 sm:px-6 h-12 sm:h-14 border-2"
-            >
-              <ChevronLeft className="size-5 mr-1" />
-              <span className="hidden sm:inline">Câu trước</span>
-            </Button>
+            {/* THÔNG BÁO CHẾ ĐỘ MỘT CHIỀU (KHÔNG CHO PHÉP QUAY LẠI CÂU TRƯỚC) */}
+            <div className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 font-bold text-xs sm:text-sm shadow-xs select-none">
+              <Lock className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span className="hidden md:inline">Chế độ một chiều:</span>
+              <span>Không quay lại câu trước</span>
+            </div>
 
             {/* Nút mở Danh sách câu hỏi */}
             <div className="flex items-center gap-2">
@@ -1850,12 +2086,12 @@ export default function Take() {
               >
                 <LayoutGrid className="size-4 text-primary" />
                 <span>
-                  Danh sách câu (<b className="text-primary">{answeredCount}</b>/{questions.length})
+                  Danh sách câu (<b className="text-primary">{idx + 1}</b>/{questions.length})
                 </span>
               </Button>
             </div>
 
-            {/* Nút Chuyển câu / Trả lời tiếp theo */}
+            {/* Nút Chuyển câu / Nộp bài ở câu cuối */}
             <div>
               {instantFb && !fb ? (
                 <Button
@@ -1867,13 +2103,22 @@ export default function Take() {
                   {checking && <Loader2 className="size-5 mr-2 animate-spin" />}
                   <span>KIỂM TRA</span>
                 </Button>
+              ) : idx >= questions.length - 1 ? (
+                <Button
+                  onClick={() => setConfirmOpen(true)}
+                  size="lg"
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-destructive/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                >
+                  <Send className="size-5" />
+                  <span>NỘP BÀI</span>
+                </Button>
               ) : (
                 <Button
                   onClick={goNext}
                   size="lg"
                   className="bg-gradient-to-r from-primary to-sky-600 text-white font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-primary/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
                 >
-                  <span>{idx >= questions.length - 1 ? "HOÀN THÀNH" : "CÂU TIẾP THEO"}</span>
+                  <span>CÂU TIẾP THEO</span>
                   <ChevronRight className="size-5" />
                 </Button>
               )}
