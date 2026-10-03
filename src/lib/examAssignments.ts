@@ -702,51 +702,42 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
           };
         }
 
-        const { data: exData } = await supabase.rpc("get_exam_for_student", {
+        const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
           p_exam_id: parsed.examId,
         });
 
-        const examObj = exData
-          ? {
-              ...exData,
-              teacher_name: parsed.teacherName || exData.teacher_name,
-              school_name: parsed.schoolName || exData.school_name,
-              subject_name: parsed.subjectName || exData.subject_name,
-            }
-          : {
-              id: parsed.examId,
-              title: parsed.title,
-              duration_minutes: parsed.durationMinutes || 45,
-              teacher_name: parsed.teacherName,
-              school_name: parsed.schoolName,
-              subject_name: parsed.subjectName,
-              open_at: parsed.openAt,
-              close_at: parsed.closeAt,
-            };
+        if (exData && !rpcErr) {
+          const examObj = {
+            ...exData,
+            teacher_name: parsed.teacherName || exData.teacher_name,
+            school_name: parsed.schoolName || exData.school_name,
+            subject_name: parsed.subjectName || exData.subject_name,
+          };
 
-        const assignmentObj: ExamAssignment = {
-          id: parsed.id || `assign_${parsed.examId}`,
-          examId: parsed.examId,
-          code: parsed.code || lookupCode,
-          className: parsed.className || "Chung",
-          title: parsed.title || (examObj as any).title,
-          teacherName: parsed.teacherName || (examObj as any).teacher_name,
-          schoolName: parsed.schoolName || (examObj as any).school_name,
-          subjectName: parsed.subjectName || (examObj as any).subject_name,
-          durationMinutes: parsed.durationMinutes || (examObj as any).duration_minutes,
-          openAt: parsed.openAt ?? (examObj as any).open_at,
-          closeAt: parsed.closeAt ?? (examObj as any).close_at,
-          createdAt: parsed.createdAt || new Date().toISOString(),
-        };
+          const assignmentObj: ExamAssignment = {
+            id: parsed.id || `assign_${parsed.examId}`,
+            examId: parsed.examId,
+            code: parsed.code || lookupCode,
+            className: parsed.className || "Chung",
+            title: parsed.title || (examObj as any).title,
+            teacherName: parsed.teacherName || (examObj as any).teacher_name,
+            schoolName: parsed.schoolName || (examObj as any).school_name,
+            subjectName: parsed.subjectName || (examObj as any).subject_name,
+            durationMinutes: parsed.durationMinutes || (examObj as any).duration_minutes,
+            openAt: parsed.openAt ?? (examObj as any).open_at,
+            closeAt: parsed.closeAt ?? (examObj as any).close_at,
+            createdAt: parsed.createdAt || new Date().toISOString(),
+          };
 
-        // Cache locally for faster subsequent queries
-        saveLocalAssignments([assignmentObj, ...localList.filter((a) => a.id !== assignmentObj.id)]);
+          // Cache locally for faster subsequent queries
+          saveLocalAssignments([assignmentObj, ...localList.filter((a) => a.id !== assignmentObj.id)]);
 
-        return {
-          success: true,
-          exam: examObj,
-          assignment: assignmentObj,
-        };
+          return {
+            success: true,
+            exam: examObj,
+            assignment: assignmentObj,
+          };
+        }
       }
     }
   } catch {}

@@ -266,8 +266,9 @@ export default function Take() {
       const searchParams = new URLSearchParams(location.search || window.location.search);
       const codeParam = (searchParams.get("code") || searchParams.get("join") || "").trim();
 
-      // If we already have the exam loaded with the same UUID or code, do not re-fetch
-      if (exam && cleanUuid && exam.id === cleanUuid) {
+      // If we already have the exam loaded with the same UUID or code AND it has questions, do not re-fetch
+      const hasQuestions = exam && normalizeExamQuestions(exam).length > 0;
+      if (exam && cleanUuid && exam.id === cleanUuid && hasQuestions) {
         if (!cancelled) {
           setLoading(false);
           setErrorMsg(null);
@@ -411,8 +412,10 @@ export default function Take() {
       try {
         if (s.storageKey) localStorage.removeItem(s.storageKey);
       } catch {}
-      const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/rpc/submit_student_exam`;
-      const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const sbUrl = import.meta.env.VITE_SUPABASE_URL || "https://zhixpglctyfffpwamixv.supabase.co";
+      const sbKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpoaXhwZ2xjdHlmZmZwd2FtaXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjAxODYsImV4cCI6MjA5MzUzNjE4Nn0.cjGa8bgMIVlJ_LrEbW_0qDYBxAC4ykhlgmxd9OFq1e4";
+      const url = `${sbUrl}/rest/v1/rpc/submit_student_exam`;
+      const key = sbKey;
       const body = JSON.stringify({
         p_exam_id: examTargetId,
         p_student_name: s.name,
@@ -558,8 +561,21 @@ export default function Take() {
 
     let qs = normalizeExamQuestions(exam);
     if (!qs || qs.length === 0) {
+      // If questions are missing from state, immediately fetch from Supabase
+      const targetId = currentExamId || exam?.id;
+      if (targetId) {
+        try {
+          const { data: fresh } = await supabase.rpc("get_exam_for_student", { p_exam_id: targetId });
+          if (fresh) {
+            setExam(fresh);
+            qs = normalizeExamQuestions(fresh);
+          }
+        } catch {}
+      }
+    }
+    if (!qs || qs.length === 0) {
       // Fallback check if this corresponds to a sample exam
-      const sample = findSampleExam(exam.id) || findSampleExam(exam.code || "");
+      const sample = findSampleExam(exam?.id) || findSampleExam(exam?.code || "") || (currentExamId ? findSampleExam(currentExamId) : null);
       if (sample) {
         qs = normalizeExamQuestions(sample);
       }
@@ -1295,17 +1311,20 @@ export default function Take() {
         }),
       });
 
-      if (response.ok) {
+      const contentType = response.headers.get("content-type") || "";
+      if (response.ok && contentType.includes("application/json")) {
         const resData = await response.json();
-        setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
-        if (resData?.correct) {
-          try {
-            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-          } catch {}
+        if (resData && !resData.error) {
+          setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
+          if (resData?.correct) {
+            try {
+              confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+            } catch {}
+          }
+          setChecking(false);
+          setCheckingQId(null);
+          return;
         }
-        setChecking(false);
-        setCheckingQId(null);
-        return;
       }
     } catch (e) {
       console.warn("API check failed, trying fallback:", e);
@@ -1386,6 +1405,61 @@ export default function Take() {
               confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
             } catch {}
           }
+        }
+      }
+    }
+
+    // 4. Fallback if targetQ already has answer in memory (e.g. local / preview mode)
+    if (targetQ.answer !== undefined || (targetQ.items && targetQ.items[0]?.correct !== undefined)) {
+      let resData: any = null;
+      if (targetQ.type === "mc") {
+        resData = {
+          type: "mc",
+          correct: String(ansValue || "").toUpperCase() === String(targetQ.answer || "").toUpperCase(),
+          answer: targetQ.answer,
+          explanation: targetQ.explanation || "",
+        };
+      } else if (targetQ.type === "tf") {
+        const items = targetQ.items || [];
+        let okItems = 0;
+        const evItems = items.map((it: any) => {
+          const stuVal = ansValue?.[it.key] ?? null;
+          const ok = stuVal !== null && stuVal === it.correct;
+          if (ok) okItems++;
+          return { key: it.key, correct: it.correct, student: stuVal };
+        });
+        resData = {
+          type: "tf",
+          correct: items.length > 0 && okItems === items.length,
+          okItems,
+          totalItems: items.length,
+          items: evItems,
+          explanation: targetQ.explanation || "",
+        };
+      } else if (targetQ.type === "sa") {
+        const cAns = String(targetQ.answer || "").trim().toLowerCase();
+        const gAns = String(ansValue || "").trim().toLowerCase();
+        let isCorrect = cAns === gAns;
+        if (!isCorrect) {
+          const nc = parseFloat(cAns.replace(",", "."));
+          const ng = parseFloat(gAns.replace(",", "."));
+          if (!isNaN(nc) && !isNaN(ng) && Math.abs(nc - ng) < 1e-6) {
+            isCorrect = true;
+          }
+        }
+        resData = {
+          type: "sa",
+          correct: isCorrect,
+          answer: targetQ.answer,
+          explanation: targetQ.explanation || "",
+        };
+      }
+      if (resData) {
+        setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
+        if (resData.correct) {
+          try {
+            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+          } catch {}
         }
       }
     }
@@ -1679,16 +1753,19 @@ export default function Take() {
               onValueChange={(val) => onMcSelect(currentQ.id, val)}
               className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5 w-full"
             >
-              {(optionOrders[currentQ.id] || currentQ.options.map((o: any) => o.key)).map(
+              {(optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || []).map(
                 (key: string, optIndex: number) => {
-                  const opt = currentQ.options.find((o: any) => o.key === key)!;
+                  const opt = currentQ.options?.find((o: any) => String(o.key).trim().toUpperCase() === String(key).trim().toUpperCase()) ||
+                              currentQ.options?.[optIndex];
+                  if (!opt) return null;
+                  const optKey = opt.key || key;
                   const theme = OPTION_THEMES[optIndex % OPTION_THEMES.length];
-                  const isChosen = answers[currentQ.id] === key;
-                  const isCorrectOpt = !!qFb && qFb.answer === key;
+                  const isChosen = answers[currentQ.id] === optKey;
+                  const isCorrectOpt = !!qFb && qFb.answer === optKey;
 
                   return (
                     <label
-                      key={key}
+                      key={optKey}
                       className={`group flex items-center gap-4 sm:gap-5 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] cursor-pointer transition-all duration-200 select-none shadow-sm ${
                         qFb
                           ? isCorrectOpt
@@ -1701,7 +1778,7 @@ export default function Take() {
                           : `${theme.cardBorder} ${theme.cardBg} hover:shadow-md`
                       }`}
                     >
-                      <RadioGroupItem value={key} id={`${currentQ.id}-${key}`} className="sr-only" disabled={!!qFb} />
+                      <RadioGroupItem value={optKey} id={`${currentQ.id}-${optKey}`} className="sr-only" disabled={!!qFb} />
 
                       {/* Huy hiệu A, B, C, D rực rỡ, trực quan phong cách Quizizz */}
                       <div
@@ -1749,17 +1826,20 @@ export default function Take() {
               <div className="text-sm sm:text-base font-bold text-muted-foreground mb-1">
                 Chọn <b className="text-emerald-600">Đúng</b> hoặc <b className="text-rose-600">Sai</b> cho từng ý:
               </div>
-              {(optionOrders[currentQ.id] || currentQ.items.map((it: any) => it.key)).map(
+              {(optionOrders[currentQ.id] || currentQ.items?.map((it: any) => it.key) || []).map(
                 (key: string, itemIdx: number) => {
-                  const it = currentQ.items.find((x: any) => x.key === key)!;
-                  const val = getTFValue(answers[currentQ.id], it.key);
+                  const it = currentQ.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(key).trim().toLowerCase()) ||
+                             currentQ.items?.[itemIdx];
+                  if (!it) return null;
+                  const itemKey = it.key || key;
+                  const val = getTFValue(answers[currentQ.id], itemKey);
                   const label = String.fromCharCode(97 + itemIdx);
-                  const fbIt = qFb?.items?.find((x: any) => x.key === it.key);
+                  const fbIt = qFb?.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(itemKey).trim().toLowerCase());
                   const itOk = fbIt ? fbIt.student !== null && fbIt.student === fbIt.correct : null;
 
                   return (
                     <div
-                      key={it.key}
+                      key={itemKey}
                       className={`rounded-2xl sm:rounded-3xl border-2 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm ${
                         itOk === true
                           ? "border-emerald-500 bg-emerald-500/10"
@@ -1791,7 +1871,7 @@ export default function Take() {
                         <button
                           type="button"
                           disabled={!!qFb}
-                          onClick={() => setTF(currentQ, it.key, true)}
+                          onClick={() => setTF(currentQ, itemKey, true)}
                           className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
                             val === true
                               ? "border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25 scale-105"
@@ -1803,7 +1883,7 @@ export default function Take() {
                         <button
                           type="button"
                           disabled={!!qFb}
-                          onClick={() => setTF(currentQ, it.key, false)}
+                          onClick={() => setTF(currentQ, itemKey, false)}
                           className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
                             val === false
                               ? "border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-105"
@@ -1914,13 +1994,13 @@ export default function Take() {
                   <span className="text-emerald-600">
                     <b>
                       {(() => {
-                        const order = optionOrders[currentQ.id] || currentQ.options.map((o: any) => o.key);
+                        const order = optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || [];
                         const pos = order.indexOf(qFb.answer);
                         return String.fromCharCode(65 + (pos < 0 ? 0 : pos));
                       })()}
                       .
                     </b>{" "}
-                    <RichText text={currentQ.options.find((o: any) => o.key === qFb.answer)?.text || ""} />
+                    <RichText text={currentQ.options?.find((o: any) => o.key === qFb.answer)?.text || ""} />
                   </span>
                 </div>
               )}
