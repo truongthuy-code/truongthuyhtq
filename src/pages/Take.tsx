@@ -9,7 +9,7 @@ import { getTFValue, gradeExam, DEFAULT_SCORING } from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
 import { findSampleExam, getSampleExamByCode, getSampleExamById } from "@/lib/sampleExams";
-import { findAssignmentOrExamByCode } from "@/lib/examAssignments";
+import { findAssignmentOrExamByCode, isUuid, normalizeExamCode } from "@/lib/examAssignments";
 import {
   ChevronLeft,
   ChevronRight,
@@ -176,13 +176,12 @@ export default function Take() {
   });
 
   const currentExamId = useMemo(() => {
-    if (exam?.id) return exam.id;
+    if (exam?.id && isUuid(exam.id)) return exam.id;
     if (id) {
       const uuidMatch = id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       if (uuidMatch) return uuidMatch[0];
-      return id.trim();
     }
-    return "";
+    return isUuid(exam?.id) ? exam.id : "";
   }, [exam, id]);
 
   const [loading, setLoading] = useState<boolean>(() => {
@@ -561,16 +560,28 @@ export default function Take() {
 
     let qs = normalizeExamQuestions(exam);
     if (!qs || qs.length === 0) {
-      // If questions are missing from state, immediately fetch from Supabase
-      const targetId = currentExamId || exam?.id;
-      if (targetId) {
+      // If questions are missing from state, resolve either by UUID or by code
+      const targetUuid = isUuid(currentExamId) ? currentExamId : (isUuid(exam?.id) ? exam.id : "");
+      if (targetUuid) {
         try {
-          const { data: fresh } = await supabase.rpc("get_exam_for_student", { p_exam_id: targetId });
+          const { data: fresh } = await supabase.rpc("get_exam_for_student", { p_exam_id: targetUuid });
           if (fresh) {
             setExam(fresh);
             qs = normalizeExamQuestions(fresh);
           }
         } catch {}
+      } else {
+        // If we only have an examCode, resolve via findAssignmentOrExamByCode to get the real UUID & questions
+        const searchCode = (new URLSearchParams(location.search)).get("code") || id || exam?.code || (exam?.team_config as any)?.primary_code;
+        if (searchCode) {
+          try {
+            const res = await findAssignmentOrExamByCode(searchCode);
+            if (res.success && res.exam) {
+              setExam(res.exam);
+              qs = normalizeExamQuestions(res.exam);
+            }
+          } catch {}
+        }
       }
     }
     if (!qs || qs.length === 0) {
