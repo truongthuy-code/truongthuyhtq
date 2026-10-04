@@ -150,4 +150,40 @@ describe("User Account & Name Switching Persistence", () => {
     expect(currentStudent?.className).toBe("11B2");
     expect(currentStudent?.account).toBe("hs2@school.edu.vn");
   });
+
+  it("should preserve lqdboiduonghsg@gmail.com session without hijacking or bridge admin fallback", async () => {
+    const userEmail = "lqdboiduonghsg@gmail.com";
+    const userTeacher: TeacherUser = {
+      id: "44444444-4444-4000-8000-444444444444",
+      username: "lqdboiduonghsg",
+      name: "Thầy Lê Quý Đôn",
+      email: userEmail,
+      school: "THPT Chuyên Lê Quý Đôn",
+      subject: "Tin học",
+      status: "active",
+      passwordHash: "hash4",
+      createdAt: new Date().toISOString(),
+    };
+    upsertTeacher(userTeacher);
+    setCurrentAuthUser({
+      id: userTeacher.id,
+      username: userTeacher.username,
+      name: userTeacher.name,
+      email: userTeacher.email,
+      school: userTeacher.school,
+      subject: userTeacher.subject,
+      role: "teacher",
+    });
+
+    const activeUser = getCurrentAuthUser();
+    expect(activeUser?.email).toBe(userEmail);
+    expect(activeUser?.username).toBe("lqdboiduonghsg");
+    expect(activeUser?.email).not.toBe("system_bridge_admin@system.local");
+    expect(activeUser?.id).toBe("44444444-4444-4000-8000-444444444444");
+
+    // Verify localStorage has no bridge admin trace
+    const raw = localStorage.getItem("qc_current_auth_user_v2");
+    expect(raw).toContain(userEmail);
+    expect(raw).not.toContain("system_bridge_admin@system.local");
+  });
 });

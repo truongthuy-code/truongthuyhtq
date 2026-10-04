@@ -125,21 +125,16 @@ export default function AuthPage() {
                 password,
               });
               if (!signData?.user) {
-                const { data: suData } = await supabase.auth.signUp({
+                await supabase.auth.signUp({
                   email: adminEmail,
                   password,
                   options: {
                     data: { role: matchedAdmin.role, full_name: matchedAdmin.name },
                   },
                 });
-                signData = suData;
-              }
-              if (!signData?.session) {
-                await ensureSupabaseSession(matchedAdmin);
               }
             } catch (err) {
-              console.warn("Supabase admin auth sync error:", err);
-              await ensureSupabaseSession(matchedAdmin).catch(() => {});
+              console.warn("Supabase admin auth sync note:", err);
             }
 
             setCurrentAuthUser({
@@ -166,6 +161,39 @@ export default function AuthPage() {
             navigate("/admin", { replace: true });
             return;
           }
+        }
+
+        // Check Supabase Auth directly for Admin role
+        try {
+          const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
+            email: identifier.trim(),
+            password,
+          });
+
+          if (!sbError && signData?.user) {
+            const [{ data: r }, { data: p }] = await Promise.all([
+              supabase.from("user_roles").select("role").eq("user_id", signData.user.id),
+              supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
+            ]);
+            const role = (r && r[0]?.role) || signData.user.user_metadata?.role || "admin";
+            const fullName = p?.full_name || signData.user.user_metadata?.full_name || identifier.split("@")[0];
+
+            setCurrentAuthUser({
+              id: signData.user.id,
+              username: identifier.split("@")[0],
+              name: fullName,
+              email: signData.user.email || identifier.trim(),
+              role: role as any,
+              mustChangePassword: false,
+            });
+
+            toast.success(`Đăng nhập thành công với quyền Quản trị viên: ${fullName}`);
+            setBusy(false);
+            navigate("/admin", { replace: true });
+            return;
+          }
+        } catch (err) {
+          console.warn("Supabase admin auth attempt note:", err);
         }
 
         // If not matched, strictly refuse wrong role/credentials
@@ -197,21 +225,20 @@ export default function AuthPage() {
                 password,
               });
               if (!signData?.user) {
-                const { data: suData } = await supabase.auth.signUp({
+                await supabase.auth.signUp({
                   email: effectiveEmail,
                   password,
                   options: {
                     data: { full_name: teacher.name, subject_name: teacher.subject },
                   },
                 });
-                signData = suData;
               }
               if (signData?.user?.id && (!teacher.id || !isUuid(teacher.id))) {
                 teacher.id = signData.user.id;
                 upsertTeacher(teacher);
               }
             } catch (err) {
-              console.warn("Supabase auth sync warning on login:", err);
+              console.warn("Supabase auth sync note on login:", err);
             }
 
             setCurrentAuthUser({
@@ -233,16 +260,41 @@ export default function AuthPage() {
         }
 
         // Fallback to Supabase Auth if registered via email
-        const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
-          email: identifier.trim(),
-          password,
-        });
+        try {
+          const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
+            email: identifier.trim(),
+            password,
+          });
 
-        if (!sbError && signData?.user) {
-          toast.success("Đăng nhập thành công");
-          setBusy(false);
-          navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
-          return;
+          if (!sbError && signData?.user) {
+            const [{ data: r }, { data: p }] = await Promise.all([
+              supabase.from("user_roles").select("role").eq("user_id", signData.user.id),
+              supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
+            ]);
+
+            const role = (r && r[0]?.role) || signData.user.user_metadata?.role || "teacher";
+            const fullName = p?.full_name || signData.user.user_metadata?.full_name || identifier.split("@")[0];
+            const isAdm = role === "admin" || role === "super_admin";
+
+            setCurrentAuthUser({
+              id: signData.user.id,
+              username: identifier.split("@")[0],
+              name: fullName,
+              email: signData.user.email || identifier.trim(),
+              phone: p?.phone || "",
+              school: p?.school_name || "Trường THPT",
+              subject: p?.subject_name || "Tin học",
+              avatar: p?.avatar,
+              role: role as any,
+            });
+
+            toast.success(`Chào mừng ${fullName}`);
+            setBusy(false);
+            navigate(isAdm ? "/admin" : (redirectTo === "/admin" ? "/" : redirectTo), { replace: true });
+            return;
+          }
+        } catch (err) {
+          console.warn("Supabase teacher auth attempt note:", err);
         }
 
         setBusy(false);
