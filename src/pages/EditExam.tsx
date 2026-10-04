@@ -88,7 +88,7 @@ export default function EditExam() {
         close_at: schedule.close_at,
         auto_submit_on_close: schedule.auto_submit_on_close,
       } as any).eq("id", id);
-    }, user);
+    }, user as any);
 
     setSaving(false);
     if (error) { toast.error("Lỗi lưu: " + error.message); return; }

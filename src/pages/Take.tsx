@@ -227,6 +227,7 @@ export default function Take() {
   const submittedRef = useRef(false);
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
+  const showSingleMode = isQuiz || standardViewMode === "single";
   const instantFb = !!exam?.instant_feedback;
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
@@ -2035,7 +2036,6 @@ export default function Take() {
   // =========================================================================
   // GIAO DIỆN CHÍNH (ÁP DỤNG ĐỒNG BỘ CẢ CHẾ ĐỘ TỪNG CÂU VÀ CHẾ ĐỘ TOÀN BỘ)
   // =========================================================================
-  const showSingleMode = isQuiz || standardViewMode === "single";
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-primary/20 relative">

@@ -146,12 +146,11 @@ export default function Share() {
       if (svg) {
         const svgData = new XMLSerializer().serializeToString(svg);
         const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-        const DOMURL = window.URL || window.webkitURL || window;
-        const svgUrl = DOMURL.createObjectURL(svgBlob);
+        const svgUrl = URL.createObjectURL(svgBlob);
 
         qrImg.onload = () => {
           ctx.drawImage(qrImg, pad, headerH, qrSize, qrSize);
-          DOMURL.revokeObjectURL(svgUrl);
+          URL.revokeObjectURL(svgUrl);
 
           // Footer Code
           ctx.fillStyle = "#0F172A";

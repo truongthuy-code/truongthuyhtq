@@ -712,6 +712,22 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
         };
       }
     } catch {}
+
+    return {
+      success: true,
+      exam: {
+        id: localFound.examId,
+        title: localFound.title || "Bài thi",
+        duration_minutes: localFound.durationMinutes || 45,
+        teacher_name: localFound.teacherName,
+        school_name: localFound.schoolName,
+        subject_name: localFound.subjectName,
+        open_at: localFound.openAt,
+        close_at: localFound.closeAt,
+        questions: [],
+      },
+      assignment: localFound,
+    };
   }
 
   // 4. Cross-device lookup via public schools registry table
@@ -792,11 +808,12 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
         });
 
         if (exData && !rpcErr) {
+          const rawExam = (typeof exData === "object" && exData !== null ? exData : {}) as Record<string, any>;
           const examObj = {
-            ...exData,
-            teacher_name: parsed.teacherName || exData.teacher_name,
-            school_name: parsed.schoolName || exData.school_name,
-            subject_name: parsed.subjectName || exData.subject_name,
+            ...rawExam,
+            teacher_name: parsed.teacherName || rawExam.teacher_name,
+            school_name: parsed.schoolName || rawExam.school_name,
+            subject_name: parsed.subjectName || rawExam.subject_name,
           };
 
           const assignmentObj: ExamAssignment = {

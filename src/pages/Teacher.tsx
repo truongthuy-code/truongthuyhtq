@@ -196,7 +196,7 @@ export default function Teacher() {
     setSaving(true);
 
     // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
-    const activeUserId = await ensureSupabaseSession(currentUser);
+    const activeUserId = await ensureSupabaseSession(currentUser as any);
 
     let original_file_url: string | null = null;
     let original_file_name: string | null = null;
@@ -223,7 +223,7 @@ export default function Teacher() {
       primary_code: examCode,
     };
 
-    const { data, error } = await withSupabaseAuthRetry(async (uid) => {
+    const { data, error } = await withSupabaseAuthRetry<{ id: string }>(async (uid) => {
       const targetCreatedBy = isUuid(uid)
         ? uid
         : (isUuid(currentUser?.id) ? currentUser.id : null);
@@ -258,7 +258,7 @@ export default function Teacher() {
         } as any)
         .select("id")
         .single();
-    }, currentUser);
+    }, currentUser as any);
 
     setSaving(false);
     if (error || !data) {

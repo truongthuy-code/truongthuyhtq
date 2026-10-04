@@ -139,7 +139,7 @@ export default function Exams() {
     await supabase.from("submissions").delete().eq("exam_id", exam.id);
     const { error } = await withSupabaseAuthRetry(async () => {
       return await supabase.from("exams").delete().eq("id", exam.id);
-    }, user);
+    }, user as any);
     if (error) return toast.error(error.message);
     toast.success("Đã xóa đề"); load();
   };
@@ -186,7 +186,7 @@ export default function Exams() {
         title: `${exam.title} (Bản sao)`,
         created_by: createdByUuid,
       } as any);
-    }, user);
+    }, user as any);
 
     if (error) return toast.error(error.message);
     toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");

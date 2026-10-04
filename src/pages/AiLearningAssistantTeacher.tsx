@@ -326,8 +326,8 @@ export default function AiLearningAssistantTeacher() {
                 </SelectTrigger>
                 <SelectContent>
                   {SUBJECT_LIST.map((s) => (
-                    <SelectItem key={s.name} value={s.name}>
-                      {s.name}
+                    <SelectItem key={s} value={s}>
+                      {s}
                     </SelectItem>
                   ))}
                   <SelectItem value="other">+ Nhập môn học khác...</SelectItem>
