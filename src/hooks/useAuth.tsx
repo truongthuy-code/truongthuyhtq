@@ -65,44 +65,84 @@ const Ctx = createContext<AuthCtx>({
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<{ id: string; email?: string | null; role?: Role; mustChangePassword?: boolean } | null>(null);
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [profile, setProfile] = useState<TeacherProfile | null>(null);
-  const [mustChangePassword, setMustChangePassword] = useState(false);
-  const [loading, setLoading] = useState(true);
+
+  // Initialize synchronously from currently authenticated session user
+  const [user, setUser] = useState<{ id: string; email?: string | null; role?: Role; mustChangePassword?: boolean } | null>(() => {
+    const custom = getCurrentAuthUser();
+    if (!custom) return null;
+    const isSuper = custom.role === "super_admin";
+    const isAdm = isSuper || custom.role === "admin";
+    return {
+      id: custom.id,
+      email: custom.email,
+      role: isSuper ? "super_admin" : (isAdm ? "admin" : "teacher"),
+      mustChangePassword: !!custom.mustChangePassword,
+    };
+  });
+
+  const [roles, setRoles] = useState<Role[]>(() => {
+    const custom = getCurrentAuthUser();
+    if (!custom) return [];
+    const isSuper = custom.role === "super_admin";
+    const isAdm = isSuper || custom.role === "admin";
+    return [isSuper ? "super_admin" : (isAdm ? "admin" : "teacher")];
+  });
+
+  const [profile, setProfile] = useState<TeacherProfile | null>(() => {
+    const custom = getCurrentAuthUser();
+    if (!custom) return null;
+    const isSuper = custom.role === "super_admin";
+    const isAdm = isSuper || custom.role === "admin";
+    if (isAdm) {
+      return {
+        id: custom.id,
+        email: custom.email,
+        username: custom.username,
+        full_name: custom.name || (isSuper ? "Quản trị viên hệ thống" : "Quản trị viên"),
+        phone: custom.phone || "",
+        subject_id: null,
+        subject_name: isSuper ? "Toàn quyền Quản trị Super Admin" : "Quản trị viên Hệ thống",
+        school_id: null,
+        school_name: "Hệ thống Quản trị",
+        profile_completed: true,
+        status: "active",
+      };
+    }
+    const teacher = getTeacherById(custom.id) || getTeacherByUsernameOrEmail(custom.username || custom.email);
+    return {
+      id: custom.id,
+      email: custom.email || teacher?.email || "",
+      username: custom.username || teacher?.username || "",
+      full_name: custom.name || teacher?.name || "Giáo viên",
+      phone: custom.phone || teacher?.phone || "",
+      subject_id: null,
+      subject_name: custom.subject || teacher?.subject || "",
+      school_id: null,
+      school_name: custom.school || teacher?.school || "",
+      profile_completed: true,
+      avatar: custom.avatar || teacher?.avatar,
+      status: teacher?.status || "active",
+    };
+  });
+
+  const [mustChangePassword, setMustChangePassword] = useState(() => {
+    const custom = getCurrentAuthUser();
+    return !!custom?.mustChangePassword;
+  });
+
+  const [loading, setLoading] = useState(false);
 
   // Sync profile & user from either custom storage or Supabase Auth
   const syncState = useCallback(async () => {
-    let sbSession: Session | null = null;
-    try {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      sbSession = s;
-      setSession(s);
-    } catch {}
-
     const customUser = getCurrentAuthUser();
     if (customUser) {
-      if (!sbSession?.user?.id) {
-        ensureSupabaseSession(customUser).then((uid) => {
-          if (uid) {
-            supabase.auth.getSession().then(({ data: { session: freshS } }) => {
-              if (freshS) setSession(freshS);
-            });
-          }
-        }).catch(() => {});
-      }
-
       const isSuper = customUser.role === "super_admin";
       const isAdm = isSuper || customUser.role === "admin";
       const roleVal: Role = isSuper ? "super_admin" : (isAdm ? "admin" : "teacher");
 
-      // Prefer Supabase Auth UUID if available and valid
-      const effectiveId = (sbSession?.user?.id && isUuid(sbSession.user.id))
-        ? sbSession.user.id
-        : customUser.id;
-
+      // The currently logged in user is 100% authoritative and MUST NOT be overwritten
       setUser({
-        id: effectiveId,
+        id: customUser.id,
         email: customUser.email,
         role: roleVal,
         mustChangePassword: !!customUser.mustChangePassword,
@@ -112,11 +152,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isAdm) {
         setProfile({
-          id: effectiveId,
+          id: customUser.id,
           email: customUser.email,
           username: customUser.username,
           full_name: customUser.name || (isSuper ? "Quản trị viên hệ thống" : "Quản trị viên"),
-          phone: "",
+          phone: customUser.phone || "",
           subject_id: null,
           subject_name: isSuper ? "Toàn quyền Quản trị Super Admin" : "Quản trị viên Hệ thống",
           school_id: null,
@@ -125,27 +165,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           status: "active",
         });
       } else {
-        const teacher = getTeacherById(customUser.id) || getTeacherById(effectiveId);
+        const teacher = getTeacherById(customUser.id) || getTeacherByUsernameOrEmail(customUser.username || customUser.email);
         setProfile({
-          id: effectiveId,
-          email: teacher?.email || customUser.email,
-          username: teacher?.username || customUser.username,
-          full_name: teacher?.name || customUser.name,
-          phone: teacher?.phone || customUser.phone || "",
+          id: customUser.id,
+          email: customUser.email || teacher?.email || "",
+          username: customUser.username || teacher?.username || "",
+          full_name: customUser.name || teacher?.name || "Giáo viên",
+          phone: customUser.phone || teacher?.phone || "",
           subject_id: null,
-          subject_name: teacher?.subject || customUser.subject || "",
+          subject_name: customUser.subject || teacher?.subject || "",
           school_id: null,
-          school_name: teacher?.school || customUser.school || "",
+          school_name: customUser.school || teacher?.school || "",
           profile_completed: true,
-          avatar: teacher?.avatar || customUser.avatar,
+          avatar: customUser.avatar || teacher?.avatar,
           status: teacher?.status || "active",
         });
       }
+
       setLoading(false);
+
+      // Seamlessly sync Supabase Auth session for PostgreSQL RLS permissions in the background
+      ensureSupabaseSession(customUser).then(() => {
+        supabase.auth.getSession().then(({ data: { session: s } }) => {
+          if (s) setSession(s);
+        });
+      }).catch(() => {});
+
       return;
     }
 
-    // Fallback to Supabase auth session if available
+    // Fallback to Supabase auth session if available and no custom user is logged in
     try {
       const { data: { session: s } } = await supabase.auth.getSession();
       setSession(s);
@@ -212,63 +261,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [syncState]);
 
   const updateTeacherProfile = useCallback(async (updates: Partial<TeacherUser>): Promise<boolean> => {
-    if (!user) return false;
-    const current = getTeacherById(user.id);
-    if (!current) {
-      // If it's admin or custom
-      const authUser = getCurrentAuthUser();
-      if (authUser && authUser.id === user.id) {
-        const nextAuth: AuthSessionUser = {
-          ...authUser,
-          name: updates.name ?? authUser.name,
-          email: updates.email ?? authUser.email,
-          phone: updates.phone ?? authUser.phone,
-          school: updates.school ?? authUser.school,
-          subject: updates.subject ?? authUser.subject,
-          avatar: updates.avatar ?? authUser.avatar,
-        };
-        setCurrentAuthUser(nextAuth);
-        await syncState();
-        return true;
-      }
-      return false;
-    }
-
-    const next: TeacherUser = {
-      ...current,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    upsertTeacher(next);
-
-    // Sync session user
     const authUser = getCurrentAuthUser();
-    if (authUser && authUser.id === user.id) {
-      setCurrentAuthUser({
-        ...authUser,
-        name: next.name,
-        email: next.email,
-        phone: next.phone,
-        school: next.school,
-        subject: next.subject,
-        avatar: next.avatar,
+    if (!authUser) return false;
+
+    // 1. Immediately update the authenticated session user so UI reflects changes
+    const nextAuth: AuthSessionUser = {
+      ...authUser,
+      name: updates.name !== undefined ? updates.name : authUser.name,
+      email: updates.email !== undefined ? updates.email : authUser.email,
+      phone: updates.phone !== undefined ? updates.phone : authUser.phone,
+      school: updates.school !== undefined ? updates.school : authUser.school,
+      subject: updates.subject !== undefined ? updates.subject : authUser.subject,
+      avatar: updates.avatar !== undefined ? updates.avatar : authUser.avatar,
+    };
+    setCurrentAuthUser(nextAuth);
+
+    // 2. Update persistent teacher registry if role is teacher
+    const teacher = getTeacherById(authUser.id) || getTeacherByUsernameOrEmail(authUser.username || authUser.email);
+    if (teacher) {
+      upsertTeacher({
+        ...teacher,
+        ...updates,
+        id: authUser.id,
+        name: nextAuth.name,
+        email: nextAuth.email,
+        phone: nextAuth.phone || teacher.phone,
+        school: nextAuth.school || teacher.school,
+        subject: nextAuth.subject || teacher.subject,
+        avatar: nextAuth.avatar || teacher.avatar,
+        updatedAt: new Date().toISOString(),
       });
     }
 
-    // Also update supabase profiles if applicable
+    // 3. Update admin registry if admin
+    if (authUser.role === "admin" || authUser.role === "super_admin") {
+      const admin = getAdminById(authUser.id) || getAdminByUsernameOrEmail(authUser.username || authUser.email);
+      if (admin) {
+        saveAdminAccount({
+          ...admin,
+          name: nextAuth.name,
+          email: nextAuth.email,
+        });
+      }
+    }
+
+    // 4. Update Supabase profile if active session exists
     try {
-      await supabase.from("profiles").update({
-        full_name: next.name,
-        email: next.email,
-        phone: next.phone,
-        school_name: next.school,
-        subject_name: next.subject,
-      }).eq("id", user.id);
+      if (session?.user?.id) {
+        await supabase.from("profiles").update({
+          full_name: nextAuth.name,
+          email: nextAuth.email,
+          phone: nextAuth.phone,
+          school_name: nextAuth.school,
+          subject_name: nextAuth.subject,
+          avatar: nextAuth.avatar,
+        }).eq("id", session.user.id);
+      }
     } catch {}
 
     await syncState();
     return true;
-  }, [user, syncState]);
+  }, [syncState, session]);
 
   const signOut = useCallback(async (options?: { redirectTo?: string; redirect?: boolean }) => {
     // 1. Sign out of Supabase auth client if active

@@ -382,7 +382,7 @@ export function getAllTeachers(): TeacherUser[] {
             changed = true;
             return { ...t, id: DEFAULT_TEACHER_ID };
           }
-          if (!isUuid(t.id)) {
+          if (!t.id) {
             changed = true;
             return { ...t, id: generateUuid() };
           }
@@ -407,6 +407,7 @@ export function saveAllTeachers(teachers: TeacherUser[]) {
 }
 
 export function getTeacherById(id: string): TeacherUser | null {
+  if (!id) return null;
   const teachers = getAllTeachers();
   return teachers.find((t) => t.id === id || (id === LEGACY_DEFAULT_TEACHER_ID && t.id === DEFAULT_TEACHER_ID)) || null;
 }
@@ -420,9 +421,24 @@ export function getTeacherByUsernameOrEmail(identifier: string): TeacherUser | n
 
 export function upsertTeacher(t: TeacherUser) {
   const teachers = getAllTeachers();
-  const idx = teachers.findIndex((item) => item.id === t.id);
+  const normUname = normalizeUsername(t.username);
+  const normEmail = normalizeUsername(t.email);
+
+  const idx = teachers.findIndex(
+    (item) =>
+      item.id === t.id ||
+      (normUname && normalizeUsername(item.username) === normUname) ||
+      (normEmail && normalizeUsername(item.email) === normEmail)
+  );
+
   if (idx >= 0) {
-    teachers[idx] = { ...t, updatedAt: new Date().toISOString() };
+    const stableId = teachers[idx].id || t.id;
+    teachers[idx] = {
+      ...teachers[idx],
+      ...t,
+      id: stableId,
+      updatedAt: new Date().toISOString(),
+    };
   } else {
     teachers.push(t);
   }
@@ -453,22 +469,18 @@ export function getCurrentAuthUser(): AuthSessionUser | null {
     const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
     if (!raw) return null;
     const user: AuthSessionUser = JSON.parse(raw);
-    if (user && !isUuid(user.id)) {
+    if (!user || typeof user !== "object") return null;
+
+    if (!user.id) {
       if (user.id === LEGACY_DEFAULT_TEACHER_ID || user.username === "giaovien") {
         user.id = DEFAULT_TEACHER_ID;
-        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
       } else if (user.id === LEGACY_ROOT_SUPER_ADMIN_ID || user.username === "admin") {
         user.id = ROOT_SUPER_ADMIN_ID;
-        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
       } else {
         const matched = getTeacherByUsernameOrEmail(user.username || user.email);
-        if (matched && isUuid(matched.id)) {
-          user.id = matched.id;
-        } else {
-          user.id = generateUuid();
-        }
-        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+        user.id = matched?.id || generateUuid();
       }
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
     }
     return user;
   } catch {
@@ -478,7 +490,33 @@ export function getCurrentAuthUser(): AuthSessionUser | null {
 
 export function setCurrentAuthUser(user: AuthSessionUser | null) {
   if (user) {
+    if (!user.id) {
+      if (user.role === "super_admin") {
+        user.id = ROOT_SUPER_ADMIN_ID;
+      } else if (user.username === "giaovien") {
+        user.id = DEFAULT_TEACHER_ID;
+      } else {
+        const existingTeacher = getTeacherByUsernameOrEmail(user.username || user.email);
+        user.id = existingTeacher?.id || generateUuid();
+      }
+    }
+
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+
+    // Ensure teacher registry record matches this user exactly so names and profiles never diverge
+    if (user.role === "teacher") {
+      const existing = getTeacherByUsernameOrEmail(user.username || user.email) || getTeacherById(user.id);
+      if (existing) {
+        existing.id = user.id;
+        existing.name = user.name || existing.name;
+        existing.email = user.email || existing.email;
+        if (user.school) existing.school = user.school;
+        if (user.subject) existing.subject = user.subject;
+        if (user.phone) existing.phone = user.phone;
+        if (user.avatar) existing.avatar = user.avatar;
+        upsertTeacher(existing);
+      }
+    }
   } else {
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
   }

@@ -21,7 +21,19 @@ export async function ensureSupabaseSession(user?: AuthSessionUser | null): Prom
     // 1. Check existing session
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user?.id && isUuid(session.user.id)) {
-      return session.user.id;
+      // If user is provided, verify this session does not belong to a different account
+      if (user?.email && session.user.email) {
+        const sessEmail = session.user.email.trim().toLowerCase();
+        const userEmail = user.email.trim().toLowerCase();
+        if (sessEmail !== userEmail && !sessEmail.includes("system_bridge")) {
+          // Stale session from a different user! Sign out to switch cleanly
+          await supabase.auth.signOut().catch(() => {});
+        } else {
+          return session.user.id;
+        }
+      } else {
+        return session.user.id;
+      }
     }
 
     // 2. If user is admin / super_admin, authenticate with admin credentials or system bridge

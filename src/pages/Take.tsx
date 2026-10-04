@@ -235,14 +235,12 @@ export default function Take() {
   // Auto-fill from student account if logged in
   useEffect(() => {
     if (student) {
-      if (!name) setName(student.fullName);
-      if (!klass) {
-        const searchParams = new URLSearchParams(location.search);
-        setKlass(student.className || searchParams.get("targetClass") || (location.state as any)?.assignment?.className || "Chung");
-      }
-      if (!account) setAccount(student.account);
+      setName(student.fullName);
+      setAccount(student.account);
+      const searchParams = new URLSearchParams(location.search);
+      setKlass(student.className || searchParams.get("targetClass") || (location.state as any)?.assignment?.className || "Chung");
     }
-  }, [student, location]);
+  }, [student, location.search]);
 
   // Snapshot of live state for unload handler
   const liveRef = useRef<any>({});
