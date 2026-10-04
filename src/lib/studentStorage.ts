@@ -3,6 +3,7 @@
  * Provides registration, authentication (without email verification),
  * submission history tracking, and post-close official answer reveal.
  */
+import { clearAuthLocalStorage, clearAuthSessionStorage, clearAuthCookies } from "./authCleanup";
 
 export interface StudentUser {
   id: string;
@@ -180,6 +181,9 @@ export function loginStudent(
 /** Logout student */
 export function logoutStudent() {
   setCurrentStudent(null);
+  clearAuthLocalStorage("student");
+  clearAuthSessionStorage();
+  clearAuthCookies();
 }
 
 /** Get all submissions across all students */

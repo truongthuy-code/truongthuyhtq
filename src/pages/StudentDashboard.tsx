@@ -310,10 +310,9 @@ export default function StudentDashboard() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                logout();
+              onClick={async () => {
                 toast.info("Đã đăng xuất tài khoản học sinh");
-                navigate("/student/auth");
+                await logout();
               }}
               className="rounded-xl gap-1 text-xs"
             >

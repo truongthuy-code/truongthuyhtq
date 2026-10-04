@@ -12,6 +12,7 @@ import {
   isUuid,
 } from "@/lib/teacherStorage";
 import { ensureSupabaseSession } from "@/lib/supabaseAuthSync";
+import { performFullLogout } from "@/lib/authCleanup";
 
 export type Role = "super_admin" | "admin" | "teacher";
 
@@ -43,7 +44,7 @@ type AuthCtx = {
   profile: TeacherProfile | null;
   refreshProfile: () => Promise<void>;
   updateTeacherProfile: (updates: Partial<TeacherUser>) => Promise<boolean>;
-  signOut: () => Promise<void>;
+  signOut: (options?: { redirectTo?: string; redirect?: boolean }) => Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx>({
@@ -269,17 +270,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }, [user, syncState]);
 
-  const signOut = useCallback(async () => {
-    logoutCurrentUser();
+  const signOut = useCallback(async (options?: { redirectTo?: string; redirect?: boolean }) => {
+    // 1. Sign out of Supabase auth client if active
     try {
       await supabase.auth.signOut();
-    } catch {}
+    } catch (e) {
+      console.warn("Supabase auth signOut warning:", e);
+    }
+
+    // 2. Clear current auth user locally
+    logoutCurrentUser();
+
+    // 3. Reset React auth state
     setUser(null);
     setSession(null);
     setRoles([]);
     setProfile(null);
     setMustChangePassword(false);
-    window.dispatchEvent(new Event("app_auth_change"));
+
+    // 4. Thoroughly wipe localStorage, sessionStorage, Cookies, and cleanly redirect to /auth
+    await performFullLogout({
+      redirectTo: options?.redirectTo || "/auth",
+      type: "teacher",
+      redirect: options?.redirect !== false,
+    });
   }, []);
 
   const isSuperAdmin = roles.includes("super_admin") || user?.role === "super_admin";

@@ -6,6 +6,7 @@ import {
   registerStudent as doRegister,
   logoutStudent as doLogout,
 } from "@/lib/studentStorage";
+import { performFullLogout } from "@/lib/authCleanup";
 
 export function useStudentAuth() {
   const [student, setStudent] = useState<StudentUser | null>(() => getCurrentStudent());
@@ -47,10 +48,15 @@ export function useStudentAuth() {
     return res;
   };
 
-  const logout = () => {
+  const logout = useCallback(async (options?: { redirectTo?: string; redirect?: boolean }) => {
     doLogout();
     setStudent(null);
-  };
+    await performFullLogout({
+      redirectTo: options?.redirectTo || "/student/auth",
+      type: "student",
+      redirect: options?.redirect !== false,
+    });
+  }, []);
 
   return {
     student,

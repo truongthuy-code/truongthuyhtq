@@ -1155,7 +1155,7 @@ export default function Take() {
                   size="sm"
                   className="text-xs h-7 text-muted-foreground hover:text-foreground font-semibold"
                   onClick={() => {
-                    studentLogout();
+                    studentLogout({ redirect: false });
                     setName("");
                     setKlass("");
                     setAccount("");

@@ -3,6 +3,7 @@
  * Provides authentication, profile management, password hashing,
  * admin initialization, and role isolation for Super Admin, Admins, and Teachers.
  */
+import { clearAuthLocalStorage, clearAuthSessionStorage, clearAuthCookies } from "./authCleanup";
 
 export interface TeacherUser {
   id: string;
@@ -486,4 +487,7 @@ export function setCurrentAuthUser(user: AuthSessionUser | null) {
 
 export function logoutCurrentUser() {
   setCurrentAuthUser(null);
+  clearAuthLocalStorage("teacher");
+  clearAuthSessionStorage();
+  clearAuthCookies();
 }
