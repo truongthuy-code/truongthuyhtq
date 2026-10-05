@@ -28,6 +28,7 @@ import {
   getExamPrimaryCode,
   getExamShareUrl,
   syncExamAssignmentCodes,
+  getExamPublicOrigin,
 } from "@/lib/examAssignments";
 
 interface QuickExamShareModalProps {
@@ -73,7 +74,10 @@ export default function QuickExamShareModal({
 
   if (!exam) return null;
 
-  const mainUrl = `${window.location.origin}/take/${exam.id}`;
+  const publicOrigin = getExamPublicOrigin();
+  const mainUrl = primaryCode
+    ? `${publicOrigin}/take/${exam.id}?code=${encodeURIComponent(primaryCode)}`
+    : `${publicOrigin}/take/${exam.id}`;
 
   const copyCode = (code: string) => {
     navigator.clipboard.writeText(code);

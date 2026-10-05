@@ -50,6 +50,11 @@ import {
   Layers,
   Award,
   AlertTriangle,
+  ExternalLink,
+  Share2,
+  Play,
+  Check,
+  CheckCheck,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -69,9 +74,22 @@ import {
   getRootAdmin,
   generateUuid,
 } from "@/lib/teacherStorage";
+import {
+  fetchAllExamsForAdmin,
+  deleteExamAsSuperAdmin,
+  toggleExamLockAsSuperAdmin,
+  SystemExam,
+  saveUnifiedExam,
+  getParsedQuestions,
+} from "@/lib/allExamsStorage";
+import RichText from "@/components/RichText";
+import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { SUBJECT_LIST } from "@/lib/subjects";
 import { toast } from "sonner";
 import MandatoryPasswordChange from "@/components/MandatoryPasswordChange";
+import { getLocalAssignments, saveLocalAssignments } from "@/lib/examAssignments";
+import { SAMPLE_EXAMS } from "@/lib/sampleExams";
+import { getAllSubmissions } from "@/lib/studentStorage";
 
 const DEFAULT_SCHOOLS = [
   "THPT Phan Bội Châu - TP Đà Nẵng",
@@ -97,6 +115,8 @@ export default function AdminDashboard() {
   const [admins, setAdmins] = useState<AdminUser[]>([]);
   const [adminQuery, setAdminQuery] = useState("");
   const [addAdminOpen, setAddAdminOpen] = useState(false);
+  const [addAdminTab, setAddAdminTab] = useState<"grant" | "create">("grant");
+  const [selectedTeacherToGrant, setSelectedTeacherToGrant] = useState<string>("");
   const [resetPwdAdmin, setResetPwdAdmin] = useState<AdminUser | null>(null);
   const [newAdminPwd, setNewAdminPwd] = useState("");
   const [deleteAdminTarget, setDeleteAdminTarget] = useState<AdminUser | null>(null);
@@ -115,6 +135,14 @@ export default function AdminDashboard() {
   const [editTeacher, setEditTeacher] = useState<TeacherUser | null>(null);
   const [resetPwdTeacher, setResetPwdTeacher] = useState<TeacherUser | null>(null);
   const [newPasswordVal, setNewPasswordVal] = useState("");
+
+  // Exam Preview & Quick Edit State
+  const [previewExamTarget, setPreviewExamTarget] = useState<SystemExam | any | null>(null);
+  const [quickEditExam, setQuickEditExam] = useState<SystemExam | any | null>(null);
+  const [qeTitle, setQeTitle] = useState("");
+  const [qeDuration, setQeDuration] = useState(45);
+  const [qeSubject, setQeSubject] = useState("");
+  const [qeSchool, setQeSchool] = useState("");
 
   // Teacher Form State
   const [tfUsername, setTfUsername] = useState("");
@@ -175,16 +203,39 @@ export default function AdminDashboard() {
     // 1. Admins
     setAdmins(getAllAdmins());
 
-    // 2. Teachers
+    // 2. Teachers: combine local registry with Supabase cloud profiles
     const tchs = getAllTeachers();
-    setTeachers(tchs);
+    try {
+      const { data: remoteProfiles } = await supabase.from("profiles").select("*");
+      if (remoteProfiles && remoteProfiles.length > 0) {
+        remoteProfiles.forEach((p: any) => {
+          if (p.email && p.email.toLowerCase() !== "admin@admin.com") {
+            const exists = tchs.some(
+              (t) => t.id === p.id || (t.email && t.email.toLowerCase() === p.email.toLowerCase())
+            );
+            if (!exists) {
+              const newT: TeacherUser = {
+                id: p.id,
+                username: p.email.split("@")[0],
+                name: p.full_name || p.email.split("@")[0],
+                email: p.email,
+                phone: p.phone || "",
+                school: p.school_name || "Trường THPT",
+                subject: p.subject_name || "Tin học",
+                status: "active",
+                createdAt: p.created_at || new Date().toISOString(),
+              };
+              tchs.push(newT);
+              upsertTeacher(newT);
+            }
+          }
+        });
+      }
+    } catch {}
+    setTeachers([...tchs]);
 
-    // 3. Exams
-    const { data: ex } = await supabase
-      .from("exams")
-      .select("id,title,created_by,created_at,duration_minutes,display_mode,school_name,teacher_name,subject_name,questions,manual_closed")
-      .order("created_at", { ascending: false });
-    const allExams = ex || [];
+    // 3. Exams: Connect & fetch all exams from all teachers with unified synchronization
+    const allExams = await fetchAllExamsForAdmin(user);
     setExams(allExams);
 
     // 4. Submissions
@@ -210,12 +261,15 @@ export default function AdminDashboard() {
     const handleSync = () => {
       setTeachers(getAllTeachers());
       setAdmins(getAllAdmins());
+      loadData();
     };
     window.addEventListener("teacher_registry_changed", handleSync);
     window.addEventListener("admin_registry_changed", handleSync);
+    window.addEventListener("all_exams_changed", handleSync);
     return () => {
       window.removeEventListener("teacher_registry_changed", handleSync);
       window.removeEventListener("admin_registry_changed", handleSync);
+      window.removeEventListener("all_exams_changed", handleSync);
     };
   }, []);
 
@@ -255,6 +309,14 @@ export default function AdminDashboard() {
     });
     return map;
   }, [teachers]);
+
+  const adminUsernames = useMemo(() => {
+    return new Set(admins.map((a) => a.username.toLowerCase()));
+  }, [admins]);
+
+  const adminEmails = useMemo(() => {
+    return new Set(admins.map((a) => (a.email || "").toLowerCase()).filter(Boolean));
+  }, [admins]);
 
   // Helper to get teacher name for an exam
   const getExamTeacherName = useCallback((exam: any) => {
@@ -598,33 +660,103 @@ export default function AdminDashboard() {
 
   // Exam Management Handlers
   const handleToggleCloseExam = async (exam: any) => {
-    const nextState = !exam.manual_closed;
-    const { error } = await supabase
-      .from("exams")
-      .update({ manual_closed: nextState })
-      .eq("id", exam.id);
-
-    if (error) {
-      toast.error("Không thể thay đổi trạng thái đề thi");
-    } else {
-      toast.success(nextState ? "Đã khóa đề thi" : "Đã mở lại đề thi cho học sinh làm bài");
+    try {
+      const res = await toggleExamLockAsSuperAdmin(exam, user);
+      toast.success(res.nextState ? "Đã khóa đề thi" : "Đã mở lại đề thi cho học sinh làm bài");
       loadData();
+    } catch (e: any) {
+      toast.error("Không thể thay đổi trạng thái: " + e.message);
     }
   };
 
   const handleDeleteExam = async (examId: string, title: string) => {
-    if (!confirm(`Bạn có chắc chắn muốn xóa đề thi "${title}"? Toàn bộ kết quả bài nộp của đề này cũng sẽ bị gỡ bỏ.`)) {
+    if (!confirm(`Bạn có chắc chắn muốn xóa đề thi "${title}"? Toàn bộ kết quả bài nộp của đề này cũng sẽ bị gỡ bỏ vĩnh viễn khỏi hệ thống.`)) {
       return;
     }
     try {
-      await supabase.from("submissions").delete().eq("exam_id", examId);
-      const { error } = await supabase.from("exams").delete().eq("id", examId);
-      if (error) throw error;
+      await deleteExamAsSuperAdmin(examId, user);
       toast.success(`Đã xóa đề thi: ${title}`);
       loadData();
     } catch (err: any) {
       toast.error("Không thể xóa đề thi: " + err.message);
     }
+  };
+
+  const handleOpenQuickEdit = (exam: any) => {
+    setQuickEditExam(exam);
+    setQeTitle(exam.title || "");
+    setQeDuration(exam.duration_minutes || 45);
+    setQeSubject(exam.subject_name || "");
+    setQeSchool(exam.school_name || "");
+  };
+
+  const handleSaveQuickEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickEditExam) return;
+    try {
+      const updated = {
+        ...quickEditExam,
+        title: qeTitle.trim() || quickEditExam.title,
+        duration_minutes: Number(qeDuration) || 45,
+        subject_name: qeSubject,
+        school_name: qeSchool,
+      };
+      await withSupabaseAuthRetry(async () => {
+        return await supabase.from("exams").update({
+          title: updated.title,
+          duration_minutes: updated.duration_minutes,
+          subject_name: updated.subject_name,
+          school_name: updated.school_name,
+        } as any).eq("id", updated.id);
+      }, user);
+
+      saveUnifiedExam(updated);
+      toast.success("Cập nhật thông tin đề thi thành công!");
+      setQuickEditExam(null);
+      loadData();
+    } catch (err: any) {
+      toast.error("Lỗi cập nhật: " + err.message);
+    }
+  };
+
+  const handleGrantAdminToTeacher = (teacher: TeacherUser) => {
+    if (!confirm(`Cấp quyền Quản trị viên (Admin) cho giáo viên "${teacher.name}" (@${teacher.username})?`)) {
+      return;
+    }
+    const adminEmail = teacher.email || `${teacher.username.toLowerCase()}@admin.local`;
+    const res = upsertAdmin({
+      id: generateUuid(),
+      username: teacher.username,
+      name: teacher.name,
+      email: adminEmail,
+      role: "admin",
+      passwordHash: teacher.passwordHash,
+      status: "active",
+      createdAt: new Date().toISOString(),
+    });
+
+    if (res.ok) {
+      setAdmins(getAllAdmins());
+      toast.success(`Đã cấp quyền Quản trị viên (Admin) cho giáo viên ${teacher.name}!`);
+    } else {
+      toast.error(res.message || "Không thể cấp quyền Admin");
+    }
+  };
+
+  const handleGrantAdminFromDropdown = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTeacherToGrant) {
+      toast.error("Vui lòng chọn một giáo viên từ danh sách!");
+      return;
+    }
+    const targetTeacher = teachers.find((t) => t.id === selectedTeacherToGrant);
+    if (!targetTeacher) {
+      toast.error("Không tìm thấy thông tin giáo viên");
+      return;
+    }
+    handleGrantAdminToTeacher(targetTeacher);
+    setSelectedTeacherToGrant("");
+    setAddAdminOpen(false);
   };
 
   // School handlers
@@ -887,10 +1019,13 @@ export default function AdminDashboard() {
                   </p>
                 </div>
                 <Button
-                  onClick={() => setAddAdminOpen(true)}
+                  onClick={() => {
+                    setAddAdminTab("grant");
+                    setAddAdminOpen(true);
+                  }}
                   className="w-full sm:w-auto bg-gradient-to-r from-amber-600 to-primary text-white rounded-xl shadow-xs"
                 >
-                  <UserPlus className="size-4 mr-2" /> + Tạo Admin mới
+                  <Crown className="size-4 mr-2" /> + Cấp quyền Admin mới
                 </Button>
               </div>
 
@@ -1130,7 +1265,28 @@ export default function AdminDashboard() {
                         </TableCell>
 
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1.5">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {isSuperAdmin && (
+                              (adminUsernames.has(t.username.toLowerCase()) || (t.email && adminEmails.has(t.email.toLowerCase()))) ? (
+                                <Badge
+                                  variant="secondary"
+                                  className="h-8 px-2 text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 gap-1 font-semibold"
+                                >
+                                  <Crown className="size-3 text-amber-600" /> Admin
+                                </Badge>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 px-2 text-xs text-amber-600 border-amber-500/30 hover:bg-amber-50"
+                                  onClick={() => handleGrantAdminToTeacher(t)}
+                                  title="Cấp quyền Quản trị viên (Admin) cho giáo viên này"
+                                >
+                                  <Crown className="size-3.5 mr-1 text-amber-500" /> Cấp quyền Admin
+                                </Button>
+                              )
+                            )}
+
                             <Button
                               size="sm"
                               variant="outline"
@@ -1502,10 +1658,20 @@ export default function AdminDashboard() {
                         </TableCell>
 
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <Button asChild size="sm" variant="outline" className="h-8 px-2 text-xs">
-                              <Link to={`/exam/${e.id}/results`}>
-                                <BarChart3 className="size-3.5 mr-1" /> Kết quả
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2.5 text-xs text-primary hover:bg-primary/10"
+                              onClick={() => setPreviewExamTarget(e)}
+                              title="Xem chi tiết & toàn bộ câu hỏi đề thi"
+                            >
+                              <Eye className="size-3.5 mr-1" /> Xem
+                            </Button>
+
+                            <Button asChild size="sm" variant="outline" className="h-8 px-2.5 text-xs text-blue-600 hover:bg-blue-50">
+                              <Link to={`/exam/${e.id}/edit`} title="Chỉnh sửa cấu hình & nội dung đề thi">
+                                <Edit className="size-3.5 mr-1" /> Sửa
                               </Link>
                             </Button>
 
@@ -1514,17 +1680,23 @@ export default function AdminDashboard() {
                               variant="outline"
                               className="h-8 px-2 text-xs"
                               onClick={() => handleToggleCloseExam(e)}
-                              title={e.manual_closed ? "Mở lại đề thi" : "Khóa đề thi"}
+                              title={e.manual_closed ? "Mở lại đề thi cho học sinh làm bài" : "Khóa đề thi"}
                             >
                               {e.manual_closed ? <Unlock className="size-3.5 text-emerald-600" /> : <Lock className="size-3.5 text-amber-600" />}
+                            </Button>
+
+                            <Button asChild size="sm" variant="outline" className="h-8 px-2.5 text-xs">
+                              <Link to={`/exam/${e.id}/results`} title="Xem bảng điểm & kết quả bài nộp">
+                                <BarChart3 className="size-3.5 mr-1" /> Kết quả
+                              </Link>
                             </Button>
 
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-8 px-2 text-xs text-rose-600 hover:bg-rose-50"
+                              className="h-8 px-2 text-xs text-rose-600 hover:bg-rose-50 hover:border-rose-300"
                               onClick={() => handleDeleteExam(e.id, e.title)}
-                              title="Xóa đề thi"
+                              title="Xóa đề thi vĩnh viễn"
                             >
                               <Trash2 className="size-3.5" />
                             </Button>
@@ -1661,97 +1833,181 @@ export default function AdminDashboard() {
       </Tabs>
 
       {/* ============================================================ */}
-      {/* DIALOG: TẠO ADMIN MỚI (CHỈ SUPER ADMIN) */}
+      {/* DIALOG: CẤP QUYỀN ADMIN / TẠO ADMIN MỚI (CHỈ SUPER ADMIN) */}
       {/* ============================================================ */}
       <Dialog open={addAdminOpen} onOpenChange={setAddAdminOpen}>
         <DialogContent className="max-w-md sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">
-              <Crown className="size-5 text-amber-500" /> Tạo tài khoản Quản trị viên (Admin)
+              <Crown className="size-5 text-amber-500" /> Cấp quyền Quản trị viên (Admin)
             </DialogTitle>
             <DialogDescription>
-              Tài khoản được tạo sẽ có quyền quản trị (Admin). Hệ thống chỉ cho phép tạo tài khoản vai trò <b>Admin</b>, không tạo thêm Super Admin gốc.
+              Super Admin có thể cấp quyền Admin mới cho một Giáo viên đã có trong hệ thống hoặc tạo một tài khoản Admin độc lập.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleCreateAdmin} className="space-y-4 py-2">
-            <div className="space-y-1">
-              <Label htmlFor="af-name">Họ và tên Quản trị viên *</Label>
-              <Input
-                id="af-name"
-                required
-                placeholder="Nguyễn Văn Quản Trị"
-                value={afName}
-                onChange={(e) => setAfName(e.target.value)}
-              />
-            </div>
+          {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ CẤP QUYỀN */}
+          <div className="grid grid-cols-2 gap-2 p-1 bg-muted rounded-xl">
+            <button
+              type="button"
+              onClick={() => setAddAdminTab("grant")}
+              className={`py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                addAdminTab === "grant"
+                  ? "bg-white text-amber-700 shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Cấp quyền cho Giáo viên
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddAdminTab("create")}
+              className={`py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                addAdminTab === "create"
+                  ? "bg-white text-amber-700 shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Tạo tài khoản Admin mới
+            </button>
+          </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="af-user">Tên đăng nhập *</Label>
-                <Input
-                  id="af-user"
-                  required
-                  placeholder="admin_phu"
-                  value={afUsername}
-                  onChange={(e) => setAfUsername(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="af-email">Email đăng nhập *</Label>
-                <Input
-                  id="af-email"
-                  type="email"
-                  required
-                  placeholder="admin_phu@school.edu.vn"
-                  value={afEmail}
-                  onChange={(e) => setAfEmail(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="af-pass">Mật khẩu ban đầu *</Label>
-                <Input
-                  id="af-pass"
-                  type="password"
-                  required
-                  minLength={6}
-                  placeholder="Tối thiểu 6 ký tự"
-                  value={afPassword}
-                  onChange={(e) => setAfPassword(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="af-status">Trạng thái tài khoản</Label>
-                <Select value={afStatus} onValueChange={(v: any) => setAfStatus(v)}>
-                  <SelectTrigger id="af-status">
-                    <SelectValue />
+          {addAdminTab === "grant" ? (
+            <form onSubmit={handleGrantAdminFromDropdown} className="space-y-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="grant-teacher-select">Chọn Giáo viên cần cấp quyền Admin *</Label>
+                <Select value={selectedTeacherToGrant} onValueChange={setSelectedTeacherToGrant}>
+                  <SelectTrigger id="grant-teacher-select" className="rounded-xl">
+                    <SelectValue placeholder="-- Chọn một giáo viên từ danh sách --" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="active">Hoạt động</SelectItem>
-                    <SelectItem value="locked">Khóa</SelectItem>
+                    {teachers
+                      .filter((t) => !adminUsernames.has(t.username.toLowerCase()) && (!t.email || !adminEmails.has(t.email.toLowerCase())))
+                      .map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name} (@{t.username}) – {t.subject || "Môn khác"} • {t.school || "THPT"}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Danh sách chỉ hiển thị các giáo viên chưa được cấp quyền Quản trị viên.
+                </p>
               </div>
-            </div>
 
-            <div className="p-3 bg-amber-500/10 rounded-xl text-xs text-amber-900 dark:text-amber-200 border border-amber-500/20">
-              <span className="font-bold">Quyền hạn của tài khoản:</span> Quản trị viên này có quyền quản lý giáo viên, học sinh, đề thi, trường học và môn học; nhưng <b>không có quyền</b> quản lý danh sách Quản trị viên.
-            </div>
+              {selectedTeacherToGrant && (() => {
+                const target = teachers.find((t) => t.id === selectedTeacherToGrant);
+                if (!target) return null;
+                return (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
+                    <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <ShieldCheck className="size-4 text-amber-600" /> Xác nhận thông tin tài khoản:
+                    </div>
+                    <div>Họ và tên: <b>{target.name}</b></div>
+                    <div>Tên đăng nhập: <code className="bg-amber-500/20 px-1 py-0.5 rounded">@{target.username}</code></div>
+                    <div>Email: <b>{target.email || `${target.username}@admin.local`}</b></div>
+                    <div>Môn & Trường: {target.subject || "—"} • {target.school || "—"}</div>
+                  </div>
+                );
+              })()}
 
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setAddAdminOpen(false)}>
-                Hủy
-              </Button>
-              <Button type="submit" className="bg-gradient-to-r from-amber-600 to-primary text-white font-bold">
-                Xác nhận tạo Admin
-              </Button>
-            </DialogFooter>
-          </form>
+              <div className="p-3 bg-muted/60 rounded-xl text-xs text-muted-foreground">
+                <span className="font-bold text-foreground">Ghi chú:</span> Khi cấp quyền, giáo viên này sẽ có thể đăng nhập bằng tài khoản hiện tại vào khu vực Quản trị (Admin) để quản lý đề thi, học sinh và báo cáo.
+              </div>
+
+              <DialogFooter className="pt-2">
+                <Button type="button" variant="outline" onClick={() => setAddAdminOpen(false)}>
+                  Hủy
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={!selectedTeacherToGrant}
+                  className="bg-gradient-to-r from-amber-600 to-primary text-white font-bold"
+                >
+                  <Crown className="size-4 mr-1.5" /> Xác nhận cấp quyền Admin
+                </Button>
+              </DialogFooter>
+            </form>
+          ) : (
+            <form onSubmit={handleCreateAdmin} className="space-y-4 py-2">
+              <div className="space-y-1">
+                <Label htmlFor="af-name">Họ và tên Quản trị viên *</Label>
+                <Input
+                  id="af-name"
+                  required
+                  placeholder="Nguyễn Văn Quản Trị"
+                  value={afName}
+                  onChange={(e) => setAfName(e.target.value)}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="af-user">Tên đăng nhập *</Label>
+                  <Input
+                    id="af-user"
+                    required
+                    placeholder="admin_phu"
+                    value={afUsername}
+                    onChange={(e) => setAfUsername(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="af-email">Email đăng nhập *</Label>
+                  <Input
+                    id="af-email"
+                    type="email"
+                    required
+                    placeholder="admin_phu@school.edu.vn"
+                    value={afEmail}
+                    onChange={(e) => setAfEmail(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="af-pass">Mật khẩu ban đầu *</Label>
+                  <Input
+                    id="af-pass"
+                    type="password"
+                    required
+                    minLength={6}
+                    placeholder="Tối thiểu 6 ký tự"
+                    value={afPassword}
+                    onChange={(e) => setAfPassword(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="af-status">Trạng thái tài khoản</Label>
+                  <Select value={afStatus} onValueChange={(v: any) => setAfStatus(v)}>
+                    <SelectTrigger id="af-status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Hoạt động</SelectItem>
+                      <SelectItem value="locked">Khóa</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/10 rounded-xl text-xs text-amber-900 dark:text-amber-200 border border-amber-500/20">
+                <span className="font-bold">Quyền hạn của tài khoản:</span> Quản trị viên này có quyền quản lý giáo viên, học sinh, đề thi, trường học và môn học; nhưng <b>không có quyền</b> quản lý danh sách Quản trị viên.
+              </div>
+
+              <DialogFooter className="pt-2">
+                <Button type="button" variant="outline" onClick={() => setAddAdminOpen(false)}>
+                  Hủy
+                </Button>
+                <Button type="submit" className="bg-gradient-to-r from-amber-600 to-primary text-white font-bold">
+                  Xác nhận tạo Admin
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -2168,6 +2424,209 @@ export default function AdminDashboard() {
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ============================================================ */}
+      {/* DIALOG: XEM CHI TIẾT & CÂU HỎI ĐỀ THI (SUPER ADMIN PREVIEW) */}
+      {/* ============================================================ */}
+      <Dialog open={!!previewExamTarget} onOpenChange={(open) => !open && setPreviewExamTarget(null)}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+          {previewExamTarget && (() => {
+            const parsedQ = getParsedQuestions(previewExamTarget.questions);
+            const totalQ = parsedQ.partI.length + parsedQ.partII.length + parsedQ.partIII.length;
+
+            return (
+              <>
+                <DialogHeader className="p-4 sm:p-6 pb-3 border-b bg-muted/30">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <DialogTitle className="text-xl font-bold flex items-center gap-2 text-foreground">
+                        <FileText className="size-5 text-primary shrink-0" />
+                        {previewExamTarget.title}
+                      </DialogTitle>
+                      <DialogDescription className="text-xs mt-1">
+                        Giáo viên tạo: <b>{getExamTeacherName(previewExamTarget)}</b> • Trường: <b>{previewExamTarget.school_name || "Chưa chọn trường"}</b> • Môn: <b>{previewExamTarget.subject_name || "Chưa chọn môn"}</b>
+                      </DialogDescription>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button asChild size="sm" variant="default" className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white">
+                        <Link to={`/take/${previewExamTarget.id}`} target="_blank">
+                          <Play className="size-3.5 mr-1" /> Làm thử đề
+                        </Link>
+                      </Button>
+                      <Button asChild size="sm" variant="outline" className="h-8 px-3 text-xs text-blue-600 hover:bg-blue-50">
+                        <Link to={`/exam/${previewExamTarget.id}/edit`}>
+                          <Edit className="size-3.5 mr-1" /> Sửa đề thi
+                        </Link>
+                      </Button>
+                      <Button asChild size="sm" variant="outline" className="h-8 px-3 text-xs">
+                        <Link to={`/exam/${previewExamTarget.id}/share`}>
+                          <Share2 className="size-3.5 mr-1" /> Chia sẻ
+                        </Link>
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2 flex-wrap text-xs">
+                    <Badge variant="outline" className="font-semibold">
+                      {previewExamTarget.duration_minutes} phút
+                    </Badge>
+                    <Badge variant="outline" className="font-semibold">
+                      {totalQ} câu hỏi ({parsedQ.partI.length} trắc nghiệm, {parsedQ.partII.length} Đúng/Sai, {parsedQ.partIII.length} trả lời ngắn)
+                    </Badge>
+                    <Badge variant={previewExamTarget.manual_closed ? "destructive" : "default"} className="text-[10px]">
+                      {previewExamTarget.manual_closed ? "Đã khóa" : "Đang mở"}
+                    </Badge>
+                    <Badge variant="secondary" className="capitalize text-[10px]">
+                      Chế độ: {previewExamTarget.display_mode || "standard"}
+                    </Badge>
+                  </div>
+                </DialogHeader>
+
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+                  {totalQ === 0 ? (
+                    <div className="text-center py-12 text-muted-foreground">
+                      Đề thi này chưa có câu hỏi nào được lưu trong nội dung.
+                    </div>
+                  ) : (
+                    <>
+                      {/* PHẦN I */}
+                      {parsedQ.partI.length > 0 && (
+                        <div className="space-y-4">
+                          <div className="font-bold text-sm text-primary uppercase tracking-wide border-b pb-1">
+                            Phần I: Câu hỏi trắc nghiệm nhiều phương án ({parsedQ.partI.length} câu)
+                          </div>
+                          <div className="space-y-4">
+                            {parsedQ.partI.map((q: any, i: number) => (
+                              <Card key={q.id || i} className="p-4 space-y-3 bg-card border">
+                                <div className="font-semibold text-sm flex items-start gap-2">
+                                  <span className="font-bold text-primary shrink-0">Câu {i + 1}:</span>
+                                  <div className="flex-1"><RichText text={q.text} /></div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                  {(q.options || []).map((opt: any) => {
+                                    const isCorrect = String(opt.key).toUpperCase() === String(q.answer).toUpperCase();
+                                    return (
+                                      <div
+                                        key={opt.key}
+                                        className={`p-2.5 rounded-lg border text-xs flex items-start gap-2 transition-all ${
+                                          isCorrect
+                                            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-900 dark:text-emerald-200 font-semibold"
+                                            : "bg-muted/40 text-foreground"
+                                        }`}
+                                      >
+                                        <span className={`size-5 rounded-full grid place-items-center text-[10px] font-bold shrink-0 ${
+                                          isCorrect ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground"
+                                        }`}>
+                                          {opt.key}
+                                        </span>
+                                        <div className="flex-1"><RichText text={opt.text} /></div>
+                                        {isCorrect && <Check className="size-3.5 text-emerald-600 shrink-0 mt-0.5" />}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {q.explanation && (
+                                  <div className="text-xs p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-900 dark:text-blue-200">
+                                    <span className="font-bold">Lời giải:</span> <RichText text={q.explanation} />
+                                  </div>
+                                )}
+                              </Card>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* PHẦN II */}
+                      {parsedQ.partII.length > 0 && (
+                        <div className="space-y-4 pt-2">
+                          <div className="font-bold text-sm text-primary uppercase tracking-wide border-b pb-1">
+                            Phần II: Câu trắc nghiệm Đúng / Sai ({parsedQ.partII.length} câu)
+                          </div>
+                          <div className="space-y-4">
+                            {parsedQ.partII.map((q: any, i: number) => (
+                              <Card key={q.id || i} className="p-4 space-y-3 bg-card border">
+                                <div className="font-semibold text-sm flex items-start gap-2">
+                                  <span className="font-bold text-primary shrink-0">Câu {i + 1}:</span>
+                                  <div className="flex-1"><RichText text={q.text} /></div>
+                                </div>
+
+                                <div className="space-y-1.5 pt-1">
+                                  {(q.items || []).map((it: any) => (
+                                    <div
+                                      key={it.key}
+                                      className="p-2 rounded-lg border text-xs flex items-center justify-between gap-3 bg-muted/30"
+                                    >
+                                      <div className="flex items-start gap-2 flex-1">
+                                        <span className="font-bold text-primary">{it.key})</span>
+                                        <RichText text={it.text} />
+                                      </div>
+                                      <Badge
+                                        variant={it.correct ? "default" : "destructive"}
+                                        className="text-[10px] shrink-0"
+                                      >
+                                        {it.correct ? "Đúng" : "Sai"}
+                                      </Badge>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {q.explanation && (
+                                  <div className="text-xs p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-900 dark:text-blue-200">
+                                    <span className="font-bold">Lời giải:</span> <RichText text={q.explanation} />
+                                  </div>
+                                )}
+                              </Card>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* PHẦN III */}
+                      {parsedQ.partIII.length > 0 && (
+                        <div className="space-y-4 pt-2">
+                          <div className="font-bold text-sm text-primary uppercase tracking-wide border-b pb-1">
+                            Phần III: Câu hỏi trả lời ngắn ({parsedQ.partIII.length} câu)
+                          </div>
+                          <div className="space-y-4">
+                            {parsedQ.partIII.map((q: any, i: number) => (
+                              <Card key={q.id || i} className="p-4 space-y-3 bg-card border">
+                                <div className="font-semibold text-sm flex items-start gap-2">
+                                  <span className="font-bold text-primary shrink-0">Câu {i + 1}:</span>
+                                  <div className="flex-1"><RichText text={q.text} /></div>
+                                </div>
+
+                                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs flex items-center gap-2">
+                                  <span className="font-bold text-emerald-800 dark:text-emerald-300">Đáp án chính xác:</span>
+                                  <span className="font-mono font-bold text-sm text-emerald-700 dark:text-emerald-200">{q.answer}</span>
+                                </div>
+
+                                {q.explanation && (
+                                  <div className="text-xs p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-900 dark:text-blue-200">
+                                    <span className="font-bold">Lời giải:</span> <RichText text={q.explanation} />
+                                  </div>
+                                )}
+                              </Card>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <DialogFooter className="p-3 border-t bg-muted/20">
+                  <Button variant="outline" onClick={() => setPreviewExamTarget(null)}>
+                    Đóng
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

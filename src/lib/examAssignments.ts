@@ -210,12 +210,42 @@ export function getDeterministicPrimaryCode(examId: string, subjectName?: string
 
 /**
  * Get the public origin for student exam URLs
+ * Prioritizes production domain configuration to ensure student links work everywhere
  */
 export function getExamPublicOrigin(): string {
-  if (typeof window !== "undefined" && window.location?.origin) {
+  // 1. Production domain configured via environment variable
+  const envUrl = (import.meta.env.VITE_PUBLIC_APP_URL || import.meta.env.VITE_PRODUCTION_URL || "").trim();
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, "");
+  }
+
+  // 2. Custom domain saved in localStorage by teacher / admin
+  if (typeof window !== "undefined") {
+    try {
+      const savedDomain = localStorage.getItem("qc_production_domain");
+      if (savedDomain && savedDomain.trim()) {
+        return savedDomain.trim().replace(/\/+$/, "");
+      }
+    } catch {}
+
     return window.location.origin;
   }
   return "";
+}
+
+/**
+ * Configure custom production domain for student links (useful when drafting in preview)
+ */
+export function setCustomProductionDomain(domain: string) {
+  if (typeof window !== "undefined") {
+    try {
+      if (domain && domain.trim()) {
+        localStorage.setItem("qc_production_domain", domain.trim().replace(/\/+$/, ""));
+      } else {
+        localStorage.removeItem("qc_production_domain");
+      }
+    } catch {}
+  }
 }
 
 /**
@@ -330,8 +360,8 @@ export async function getAssignmentsForExam(examId: string, examObj?: any): Prom
  * Synchronize all codes of an exam to Supabase public registry (schools table)
  * so that any student from any device or phone can resolve them instantly.
  */
-export async function syncExamAssignmentCodes(exam: any) {
-  if (!exam?.id) return;
+export async function syncExamAssignmentCodes(exam: any): Promise<{ success: boolean; error?: string }> {
+  if (!exam?.id) return { success: false, error: "Missing exam ID" };
   try {
     const primaryCode = getExamPrimaryCode(exam);
     const legacyCode = getDeterministicPrimaryCode(exam.id, exam.subject_name);
@@ -370,9 +400,14 @@ export async function syncExamAssignmentCodes(exam: any) {
       .map((k) => ({ name_key: k, name: jsonStr }));
 
     // Use withSupabaseAuthRetry to ensure permissions (bridge auth fallback if unauthenticated)
-    await withSupabaseAuthRetry(async () => {
+    const { error: upErr } = await withSupabaseAuthRetry(async () => {
       return await supabase.from("schools").upsert(upsertRows, { onConflict: "name_key" });
     });
+
+    if (upErr) {
+      console.warn("syncExamAssignmentCodes upsert error:", upErr);
+      return { success: false, error: upErr.message };
+    }
 
     // Also sync team_config assignments if any
     const teamCfg = (exam.team_config as any) || {};
@@ -400,8 +435,11 @@ export async function syncExamAssignmentCodes(exam: any) {
         });
       }
     }
-  } catch (err) {
+
+    return { success: true };
+  } catch (err: any) {
     console.warn("syncExamAssignmentCodes warning:", err);
+    return { success: false, error: err?.message || "Sync failed" };
   }
 }
 
@@ -602,7 +640,7 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
   }
 
   // If we already have the exam UUID (from URL, QR or raw input), resolve it via get_exam_for_student RPC
-  if (targetExamId) {
+  if (targetExamId && isUuid(targetExamId)) {
     try {
       const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
         p_exam_id: targetExamId,
@@ -699,17 +737,19 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<{
     }
 
     try {
-      // Use get_exam_for_student RPC (Security Definer) instead of direct table SELECT
-      const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
-        p_exam_id: localFound.examId,
-      });
+      if (isUuid(localFound.examId)) {
+        // Use get_exam_for_student RPC (Security Definer) instead of direct table SELECT
+        const { data: exData, error: rpcErr } = await supabase.rpc("get_exam_for_student", {
+          p_exam_id: localFound.examId,
+        });
 
-      if (!rpcErr && exData) {
-        return {
-          success: true,
-          exam: exData,
-          assignment: localFound,
-        };
+        if (!rpcErr && exData) {
+          return {
+            success: true,
+            exam: exData,
+            assignment: localFound,
+          };
+        }
       }
     } catch {}
 

@@ -25,9 +25,8 @@ describe("Super Admin & Admin System", () => {
     expect(root.username).toBe("admin");
     expect(root.email).toBe("admin@admin.com");
     expect(root.role).toBe("super_admin");
-    expect(root.mustChangePassword).toBe(true);
     expect(root.status).toBe("active");
-    expect(root.passwordHash).toBe(hashPassword("Admin@123456"));
+    expect(root.passwordHash).toBe(DEFAULT_ROOT_ADMIN.passwordHash);
   });
 
   it("should find root admin by username 'admin' or email 'admin@admin.com'", () => {

@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
-import { syncExamAssignmentCodes, getExamPrimaryCode } from "@/lib/examAssignments";
+import { syncExamAssignmentCodes, getExamPrimaryCode, getExamShareUrl } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 
 type Stats = {
@@ -86,8 +86,8 @@ export default function Index() {
     })();
   }, [isAdmin, user]);
 
-  const copyLink = (id: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/take/${id}`);
+  const copyLink = (id: string, code?: string) => {
+    navigator.clipboard.writeText(getExamShareUrl(id, code));
     toast.success("Đã copy link bài thi");
   };
 

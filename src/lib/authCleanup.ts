@@ -8,10 +8,15 @@
 // Critical persistent registries to protect from deletion
 const PRESERVED_STORAGE_KEYS = new Set([
   "qc_teachers_registry_v2",
+  "qc_students_registry_v1",
+  "qc_student_submissions_v1",
+  "qc_exam_assignments_v1",
+  "qc_all_exams_registry_v1",
   "qc_admin_account_v2",
   "qc_admin_accounts_list_v3",
   "qc_schools_registry_v1",
   "qc_custom_subjects_v1",
+  "qc_production_domain",
   "exam_students",
   "exam_submissions",
   "exam_assignments_v1",

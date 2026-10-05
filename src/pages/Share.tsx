@@ -33,6 +33,7 @@ import {
   getExamPrimaryCode,
   getExamShareUrl,
   syncExamAssignmentCodes,
+  getExamPublicOrigin,
 } from "@/lib/examAssignments";
 
 export default function Share() {
@@ -80,8 +81,11 @@ export default function Share() {
 
   if (!exam) return <div className="container py-20 text-center text-muted-foreground">Đang tải…</div>;
 
-  const mainUrl = `${window.location.origin}/take/${id}`;
-  const lbUrl = `${window.location.origin}/leaderboard/${id}`;
+  const publicOrigin = getExamPublicOrigin();
+  const mainUrl = primaryCode
+    ? `${publicOrigin}/take/${id}?code=${encodeURIComponent(primaryCode)}`
+    : `${publicOrigin}/take/${id}`;
+  const lbUrl = `${publicOrigin}/leaderboard/${id}`;
   const isTeam = exam.display_mode === "team";
 
   const copyCode = (code: string) => {

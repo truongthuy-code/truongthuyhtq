@@ -178,10 +178,12 @@ export default function Take() {
   const currentExamId = useMemo(() => {
     if (exam?.id && isUuid(exam.id)) return exam.id;
     if (id) {
-      const uuidMatch = id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-      if (uuidMatch) return uuidMatch[0];
+      const trimmed = id.trim();
+      if (isUuid(trimmed)) return trimmed;
+      const uuidMatch = trimmed.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (uuidMatch && isUuid(uuidMatch[0])) return uuidMatch[0];
     }
-    return isUuid(exam?.id) ? exam.id : "";
+    return "";
   }, [exam, id]);
 
   const [loading, setLoading] = useState<boolean>(() => {
@@ -286,10 +288,9 @@ export default function Take() {
       setLoading(true);
       setErrorMsg(null);
 
-      // CÁCH 1 — HỌC SINH MỞ LINK:
-      // Link -> Lấy examId (UUID) từ URL -> Gọi RPC get_exam_for_student -> Hiển thị bài thi.
-      // Cơ chế này độc lập, chuẩn xác, hoạt động cho cả đề cũ (chưa có mã) lẫn đề mới.
-      if (cleanUuid) {
+      // TRƯỜNG HỢP A — URL CHỨA UUID HỢP LỆ (Cách 1: /take/<UUID> hoặc Cách 2: /take/<UUID>?code=<CODE>)
+      // Chỉ khi xác nhận đúng định dạng UUID mới truyền vào get_exam_for_student(p_exam_id uuid)
+      if (cleanUuid && isUuid(cleanUuid)) {
         try {
           const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanUuid });
           if (!error && data) {
@@ -305,11 +306,11 @@ export default function Take() {
             return;
           }
         } catch (e) {
-          console.warn("Direct RPC by cleanUuid failed:", e);
+          console.warn("Direct RPC by cleanUuid note:", e);
         }
       }
 
-      // 2. Kiểm tra danh mục đề mẫu (nếu mở đề mẫu thử nghiệm)
+      // Kiểm tra đề mẫu tích hợp (nếu mở đề mẫu thử nghiệm)
       const sample =
         (rawParam ? findSampleExam(rawParam) || getSampleExamById(rawParam) || getSampleExamByCode(rawParam) : null) ||
         (cleanUuid ? findSampleExam(cleanUuid) || getSampleExamById(cleanUuid) : null) ||
@@ -324,15 +325,17 @@ export default function Take() {
         return;
       }
 
-      // CÁCH 2 — HỌC SINH NHẬP HOẶC DÙNG MÃ BÀI THI:
-      // Mã bài thi -> Tìm bài thi theo examCode -> Lấy examId -> Hiển thị bài thi.
-      const targetQuery = codeParam || rawParam;
-      if (targetQuery) {
+      // TRƯỜNG HỢP B & C — URL CHỨA MÃ BÀI THI SỐ (Ví dụ /take/844059), MÃ CHỮ CŨ HOẶC NHẬP MÃ (Cách 3)
+      // TUYỆT ĐỐI KHÔNG truyền mã số/chữ vào tham số kiểu UUID của PostgreSQL.
+      // Luồng: Mã bài thi -> tìm assignment/exam -> lấy UUID thật -> lấy đề thi bằng UUID thật.
+      const targetCodeQuery = codeParam || (cleanUuid ? "" : rawParam);
+      if (targetCodeQuery) {
         try {
-          const res = await findAssignmentOrExamByCode(targetQuery);
+          const res = await findAssignmentOrExamByCode(targetCodeQuery);
           if (res.success && res.exam) {
-            if ((res.exam as any)?.display_mode === "team") {
-              navigate(`/team/${res.exam.id || cleanUuid || rawParam}`, { replace: true });
+            const actualUuid = res.exam.id || res.assignment?.examId;
+            if ((res.exam as any)?.display_mode === "team" && actualUuid) {
+              navigate(`/team/${actualUuid}`, { replace: true });
               return;
             }
             if (!cancelled) {
@@ -343,11 +346,11 @@ export default function Take() {
             return;
           }
         } catch (e) {
-          console.warn("Error finding exam by targetQuery:", e);
+          console.warn("Error finding exam by code query:", e);
         }
       }
 
-      // 4. Nếu không tìm thấy bằng cả 2 cách
+      // Không tìm thấy theo cả 3 phương thức
       if (!cancelled) {
         setLoading(false);
         setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại.");
@@ -667,6 +670,10 @@ export default function Take() {
     let submissionId = "";
     let sInfo: any = null;
 
+    const durSec = startedAtRef.current
+      ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
+      : 0;
+
     try {
       const { data, error } = await supabase.rpc("submit_student_exam", {
         p_exam_id: currentExamId,
@@ -675,10 +682,8 @@ export default function Take() {
         p_answers: answers as any,
         p_violations: lock.violations as any,
         p_violation_count: lock.violationCount,
-        p_started_at: startedAtRef.current,
-        p_duration_seconds: startedAtRef.current
-          ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
-          : null,
+        p_started_at: startedAtRef.current || new Date().toISOString(),
+        p_duration_seconds: durSec,
       } as any);
 
       if (!error && data) {
@@ -974,21 +979,21 @@ export default function Take() {
             </div>
             <div className="flex gap-2">
               <Input
-                placeholder="Nhập mã bài thi (6 chữ số) hoặc dán link..."
+                placeholder="Nhập mã bài thi (6 chữ số hoặc mã chữ) hoặc dán link..."
                 value={manualCodeInput}
                 onChange={(e) => {
                   const val = e.target.value;
-                  if (val.includes("http://") || val.includes("https://") || val.includes("/")) {
+                  if (val.includes("http://") || val.includes("https://") || val.includes("/") || val.includes("?")) {
                     setManualCodeInput(val.trim());
-                  } else if (/[a-zA-Z]/.test(val) && val.length > 5 && val.includes("-")) {
+                  } else if (/[a-zA-Z]/.test(val)) {
+                    // Alphanumeric code (e.g. A1K8P2, EX-ZQ9UC, TIN-12)
                     setManualCodeInput(val.trim().toUpperCase());
                   } else {
+                    // Purely numeric 6-digit code
                     const onlyNums = val.replace(/\D/g, "").slice(0, 6);
                     setManualCodeInput(onlyNums);
                   }
                 }}
-                inputMode="numeric"
-                pattern="[0-9]*"
                 maxLength={100}
                 className="h-12 rounded-xl text-base font-bold font-mono tracking-widest px-4 border-2 placeholder:font-normal placeholder:tracking-normal placeholder:text-sm"
                 onKeyDown={(e) => {

@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
+import { getExamPublicOrigin } from "@/lib/examAssignments";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
@@ -114,7 +115,8 @@ export default function Reports() {
 
   const share = () => {
     if (examId === "all") return toast.info("Chọn một đề để chia sẻ trang kết quả");
-    navigator.clipboard.writeText(`${window.location.origin}/exam/${examId}/results`);
+    const origin = getExamPublicOrigin();
+    navigator.clipboard.writeText(`${origin}/exam/${examId}/results`);
     toast.success("Đã copy link kết quả");
   };
 

@@ -75,10 +75,12 @@ export function normalizeUsername(u: string): string {
   return (u || "").trim().toLowerCase();
 }
 
-/** Root Super Admin default constants */
-export const ROOT_SUPER_ADMIN_ID = "00000000-0000-4000-8000-000000000000";
-export const LEGACY_ROOT_SUPER_ADMIN_ID = "super-admin-system-root-001";
-export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Admin@123456");
+/** Root Super Admin default constants (Synced with Supabase Auth admin UID) */
+export const ROOT_SUPER_ADMIN_ID = "b9e61e93-caa6-4e72-a534-55072d943ad2";
+export const LEGACY_ROOT_SUPER_ADMIN_ID = "00000000-0000-4000-8000-000000000000";
+export const LEGACY_ROOT_SUPER_ADMIN_STRING_ID = "super-admin-system-root-001";
+export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Thuy@123456");
+export const LEGACY_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Admin@123456");
 
 export const DEFAULT_ROOT_ADMIN: AdminUser = {
   id: ROOT_SUPER_ADMIN_ID,
@@ -87,7 +89,7 @@ export const DEFAULT_ROOT_ADMIN: AdminUser = {
   email: "admin@admin.com",
   role: "super_admin",
   passwordHash: DEFAULT_ROOT_ADMIN_PASSWORD_HASH,
-  mustChangePassword: true,
+  mustChangePassword: false,
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
@@ -125,6 +127,7 @@ export function getAllAdmins(): AdminUser[] {
           (a) =>
             a.id === ROOT_SUPER_ADMIN_ID ||
             a.id === LEGACY_ROOT_SUPER_ADMIN_ID ||
+            a.id === LEGACY_ROOT_SUPER_ADMIN_STRING_ID ||
             normalizeUsername(a.username) === "admin" ||
             normalizeUsername(a.email) === "admin@admin.com"
         );
@@ -471,11 +474,20 @@ export function getCurrentAuthUser(): AuthSessionUser | null {
     const user: AuthSessionUser = JSON.parse(raw);
     if (!user || typeof user !== "object") return null;
 
-    if (!user.id) {
+    if (
+      user.id === LEGACY_ROOT_SUPER_ADMIN_ID ||
+      user.id === LEGACY_ROOT_SUPER_ADMIN_STRING_ID ||
+      user.username === "admin" ||
+      user.email === "admin@admin.com"
+    ) {
+      if (user.id !== ROOT_SUPER_ADMIN_ID) {
+        user.id = ROOT_SUPER_ADMIN_ID;
+        user.role = "super_admin";
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      }
+    } else if (!user.id) {
       if (user.id === LEGACY_DEFAULT_TEACHER_ID || user.username === "giaovien") {
         user.id = DEFAULT_TEACHER_ID;
-      } else if (user.id === LEGACY_ROOT_SUPER_ADMIN_ID || user.username === "admin") {
-        user.id = ROOT_SUPER_ADMIN_ID;
       } else {
         const matched = getTeacherByUsernameOrEmail(user.username || user.email);
         user.id = matched?.id || generateUuid();

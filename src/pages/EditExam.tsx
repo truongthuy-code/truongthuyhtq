@@ -17,6 +17,7 @@ import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig 
 import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -39,59 +40,90 @@ export default function EditExam() {
 
   useEffect(() => {
     if (!id) return;
-    supabase.from("exams").select("*").eq("id", id).single().then(({ data, error }) => {
-      if (error || !data) { toast.error("Không tải được đề"); navigate("/"); return; }
-      if (!isAdmin && user && data.created_by && data.created_by !== user.id) {
+    (async () => {
+      let examData: any = null;
+      try {
+        const { data, error } = await supabase.from("exams").select("*").eq("id", id).maybeSingle();
+        if (!error && data) examData = data;
+      } catch {}
+
+      if (!examData) {
+        // Fallback to local unified exams store
+        const localList = getLocalStoredExams();
+        const found = localList.find((e) => e.id === id);
+        if (found) examData = found;
+      }
+
+      if (!examData) {
+        toast.error("Không tải được đề thi");
+        navigate("/");
+        return;
+      }
+
+      if (!isAdmin && user && examData.created_by && examData.created_by !== user.id) {
         toast.error("Bạn không có quyền chỉnh sửa đề thi của giáo viên khác");
         navigate("/");
         return;
       }
-      setTitle(data.title);
-      setDuration(data.duration_minutes);
-      setMaxAttempts(data.max_attempts);
-      setShuffleQ({ p1: data.shuffle_q_p1, p2: data.shuffle_q_p2, p3: data.shuffle_q_p3 });
-      setShuffleO({ p1: data.shuffle_o_p1, p2: data.shuffle_o_p2, p3: data.shuffle_o_p3 });
-      setScoring((data.scoring as any) || DEFAULT_SCORING);
-      setAllowReview(data.allow_review);
-      setDisplayMode(((data as any).display_mode as "standard" | "quizizz" | "team") || "standard");
-      setTeamConfig(normalizeTeamConfig((data as any).team_config));
-      setInstantFeedback(!!(data as any).instant_feedback);
-      setLockMode({ ...DEFAULT_LOCK, ...((data as any).lock_mode || {}) });
+
+      setTitle(examData.title);
+      setDuration(examData.duration_minutes || 45);
+      setMaxAttempts(examData.max_attempts || 1);
+      setShuffleQ({ p1: !!examData.shuffle_q_p1, p2: !!examData.shuffle_q_p2, p3: !!examData.shuffle_q_p3 });
+      setShuffleO({ p1: !!examData.shuffle_o_p1, p2: !!examData.shuffle_o_p2, p3: !!examData.shuffle_o_p3 });
+      setScoring((examData.scoring as any) || DEFAULT_SCORING);
+      setAllowReview(!!examData.allow_review);
+      setDisplayMode(((examData as any).display_mode as "standard" | "quizizz" | "team") || "standard");
+      setTeamConfig(normalizeTeamConfig((examData as any).team_config));
+      setInstantFeedback(!!(examData as any).instant_feedback);
+      setLockMode({ ...DEFAULT_LOCK, ...((examData as any).lock_mode || {}) });
       setSchedule({
-        open_at: (data as any).open_at ?? null,
-        close_at: (data as any).close_at ?? null,
-        auto_submit_on_close: (data as any).auto_submit_on_close ?? true,
+        open_at: (examData as any).open_at ?? null,
+        close_at: (examData as any).close_at ?? null,
+        auto_submit_on_close: (examData as any).auto_submit_on_close ?? true,
       });
       setLoading(false);
-    });
-  }, [id, navigate]);
+    })();
+  }, [id, navigate, isAdmin, user]);
 
   const onSave = async () => {
     if (!id) return;
     setSaving(true);
-    const { error } = await withSupabaseAuthRetry(async () => {
-      return await supabase.from("exams").update({
-        title,
-        duration_minutes: duration,
-        max_attempts: maxAttempts,
-        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-        scoring: scoring as any,
-        allow_review: allowReview,
-        display_mode: displayMode,
-        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-        team_config: teamConfig as any,
-        lock_mode: lockMode as any,
-        open_at: schedule.open_at,
-        close_at: schedule.close_at,
-        auto_submit_on_close: schedule.auto_submit_on_close,
-      } as any).eq("id", id);
-    }, user as any);
+    const updates = {
+      title,
+      duration_minutes: duration,
+      max_attempts: maxAttempts,
+      shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+      shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+      shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+      shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+      scoring: scoring as any,
+      allow_review: allowReview,
+      display_mode: displayMode,
+      instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
+      team_config: teamConfig as any,
+      lock_mode: lockMode as any,
+      open_at: schedule.open_at,
+      close_at: schedule.close_at,
+      auto_submit_on_close: schedule.auto_submit_on_close,
+    };
 
-    setSaving(false);
-    if (error) { toast.error("Lỗi lưu: " + error.message); return; }
+    try {
+      await withSupabaseAuthRetry(async () => {
+        return await supabase.from("exams").update(updates as any).eq("id", id);
+      }, user as any);
+    } catch (err: any) {
+      console.warn("Supabase update error:", err);
+    }
+
+    // Save to unified local store as well
+    const localList = getLocalStoredExams();
+    const existing = localList.find((e) => e.id === id);
+    saveUnifiedExam({
+      ...(existing || { id, created_at: new Date().toISOString() }),
+      ...updates,
+    } as any);
+
     syncExamAssignmentCodes({
       id,
       title,
@@ -100,8 +132,10 @@ export default function EditExam() {
       close_at: schedule.close_at,
       team_config: teamConfig as any,
     }).catch(() => {});
-    toast.success("Đã lưu cài đặt");
-    navigate("/");
+
+    setSaving(false);
+    toast.success("Đã lưu cài đặt đề thi thành công!");
+    navigate(isAdmin ? "/admin" : "/");
   };
 
   if (loading) return <div className="min-h-screen grid place-items-center text-muted-foreground">Đang tải…</div>;

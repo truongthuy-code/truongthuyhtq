@@ -31,6 +31,7 @@ import {
 } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { saveUnifiedExam } from "@/lib/allExamsStorage";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -216,7 +217,7 @@ export default function Teacher() {
       }
     }
 
-    // Auto-generate a strictly unique 6-digit numeric exam code (digits 0-9 only, e.g. "583214")
+    // BƯỚC 1, 2, 3: Lưu đề thi thành công vào Supabase và nhận UUID chính thức
     const examCode = await generateUniqueNumericExamCode();
     const finalTeamConfig = {
       ...(teamConfig || {}),
@@ -260,13 +261,32 @@ export default function Teacher() {
         .single();
     }, currentUser as any);
 
-    setSaving(false);
-    if (error || !data) {
-      toast.error("Lỗi tạo đề: " + (error?.message || "Không thể tạo đề thi"));
+    if (error || !data?.id) {
+      setSaving(false);
+      toast.error("Lỗi lưu đề thi vào hệ thống: " + (error?.message || "Không thể tạo đề thi"));
       return;
     }
 
-    // Cache primary assignment locally for instant resolution
+    // BƯỚC 4, 5, 6: Lưu mã bài thi vào database và kiểm tra việc lưu mã thành công
+    const syncRes = await syncExamAssignmentCodes({
+      id: data.id,
+      title,
+      duration_minutes: duration,
+      teacher_name: profile?.full_name || "Giáo viên",
+      school_name: profile?.school_name || "",
+      subject_name: profile?.subject_name || "",
+      open_at: schedule.open_at,
+      close_at: schedule.close_at,
+      team_config: finalTeamConfig as any,
+    });
+
+    if (!syncRes.success) {
+      setSaving(false);
+      toast.error("Lỗi đồng bộ mã bài thi lên máy chủ: " + (syncRes.error || "Không thể lưu mã bài thi"));
+      return;
+    }
+
+    // BƯỚC 7, 8, 9: Sau khi dữ liệu đã tồn tại trên server mới lưu bộ nhớ đệm và chuyển sang trang chia sẻ
     const primaryAssign: ExamAssignment = {
       id: `primary_${data.id}`,
       examId: data.id,
@@ -284,19 +304,25 @@ export default function Teacher() {
     };
     saveLocalAssignments([primaryAssign, ...getLocalAssignments().filter((a) => a.examId !== data.id)]);
 
-    // Sync assignment codes immediately for students to join via code/link
-    syncExamAssignmentCodes({
+    saveUnifiedExam({
       id: data.id,
       title,
+      questions: exam as any,
       duration_minutes: duration,
+      created_at: new Date().toISOString(),
+      created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
       teacher_name: profile?.full_name || "Giáo viên",
       school_name: profile?.school_name || "",
       subject_name: profile?.subject_name || "",
+      manual_closed: false,
+      display_mode: displayMode,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,
-    }).catch(() => {});
+    });
 
+    setSaving(false);
+    toast.success("Tạo đề thi và lưu mã bài thi thành công!");
     navigate(`/exam/${data.id}/share`);
   };
 

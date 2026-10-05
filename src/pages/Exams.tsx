@@ -26,9 +26,11 @@ import {
   syncExamAssignmentCodes,
   getExamPrimaryCode,
   generateUniqueNumericExamCode,
+  getExamShareUrl,
 } from "@/lib/examAssignments";
 import { isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { fetchAllExamsForAdmin } from "@/lib/allExamsStorage";
 
 const PAGE_SIZE = 10;
 
@@ -46,31 +48,77 @@ export default function Exams() {
 
   const load = async () => {
     setLoading(true);
+
+    if (isAdmin) {
+      // Super Admin / Admin loads all exams from all teachers
+      const allExams = await fetchAllExamsForAdmin(user);
+      setExams(allExams);
+      const examIds = allExams.map((e: any) => e.id);
+      let subQ = supabase.from("submissions").select("exam_id,student_class");
+      const { data: subs } = await subQ;
+      const c: Record<string, number> = {};
+      (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
+      setCounts(c);
+      setLoading(false);
+      return;
+    }
+
     let q = supabase.from("exams")
       .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by")
       .order("created_at", { ascending: false });
 
-    if (!isAdmin && user) {
-      if (isUuid(user.id)) {
-        q = q.eq("created_by", user.id);
-      }
+    if (user && isUuid(user.id)) {
+      q = q.eq("created_by", user.id);
     }
 
     const { data: ex } = await q;
-    const loadedExams = ex || [];
+    let loadedExams = ex || [];
+
+    // Fallback: If ex returned empty for this teacher, check schools registry
+    if (loadedExams.length === 0 && user) {
+      try {
+        const { data: schRows } = await supabase
+          .from("schools")
+          .select("name")
+          .like("name_key", "assign_code:%");
+
+        const foundIds = new Set<string>();
+        for (const r of (schRows || [])) {
+          try {
+            const p = JSON.parse(r.name);
+            const teacherMatch =
+              (user.email && p.teacherEmail?.toLowerCase() === user.email.toLowerCase()) ||
+              (p.createdBy && p.createdBy === user.id) ||
+              (user.name && p.teacherName?.toLowerCase() === user.name.toLowerCase());
+            if (teacherMatch && p.examId && isUuid(p.examId)) {
+              foundIds.add(p.examId);
+            }
+          } catch {}
+        }
+
+        if (foundIds.size > 0) {
+          const fetched = await Promise.all(
+            Array.from(foundIds).map(async (eid) => {
+              const { data: d } = await supabase.rpc("get_exam_for_student", { p_exam_id: eid });
+              return d ? { ...d, id: eid } : null;
+            })
+          );
+          loadedExams = fetched.filter(Boolean) as any[];
+        }
+      } catch {}
+    }
+
     setExams(loadedExams);
     loadedExams.forEach((e: any) => syncExamAssignmentCodes(e).catch(() => {}));
 
     const examIds = loadedExams.map((e: any) => e.id);
     let subQ = supabase.from("submissions").select("exam_id,student_class");
-    if (!isAdmin && user) {
-      if (examIds.length > 0) {
-        subQ = subQ.in("exam_id", examIds);
-      } else {
-        setCounts({});
-        setLoading(false);
-        return;
-      }
+    if (examIds.length > 0) {
+      subQ = subQ.in("exam_id", examIds);
+    } else {
+      setCounts({});
+      setLoading(false);
+      return;
     }
 
     const { data: subs } = await subQ;
@@ -130,8 +178,8 @@ export default function Exams() {
     }
   };
 
-  const copyLink = (id: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/take/${id}`);
+  const copyLink = (id: string, code?: string) => {
+    navigator.clipboard.writeText(getExamShareUrl(id, code));
     toast.success("Đã copy link bài thi");
   };
   const deleteExam = async (exam: any) => {
