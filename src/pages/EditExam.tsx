@@ -279,11 +279,21 @@ export default function EditExam() {
           <LockModeSettings value={lockMode} onChange={setLockMode} />
 
 
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div>
-              <Label htmlFor="allow-review" className="text-sm font-medium">👁️ Cho phép xem lại đáp án sau khi nộp bài</Label>
-              <div className="text-xs text-muted-foreground mt-1">
-                Khi bật: học sinh thấy toàn bộ câu hỏi và đáp án đúng. Khi tắt: chỉ thấy điểm.
+          <div className="flex items-center justify-between rounded-xl border border-border/80 bg-card p-4 hover:border-primary/40 transition-colors">
+            <div className="space-y-1 pr-4">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="allow-review" className="text-sm font-bold text-foreground cursor-pointer flex items-center gap-1.5">
+                  <span>👁️</span>
+                  <span>Xem lại đáp án sau khi nộp bài</span>
+                </Label>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${allowReview ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30" : "bg-muted text-muted-foreground border"}`}>
+                  {allowReview ? "BẬT" : "TẮT"}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground leading-relaxed">
+                {allowReview
+                  ? "Học sinh sẽ được xem lại toàn bộ câu hỏi, đáp án đã chọn, đáp án đúng và giải thích chi tiết sau khi nộp bài."
+                  : "Học sinh chỉ xem được điểm tổng kết và số câu đúng/sai. Toàn bộ nội dung câu hỏi và đáp án sẽ được bảo mật."}
               </div>
             </div>
             <Switch id="allow-review" checked={allowReview} onCheckedChange={setAllowReview} />

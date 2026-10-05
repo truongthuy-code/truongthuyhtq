@@ -283,17 +283,19 @@ export default function AuthPage() {
                 email: effectiveEmail,
                 password,
               });
-              if (!signData?.user) {
-                await supabase.auth.signUp({
+              let finalUserId = signData?.user?.id;
+              if (!finalUserId) {
+                const { data: signUpData } = await supabase.auth.signUp({
                   email: effectiveEmail,
                   password,
                   options: {
                     data: { full_name: teacher.name, subject_name: teacher.subject },
                   },
                 });
+                finalUserId = signUpData?.user?.id;
               }
-              if (signData?.user?.id && (!teacher.id || !isUuid(teacher.id))) {
-                teacher.id = signData.user.id;
+              if (finalUserId) {
+                teacher.id = finalUserId;
                 upsertTeacher(teacher);
               }
             } catch (err) {

@@ -224,9 +224,10 @@ export default function Exams() {
     };
 
     const { error } = await withSupabaseAuthRetry(async (uid) => {
-      const createdByUuid = isUuid(uid)
+      const currentAuthUser = (await supabase.auth.getUser()).data.user;
+      const createdByUuid = currentAuthUser?.id || (isUuid(uid)
         ? uid
-        : (isUuid(user?.id) ? user.id : null);
+        : (isUuid(user?.id) ? user.id : null));
 
       return await supabase.from("exams").insert({
         ...rest,

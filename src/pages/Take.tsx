@@ -764,7 +764,12 @@ export default function Take() {
           answers,
           exam_id: currentExamId,
         },
-        exam,
+        exam: exam
+          ? {
+              ...exam,
+              questions: exam.allow_review ? exam.questions : null,
+            }
+          : null,
       },
     });
   };

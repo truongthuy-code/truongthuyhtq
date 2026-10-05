@@ -197,7 +197,11 @@ export default function Teacher() {
     setSaving(true);
 
     // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
-    const activeUserId = await ensureSupabaseSession(currentUser as any);
+    let activeUserId = await ensureSupabaseSession(currentUser as any);
+    const { data: authUserData } = await supabase.auth.getUser();
+    if (authUserData?.user?.id) {
+      activeUserId = authUserData.user.id;
+    }
 
     let original_file_url: string | null = null;
     let original_file_name: string | null = null;
@@ -225,9 +229,18 @@ export default function Teacher() {
     };
 
     const { data, error } = await withSupabaseAuthRetry<{ id: string }>(async (uid) => {
-      const targetCreatedBy = isUuid(uid)
-        ? uid
-        : (isUuid(currentUser?.id) ? currentUser.id : null);
+      // Prioritize the actual authenticated user id in current Supabase JWT to guarantee RLS with check
+      const currentAuthUser = (await supabase.auth.getUser()).data.user;
+      const verifiedUid = currentAuthUser?.id || (isUuid(uid) ? uid : (isUuid(currentUser?.id) ? currentUser.id : null));
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[Exam Create Safe Debug]", {
+          authenticatedUserId: currentAuthUser?.id || null,
+          role: currentUser?.role || "teacher",
+          targetCreatedBy: verifiedUid,
+          title,
+        });
+      }
 
       return await supabase
         .from("exams")
@@ -252,10 +265,10 @@ export default function Teacher() {
           original_file_url,
           original_file_name,
           original_file_path,
-          created_by: targetCreatedBy,
-          teacher_name: profile?.full_name || "Giáo viên",
-          school_name: profile?.school_name || "",
-          subject_name: profile?.subject_name || "",
+          created_by: verifiedUid,
+          teacher_name: profile?.full_name || currentUser?.name || "Giáo viên",
+          school_name: profile?.school_name || currentUser?.school || "",
+          subject_name: profile?.subject_name || currentUser?.subject || "",
         } as any)
         .select("id")
         .single();
@@ -263,6 +276,10 @@ export default function Teacher() {
 
     if (error || !data?.id) {
       setSaving(false);
+      console.error("[Exam Create Error Safe Debug]", {
+        code: error?.code,
+        message: error?.message,
+      });
       toast.error("Lỗi lưu đề thi vào hệ thống: " + (error?.message || "Không thể tạo đề thi"));
       return;
     }
@@ -538,11 +555,21 @@ export default function Teacher() {
             <LockModeSettings value={lockMode} onChange={setLockMode} />
 
 
-            <div className="flex items-center justify-between rounded-lg border p-4">
-              <div>
-                <Label htmlFor="allow-review" className="text-sm font-medium">👁️ Cho phép xem lại đáp án sau khi nộp bài</Label>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Khi bật: học sinh thấy toàn bộ câu hỏi, đáp án đã chọn và đáp án đúng. Khi tắt: chỉ thấy điểm và số câu đúng/sai.
+            <div className="flex items-center justify-between rounded-xl border border-border/80 bg-card p-4 hover:border-primary/40 transition-colors">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="allow-review" className="text-sm font-bold text-foreground cursor-pointer flex items-center gap-1.5">
+                    <span>👁️</span>
+                    <span>Xem lại đáp án sau khi nộp bài</span>
+                  </Label>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${allowReview ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30" : "bg-muted text-muted-foreground border"}`}>
+                    {allowReview ? "BẬT" : "TẮT"}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground leading-relaxed">
+                  {allowReview
+                    ? "Học sinh sẽ được xem lại toàn bộ câu hỏi, đáp án đã chọn, đáp án đúng và giải thích chi tiết sau khi nộp bài."
+                    : "Học sinh chỉ xem được điểm tổng kết và số câu đúng/sai. Toàn bộ nội dung câu hỏi và đáp án sẽ được bảo mật."}
                 </div>
               </div>
               <Switch id="allow-review" checked={allowReview} onCheckedChange={setAllowReview} />

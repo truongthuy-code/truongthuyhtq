@@ -4,10 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
-import { Check, X, GraduationCap, ArrowLeft, Trophy, Sparkles, Home } from "lucide-react";
+import { Check, X, ShieldAlert, BookOpen, Lock } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import { getTFValue } from "@/lib/grading";
-import { getPublishedExamAnswerKey, getStudentSubmissions, getAllSubmissions } from "@/lib/studentStorage";
+import { getPublishedExamAnswerKey, getAllSubmissions } from "@/lib/studentStorage";
 import { findSampleExam } from "@/lib/sampleExams";
 import confetti from "canvas-confetti";
 
@@ -74,59 +74,45 @@ export default function Result() {
         });
         setExam({
           title: matched.examTitle,
-          allow_review: true,
+          allow_review: sampleMatch?.allow_review ?? false,
           questions: sampleMatch?.questions || null,
         });
       }
     })();
   }, [id, location]);
 
-  if (!sub) return (
-    <div className="min-h-screen grid place-items-center relative">
-      <QuizBackground />
-      <div className="text-center text-muted-foreground font-bold relative z-10">Đang tải kết quả…</div>
-    </div>
-  );
+  if (!sub) {
+    return (
+      <div className="min-h-screen grid place-items-center relative">
+        <QuizBackground />
+        <div className="text-center text-muted-foreground font-bold relative z-10">Đang tải kết quả…</div>
+      </div>
+    );
+  }
 
-  const total = sub.correct_count + sub.wrong_count;
-  const allowReview = !!exam?.allow_review;
+  const total = (sub.correct_count ?? 0) + (sub.wrong_count ?? 0);
+  const allowReviewAnswers = !!(exam?.allow_review ?? (exam as any)?.allowReviewAnswers ?? false);
   const answers = sub.answers || {};
 
-  // breakdown computed from exam.questions if review allowed (questions are present only then)
-  const bd = (() => {
-    if (!exam?.questions) return null;
-    const ex = exam.questions;
-    const p1 = ex.partI || []; const p2 = ex.partII || []; const p3 = ex.partIII || [];
-    let p1c = 0; p1.forEach((q: any) => { if (answers[q.id] === q.answer) p1c++; });
-    let p3c = 0;
-    const numEq = (a: string, b: string) => {
-      const na = parseFloat(a.replace(",", ".")); const nb = parseFloat(b.replace(",", "."));
-      return !isNaN(na) && !isNaN(nb) && Math.abs(na - nb) < 1e-6;
-    };
-    p3.forEach((q: any) => {
-      const g = String(answers[q.id] ?? "").trim().toLowerCase();
-      const e = stripRich(String(q.answer ?? "")).trim().toLowerCase();
-      if (g === e || numEq(g, e)) p3c++;
-    });
-    const perQ = p2.map((q: any) => {
-      let ok = 0;
-      q.items.forEach((it: any) => {
-        const v = getTFValue(answers[q.id], it.key);
-        if (v !== null && v === !!it.correct) ok++;
-      });
-      return { id: q.id, okItems: ok, totalItems: q.items.length };
-    });
-    return {
-      p1: { correct: p1c, total: p1.length },
-      p2: { total: p2.length, perQuestion: perQ },
-      p3: { correct: p3c, total: p3.length },
-    };
-  })();
+  // Helper number matching for Part III
+  const numCorrect = (sa: string, expected: string) => {
+    const a = String(sa ?? "").trim().toLowerCase();
+    const b = stripRich(String(expected ?? "")).trim().toLowerCase();
+    if (a === b) return true;
+    const na = parseFloat(a.replace(",", "."));
+    const nb = parseFloat(b.replace(",", "."));
+    return !isNaN(na) && !isNaN(nb) && Math.abs(na - nb) < 1e-6;
+  };
 
-  const summary = (
+  /**
+   * Component Thẻ Tổng quan kết quả (Dùng chung cho cả 2 chế độ)
+   */
+  const renderSummaryCard = () => (
     <Card className="p-6 sm:p-8 max-w-lg w-full text-center mx-auto shadow-xl rounded-3xl border-2 border-border/80 bg-card/95 backdrop-blur">
       <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Kết quả bài thi của</div>
-      <div className="font-extrabold text-xl sm:text-2xl mt-1 text-foreground">{sub.student_name} • Lớp {sub.student_class}</div>
+      <div className="font-extrabold text-xl sm:text-2xl mt-1 text-foreground">
+        {sub.student_name} • Lớp {sub.student_class}
+      </div>
 
       <div className="my-6 py-7 px-4 rounded-3xl bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 text-white shadow-xl shadow-indigo-500/25 relative overflow-hidden">
         <div className="absolute inset-0 bg-white/5 backdrop-blur-[1px] pointer-events-none" />
@@ -137,51 +123,16 @@ export default function Result() {
 
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4">
-          <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400">{sub.correct_count}</div>
+          <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400">{sub.correct_count ?? 0}</div>
           <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 mt-1">Câu trả lời đúng</div>
         </div>
         <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-4">
-          <div className="text-3xl font-black text-rose-600 dark:text-rose-400">{sub.wrong_count}</div>
+          <div className="text-3xl font-black text-rose-600 dark:text-rose-400">{sub.wrong_count ?? 0}</div>
           <div className="text-xs font-semibold text-rose-700 dark:text-rose-300 mt-1">Câu trả lời sai</div>
         </div>
       </div>
 
-      {bd && (
-        <div className="mt-6 space-y-3.5 text-left">
-          {bd.p1.total > 0 && (
-            <div className="rounded-2xl border border-border/80 bg-muted/30 p-3.5 sm:p-4">
-              <div className="font-bold text-sm text-foreground">PHẦN I — Trắc nghiệm nhiều lựa chọn</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Số câu đúng: <b className="text-emerald-600 dark:text-emerald-400 font-bold">{bd.p1.correct}</b> / {bd.p1.total} câu
-              </div>
-            </div>
-          )}
-          {bd.p2.total > 0 && (
-            <div className="rounded-2xl border border-border/80 bg-muted/30 p-3.5 sm:p-4">
-              <div className="font-bold text-sm text-foreground">PHẦN II — Trắc nghiệm Đúng/Sai</div>
-              <div className="text-xs text-muted-foreground mt-1">Số ý đúng từng câu:</div>
-              <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs">
-                {bd.p2.perQuestion.map((q, i) => (
-                  <div key={q.id} className="flex justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-card border text-xs">
-                    <span className="font-medium">Câu {i + 1}</span>
-                    <span><b className="text-emerald-600 dark:text-emerald-400">{q.okItems}</b>/{q.totalItems} ý</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {bd.p3.total > 0 && (
-            <div className="rounded-2xl border border-border/80 bg-muted/30 p-3.5 sm:p-4">
-              <div className="font-bold text-sm text-foreground">PHẦN III — Trả lời ngắn</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Số câu đúng: <b className="text-emerald-600 dark:text-emerald-400 font-bold">{bd.p3.correct}</b> / {bd.p3.total} câu
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* NÚT "🏠 VỀ TRANG CÁ NHÂN" SAU KHI NỘP BÀI - VỊ TRÍ NỔI BẬT DỄ NHÌN */}
+      {/* NÚT "🏠 VỀ TRANG CÁ NHÂN" SAU KHI NỘP BÀI */}
       <div className="mt-6 pt-5 border-t border-border/80 space-y-2">
         <Link
           to="/student"
@@ -201,72 +152,21 @@ export default function Result() {
     </Card>
   );
 
-  if (!allowReview || !exam) {
-    return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 sm:px-4 relative selection:bg-primary/20 flex flex-col justify-center items-center">
-        <QuizBackground />
-        <div className="max-w-md w-full space-y-4 relative z-10">
-          {/* Top navigation header */}
-          <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-card/90 backdrop-blur border shadow-sm">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="text-2xl shrink-0">🎓</span>
-              <div className="min-w-0">
-                <div className="font-bold text-sm truncate text-foreground">
-                  {exam?.title || "Kết quả bài kiểm tra"}
-                </div>
-                <div className="text-xs text-muted-foreground truncate">
-                  {sub.student_name} • Lớp {sub.student_class}
-                </div>
-              </div>
-            </div>
-            <Link
-              to="/student"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white font-bold text-xs shrink-0 shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all"
-            >
-              <span>🏠</span>
-              <span>Trang cá nhân</span>
-            </Link>
-          </div>
-
-          {summary}
-
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-800 dark:text-amber-300 space-y-2">
-            <div className="font-bold text-sm">🔒 Đề thi đang mở (Giáo viên chưa đóng đề thi)</div>
-            <div>
-              Đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ tự động hiển thị sau khi Giáo viên đóng đề thi.
-            </div>
-            <div className="pt-2">
-              <Link to="/student" className="inline-flex items-center text-primary font-bold hover:underline">
-                <span className="mr-1.5">🏠</span> Vào trang cá nhân học sinh để theo dõi lịch sử bài thi
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Review mode
-  const ex = exam.questions;
-  const numCorrect = (sa: string, expected: string) => {
-    const a = String(sa ?? "").trim().toLowerCase();
-    const b = stripRich(String(expected ?? "")).trim().toLowerCase();
-    if (a === b) return true;
-    const na = parseFloat(a.replace(",", "."));
-    const nb = parseFloat(b.replace(",", "."));
-    return !isNaN(na) && !isNaN(nb) && Math.abs(na - nb) < 1e-6;
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 relative selection:bg-primary/20">
+  /**
+   * 6. KHI GIÁO VIÊN TẮT TÍNH NĂNG NÀY (allowReviewAnswers = false):
+   * Chỉ hiển thị: Điểm, Số câu đúng, Số câu sai, Họ tên, Lớp.
+   * KHÔNG hiển thị: Nội dung câu hỏi, Đáp án đúng, Đáp án học sinh chọn.
+   */
+  const renderSimpleResult = () => (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 sm:px-4 relative selection:bg-primary/20 flex flex-col justify-center items-center">
       <QuizBackground />
-      <div className="max-w-3xl mx-auto space-y-6 relative z-10">
-        {/* Top header bar */}
-        <div className="flex items-center justify-between gap-3 p-3.5 sm:p-4 rounded-2xl bg-card/90 backdrop-blur border shadow-sm">
+      <div className="max-w-md w-full space-y-4 relative z-10">
+        {/* Top navigation header */}
+        <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-card/90 backdrop-blur border shadow-sm">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="text-2xl shrink-0">🎓</span>
             <div className="min-w-0">
-              <div className="font-bold text-sm sm:text-base truncate text-foreground">
+              <div className="font-bold text-sm truncate text-foreground">
                 {exam?.title || "Kết quả bài kiểm tra"}
               </div>
               <div className="text-xs text-muted-foreground truncate">
@@ -276,157 +176,389 @@ export default function Result() {
           </div>
           <Link
             to="/student"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white font-bold text-xs sm:text-sm shrink-0 shadow-md shadow-indigo-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white font-bold text-xs shrink-0 shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all"
           >
             <span>🏠</span>
-            <span className="hidden sm:inline">Về trang cá nhân</span>
-            <span className="sm:hidden">Trang cá nhân</span>
+            <span>Trang cá nhân</span>
           </Link>
         </div>
 
-        {summary}
+        {renderSummaryCard()}
 
-        <Card className="p-5 sm:p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="font-bold text-lg text-foreground">Xem lại chi tiết bài làm & đáp án</h2>
-            <Link
-              to="/student"
-              className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
-            >
-              <span>🏠</span> Về trang cá nhân
+        {/* Thông báo giáo viên tắt tính năng xem lại đáp án */}
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-900 dark:text-amber-200 space-y-2">
+          <div className="font-bold text-sm flex items-center justify-center gap-1.5">
+            <Lock className="size-4 text-amber-600 dark:text-amber-400" />
+            <span>Xem lại đáp án đã bị khóa</span>
+          </div>
+          <div className="leading-relaxed">
+            Giáo viên đã cấu hình không cho phép xem lại chi tiết câu hỏi và đáp án sau khi hoàn thành bài thi này. Điểm số của bạn đã được lưu vào hệ thống.
+          </div>
+          <div className="pt-2">
+            <Link to="/student" className="inline-flex items-center text-primary font-bold hover:underline">
+              <span className="mr-1.5">🏠</span> Vào trang cá nhân học sinh để theo dõi lịch sử bài thi
             </Link>
           </div>
-
-          {ex.partI?.length > 0 && (
-            <section className="space-y-4">
-              <h3 className="font-semibold text-primary">PHẦN I — Trắc nghiệm</h3>
-              {ex.partI.map((q: any, i: number) => {
-                const chosen = answers[q.id];
-                const ok = chosen === q.answer;
-                return (
-                  <div key={q.id} className={`rounded-lg border p-4 ${ok ? "border-success/40 bg-success/5" : "border-destructive/40 bg-destructive/5"}`}>
-                    <div className="flex items-start gap-2">
-                      {ok ? <Check className="size-5 text-success shrink-0 mt-0.5" /> : <X className="size-5 text-destructive shrink-0 mt-0.5" />}
-                      <div className="font-medium"><span className="mr-1">Câu {i + 1}.</span><RichText text={q.text} /></div>
-                    </div>
-                    <div className="mt-3 space-y-1.5">
-                      {q.options.map((opt: any) => {
-                        const isCorrect = opt.key === q.answer;
-                        const isChosen = opt.key === chosen;
-                        const cls = isCorrect
-                          ? "border-success bg-success/10"
-                          : isChosen
-                          ? "border-destructive bg-destructive/10"
-                          : "border-border";
-                        return (
-                          <div key={opt.key} className={`flex items-start gap-2 rounded border p-2 text-sm ${cls}`}>
-                            <b className="min-w-5">{opt.key}.</b>
-                            <span className="flex-1"><RichText text={opt.text} /></span>
-                            {isCorrect && <span className="text-xs text-success font-semibold">✓ Đáp án đúng</span>}
-                            {isChosen && !isCorrect && <span className="text-xs text-destructive font-semibold">✗ Bạn chọn</span>}
-                          </div>
-                        );
-                      })}
-                      {!chosen && <div className="text-xs text-muted-foreground italic">Bạn chưa trả lời.</div>}
-                    </div>
-                    {q.explanation && (
-                      <div className="mt-3 rounded-md border-l-2 border-primary/50 bg-primary/5 p-3">
-                        <div className="text-xs font-semibold text-primary mb-1">Lời giải</div>
-                        <div className="text-sm whitespace-pre-wrap"><RichText text={q.explanation} /></div>
-                      </div>
-                    )}
-                  </div>
-                );
-
-              })}
-            </section>
-          )}
-
-          {ex.partII?.length > 0 && (
-            <section className="space-y-4">
-              <h3 className="font-semibold text-primary">PHẦN II — Đúng/Sai</h3>
-              {ex.partII.map((q: any, i: number) => {
-                return (
-                  <div key={q.id} className="rounded-lg border p-4">
-                    <div className="font-medium mb-2"><span className="mr-1">Câu {i + 1}.</span><RichText text={q.text} /></div>
-                    <div className="space-y-1.5">
-                      {q.items.map((it: any) => {
-                        const val = getTFValue(answers[q.id], it.key);
-                        const ok = val !== null && val === !!it.correct;
-                        return (
-                          <div key={it.key} className={`flex items-start gap-2 rounded border p-2 text-sm ${val === null ? "border-border bg-muted/40" : ok ? "border-success bg-success/10" : "border-destructive bg-destructive/10"}`}>
-                            <b className="min-w-5">{it.key})</b>
-                            <span className="flex-1"><RichText text={it.text} /></span>
-                            <span className="text-xs whitespace-nowrap">
-                              Đáp án: <b className={it.correct ? "text-success" : "text-destructive"}>{it.correct ? "Đúng" : "Sai"}</b>
-                              {" • "}
-                              Bạn chọn: <b>{val === null ? "Chưa trả lời" : val ? "Đúng" : "Sai"}</b>
-                              {val === null ? null : ok ? <Check className="inline size-3.5 text-success ml-1" /> : <X className="inline size-3.5 text-destructive ml-1" />}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {q.explanation && (
-                      <div className="mt-3 rounded-md border-l-2 border-primary/50 bg-primary/5 p-3">
-                        <div className="text-xs font-semibold text-primary mb-1">Lời giải</div>
-                        <div className="text-sm whitespace-pre-wrap"><RichText text={q.explanation} /></div>
-                      </div>
-                    )}
-                  </div>
-                );
-
-              })}
-            </section>
-          )}
-
-          {ex.partIII?.length > 0 && (
-            <section className="space-y-4">
-              <h3 className="font-semibold text-primary">PHẦN III — Trả lời ngắn</h3>
-              {ex.partIII.map((q: any, i: number) => {
-                const given = answers[q.id] ?? "";
-                const ok = numCorrect(given, q.answer);
-                return (
-                  <div key={q.id} className={`rounded-lg border p-4 ${ok ? "border-success/40 bg-success/5" : "border-destructive/40 bg-destructive/5"}`}>
-                    <div className="flex items-start gap-2">
-                      {ok ? <Check className="size-5 text-success shrink-0 mt-0.5" /> : <X className="size-5 text-destructive shrink-0 mt-0.5" />}
-                      <div className="font-medium"><span className="mr-1">Câu {i + 1}.</span><RichText text={q.text} /></div>
-                    </div>
-                    <div className="mt-3 grid sm:grid-cols-2 gap-2 text-sm">
-                      <div className={`rounded border p-2 ${ok ? "border-success bg-success/10" : "border-destructive bg-destructive/10"}`}>
-                        <div className="text-xs text-muted-foreground">Đáp án của bạn</div>
-                        <div className="font-medium break-words">{String(given) || <span className="italic text-muted-foreground">(bỏ trống)</span>}</div>
-                      </div>
-                      <div className="rounded border border-success bg-success/10 p-2">
-                        <div className="text-xs text-muted-foreground">Đáp án đúng</div>
-                        <div className="font-medium break-words"><RichText text={String(q.answer)} /></div>
-                      </div>
-                    </div>
-                    {q.explanation && (
-                      <div className="mt-3 rounded-md border-l-2 border-primary/50 bg-primary/5 p-3">
-                        <div className="text-xs font-semibold text-primary mb-1">Lời giải</div>
-                        <div className="text-sm whitespace-pre-wrap"><RichText text={q.explanation} /></div>
-                      </div>
-                    )}
-                  </div>
-                );
-
-              })}
-            </section>
-          )}
-        </Card>
-
-        {/* NÚT VỀ TRANG CÁ NHÂN Ở CUỐI TRANG REVIEW */}
-        <div className="flex justify-center pt-2 pb-10">
-          <Link
-            to="/student"
-            className="inline-flex items-center justify-center gap-2.5 px-8 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-700 hover:via-indigo-700 hover:to-violet-700 text-white font-black text-base shadow-xl shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all"
-          >
-            <span className="text-xl">🏠</span>
-            <span>Về trang cá nhân</span>
-          </Link>
         </div>
       </div>
     </div>
   );
+
+  /**
+   * 2, 3, 4, 5. KHI GIÁO VIÊN BẬT TÍNH NĂNG NÀY (allowReviewAnswers = true):
+   * Hiển thị: Điểm, Số câu đúng, Số câu sai, Họ tên, Lớp.
+   * Danh sách câu hỏi kèm: Nội dung câu hỏi, Đáp án học sinh chọn, Đáp án đúng highlight màu xanh,
+   * Đáp án sai của học sinh highlight màu đỏ, đối chiếu Phần I, Phần II, Phần III.
+   */
+  const renderReviewPage = () => {
+    const ex = exam.questions;
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 relative selection:bg-primary/20">
+        <QuizBackground />
+        <div className="max-w-3xl mx-auto space-y-6 relative z-10">
+          {/* Top header bar */}
+          <div className="flex items-center justify-between gap-3 p-3.5 sm:p-4 rounded-2xl bg-card/90 backdrop-blur border shadow-sm">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="text-2xl shrink-0">🎓</span>
+              <div className="min-w-0">
+                <div className="font-bold text-sm sm:text-base truncate text-foreground">
+                  {exam?.title || "Kết quả bài kiểm tra"}
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {sub.student_name} • Lớp {sub.student_class}
+                </div>
+              </div>
+            </div>
+            <Link
+              to="/student"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white font-bold text-xs sm:text-sm shrink-0 shadow-md shadow-indigo-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            >
+              <span>🏠</span>
+              <span className="hidden sm:inline">Về trang cá nhân</span>
+              <span className="sm:hidden">Trang cá nhân</span>
+            </Link>
+          </div>
+
+          {renderSummaryCard()}
+
+          {/* Chi tiết từng câu hỏi & đáp án đối chiếu */}
+          <Card className="p-5 sm:p-6 space-y-6">
+            <div className="flex items-center justify-between border-b pb-4">
+              <div className="flex items-center gap-2">
+                <BookOpen className="size-5 text-primary" />
+                <h2 className="font-bold text-lg text-foreground">Xem lại chi tiết bài làm & đáp án</h2>
+              </div>
+              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
+                Đã bật xem lại đáp án
+              </span>
+            </div>
+
+            {/* PHẦN I: TRẮC NGHIỆM NHIỀU LỰA CHỌN */}
+            {ex.partI?.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm sm:text-base text-primary uppercase tracking-wide">
+                    PHẦN I — Trắc nghiệm nhiều lựa chọn
+                  </h3>
+                  <span className="text-xs text-muted-foreground">({ex.partI.length} câu)</span>
+                </div>
+
+                {ex.partI.map((q: any, i: number) => {
+                  const chosen = answers[q.id];
+                  const ok = chosen === q.answer;
+                  return (
+                    <div
+                      key={q.id}
+                      className={`rounded-2xl border p-4 sm:p-5 transition-all ${
+                        ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-rose-500/40 bg-rose-500/5"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {ok ? (
+                          <div className="size-6 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                            <Check className="size-4 text-emerald-600 dark:text-emerald-400" />
+                          </div>
+                        ) : (
+                          <div className="size-6 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                            <X className="size-4 text-rose-600 dark:text-rose-400" />
+                          </div>
+                        )}
+                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
+                          <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                          <RichText text={q.text} />
+                        </div>
+                      </div>
+
+                      <div className="mt-3.5 space-y-2">
+                        {q.options.map((opt: any) => {
+                          const isCorrect = opt.key === q.answer;
+                          const isChosen = opt.key === chosen;
+
+                          let cls = "border-border/70 bg-card text-foreground";
+                          let badge = null;
+
+                          if (isCorrect && isChosen) {
+                            // Học sinh chọn đúng
+                            cls = "border-emerald-500 bg-emerald-500/15 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500/50";
+                            badge = (
+                              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 shrink-0">
+                                <Check className="size-3.5" /> Bạn chọn (Đúng)
+                              </span>
+                            );
+                          } else if (isCorrect && !isChosen) {
+                            // Đáp án đúng mà học sinh không chọn
+                            cls = "border-emerald-500/80 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100 font-medium";
+                            badge = (
+                              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 shrink-0">
+                                <Check className="size-3.5" /> Đáp án đúng
+                              </span>
+                            );
+                          } else if (isChosen && !isCorrect) {
+                            // Học sinh chọn sai
+                            cls = "border-rose-500 bg-rose-500/15 text-rose-950 dark:text-rose-100 ring-1 ring-rose-500/50";
+                            badge = (
+                              <span className="text-xs font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1 shrink-0">
+                                <X className="size-3.5" /> Bạn chọn (Sai)
+                              </span>
+                            );
+                          }
+
+                          return (
+                            <div
+                              key={opt.key}
+                              className={`flex items-start justify-between gap-3 rounded-xl border p-3 text-sm transition-all ${cls}`}
+                            >
+                              <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                <b className="min-w-6 font-bold">{opt.key}.</b>
+                                <span className="flex-1 break-words">
+                                  <RichText text={opt.text} />
+                                </span>
+                              </div>
+                              {badge}
+                            </div>
+                          );
+                        })}
+
+                        {!chosen && (
+                          <div className="text-xs text-rose-500 italic mt-1 font-semibold flex items-center gap-1">
+                            <ShieldAlert className="size-3.5" /> Bạn chưa chọn đáp án cho câu này.
+                          </div>
+                        )}
+                      </div>
+
+                      {q.explanation && (
+                        <div className="mt-3.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+                          <div className="text-xs font-bold text-primary mb-1 uppercase tracking-wide">
+                            💡 Lời giải chi tiết
+                          </div>
+                          <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
+                            <RichText text={q.explanation} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+
+            {/* PHẦN II: ĐÚNG / SAI */}
+            {ex.partII?.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm sm:text-base text-primary uppercase tracking-wide">
+                    PHẦN II — Trắc nghiệm Đúng / Sai
+                  </h3>
+                  <span className="text-xs text-muted-foreground">({ex.partII.length} câu)</span>
+                </div>
+
+                {ex.partII.map((q: any, i: number) => {
+                  return (
+                    <div key={q.id} className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-3">
+                      <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
+                        <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                        <RichText text={q.text} />
+                      </div>
+
+                      <div className="space-y-2">
+                        {q.items.map((it: any) => {
+                          const val = getTFValue(answers[q.id], it.key);
+                          const ok = val !== null && val === !!it.correct;
+
+                          let itemCls = "border-border/70 bg-card";
+                          if (val !== null) {
+                            itemCls = ok
+                              ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100"
+                              : "border-rose-500/60 bg-rose-500/10 text-rose-950 dark:text-rose-100";
+                          }
+
+                          return (
+                            <div
+                              key={it.key}
+                              className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border p-3 text-sm ${itemCls}`}
+                            >
+                              <div className="flex items-start gap-2 flex-1 min-w-0">
+                                <b className="min-w-6 font-bold">{it.key})</b>
+                                <span className="flex-1 break-words">
+                                  <RichText text={it.text} />
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0 text-xs sm:self-center">
+                                <span className="px-2 py-1 rounded-md bg-muted/60 text-muted-foreground border">
+                                  Đáp án:{" "}
+                                  <b className={it.correct ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                                    {it.correct ? "Đúng" : "Sai"}
+                                  </b>
+                                </span>
+
+                                <span className="px-2 py-1 rounded-md bg-muted/60 text-muted-foreground border">
+                                  Bạn chọn:{" "}
+                                  <b className="font-bold">
+                                    {val === null ? "Chưa làm" : val ? "Đúng" : "Sai"}
+                                  </b>
+                                </span>
+
+                                {val === null ? (
+                                  <span className="px-2 py-1 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                                    Bỏ trống
+                                  </span>
+                                ) : ok ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                                    <Check className="size-3.5" /> Đúng
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-600 border border-rose-500/30">
+                                    <X className="size-3.5" /> Sai
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {q.explanation && (
+                        <div className="mt-3.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+                          <div className="text-xs font-bold text-primary mb-1 uppercase tracking-wide">
+                            💡 Lời giải chi tiết
+                          </div>
+                          <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
+                            <RichText text={q.explanation} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+
+            {/* PHẦN III: TRẢ LỜI NGẮN */}
+            {ex.partIII?.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm sm:text-base text-primary uppercase tracking-wide">
+                    PHẦN III — Trả lời ngắn
+                  </h3>
+                  <span className="text-xs text-muted-foreground">({ex.partIII.length} câu)</span>
+                </div>
+
+                {ex.partIII.map((q: any, i: number) => {
+                  const given = answers[q.id] ?? "";
+                  const ok = numCorrect(given, q.answer);
+                  return (
+                    <div
+                      key={q.id}
+                      className={`rounded-2xl border p-4 sm:p-5 ${
+                        ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-rose-500/40 bg-rose-500/5"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {ok ? (
+                          <div className="size-6 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                            <Check className="size-4 text-emerald-600 dark:text-emerald-400" />
+                          </div>
+                        ) : (
+                          <div className="size-6 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                            <X className="size-4 text-rose-600 dark:text-rose-400" />
+                          </div>
+                        )}
+                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
+                          <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                          <RichText text={q.text} />
+                        </div>
+                      </div>
+
+                      <div className="mt-3.5 grid sm:grid-cols-2 gap-3 text-sm">
+                        <div
+                          className={`rounded-xl border p-3.5 ${
+                            ok
+                              ? "border-emerald-500 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100"
+                              : "border-rose-500 bg-rose-500/10 text-rose-950 dark:text-rose-100"
+                          }`}
+                        >
+                          <div className="text-xs font-semibold text-muted-foreground flex items-center justify-between">
+                            <span>Đáp án của bạn</span>
+                            <span className={ok ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                              {ok ? "✓ Chính xác" : "✗ Chưa chính xác"}
+                            </span>
+                          </div>
+                          <div className="font-bold text-base mt-1 break-words">
+                            {String(given) || <span className="italic text-muted-foreground font-normal">(bỏ trống)</span>}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-emerald-500/80 bg-emerald-500/10 p-3.5 text-emerald-950 dark:text-emerald-100">
+                          <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                            Đáp án đúng của đề thi
+                          </div>
+                          <div className="font-bold text-base mt-1 break-words">
+                            <RichText text={String(q.answer)} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {q.explanation && (
+                        <div className="mt-3.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+                          <div className="text-xs font-bold text-primary mb-1 uppercase tracking-wide">
+                            💡 Lời giải chi tiết
+                          </div>
+                          <div className="text-sm whitespace-pre-wrap text-foreground leading-relaxed">
+                            <RichText text={q.explanation} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+          </Card>
+
+          {/* NÚT VỀ TRANG CÁ NHÂN Ở CUỐI TRANG REVIEW */}
+          <div className="flex justify-center pt-2 pb-10">
+            <Link
+              to="/student"
+              className="inline-flex items-center justify-center gap-2.5 px-8 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-700 hover:via-indigo-700 hover:to-violet-700 text-white font-black text-base shadow-xl shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all"
+            >
+              <span className="text-xl">🏠</span>
+              <span>Về trang cá nhân</span>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 7. YÊU CẦU KỸ THUẬT:
+  // Sau khi học sinh nộp bài:
+  // Kiểm tra cấu hình bài thi:
+  // Nếu allowReviewAnswers = true (hoặc allow_review = true) và có questions: renderReviewPage()
+  // Nếu false: renderSimpleResult()
+  if (!allowReviewAnswers || !exam?.questions) {
+    return renderSimpleResult();
+  }
+
+  return renderReviewPage();
 }
