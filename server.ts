@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
-import { findSampleExam, getSampleExamById, getSampleExamByCode } from "./src/lib/sampleExams";
+import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } from "./src/lib/sampleExams";
 
 const app = express();
 const PORT = 3000;
@@ -852,62 +852,159 @@ async function getServerSupabase() {
 
 app.post("/api/check-question-answer", async (req, res) => {
   try {
-    const { examId, questionId, answer } = req.body;
+    const { examId, questionId, answer, examCode, fallbackQuestion } = req.body || {};
     if (!examId || !questionId) {
       return res.status(400).json({ error: "Missing examId or questionId" });
     }
 
+    const isUuid = (str: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(str || "").trim());
+
     let examData: any = null;
 
     // 1. Try finding in sample exams first
-    const sample = findSampleExam(examId) || getSampleExamById(examId) || getSampleExamByCode(examId);
+    let sample =
+      findSampleExam(examId) ||
+      getSampleExamById(examId) ||
+      getSampleExamByCode(examId) ||
+      (examCode ? findSampleExam(examCode) || getSampleExamByCode(examCode) : null);
+
+    if (!sample) {
+      // Also try finding sample exam by scanning all sample questions for questionId
+      for (const s of SAMPLE_EXAMS) {
+        const p1 = s.questions?.partI || [];
+        const p2 = s.questions?.partII || [];
+        const p3 = s.questions?.partIII || [];
+        if (
+          p1.some((q: any) => q.id === questionId) ||
+          p2.some((q: any) => q.id === questionId) ||
+          p3.some((q: any) => q.id === questionId)
+        ) {
+          sample = s;
+          break;
+        }
+      }
+    }
+
     if (sample) {
       examData = sample;
     } else {
       // 2. Fetch from Supabase exams table using system bridge
       try {
         const sb = await getServerSupabase();
-        let { data, error } = await sb
-          .from("exams")
-          .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
-          .eq("id", examId)
-          .single();
+        let targetUuid = isUuid(examId) ? examId : "";
 
-        if (error || !data) {
-          // Retry re-auth once in case session expired
-          serverSupabaseClient = null;
-          const freshSb = await getServerSupabase();
-          const retry = await freshSb
+        // If not UUID, try looking up code in schools registry or team_config
+        const codeToTry = !targetUuid ? examId : examCode;
+        if (!targetUuid && codeToTry) {
+          const { data: sch } = await sb
+            .from("schools")
+            .select("name")
+            .eq("name_key", `assign_code:${codeToTry}`)
+            .maybeSingle();
+          if (sch?.name) {
+            try {
+              const parsed = JSON.parse(sch.name);
+              if (parsed?.examId && isUuid(parsed.examId)) targetUuid = parsed.examId;
+            } catch {}
+          }
+        }
+
+        if (!targetUuid && codeToTry) {
+          const { data: exRow } = await sb
+            .from("exams")
+            .select("id")
+            .filter("team_config->>primary_code", "eq", codeToTry)
+            .maybeSingle();
+          if (exRow?.id && isUuid(exRow.id)) targetUuid = exRow.id;
+        }
+
+        if (targetUuid) {
+          let { data } = await sb
             .from("exams")
             .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
-            .eq("id", examId)
+            .eq("id", targetUuid)
             .single();
-          data = retry.data;
-        }
 
-        if (data) {
-          examData = data;
+          if (!data) {
+            // Retry re-auth once in case session expired
+            serverSupabaseClient = null;
+            const freshSb = await getServerSupabase();
+            const retry = await freshSb
+              .from("exams")
+              .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
+              .eq("id", targetUuid)
+              .single();
+            data = retry.data;
+          }
+
+          if (data) {
+            examData = data;
+          }
         }
       } catch (err: any) {
-        console.warn("Error fetching exam from Supabase in server:", err.message);
+        console.warn("Error fetching exam from Supabase in server:", err?.message);
       }
+    }
+
+    // 3. Fallback to client-provided fallbackQuestion if examData is not in DB
+    if (!examData && fallbackQuestion && (fallbackQuestion.answer !== undefined || fallbackQuestion.items)) {
+      const fbQ = fallbackQuestion;
+      examData = {
+        id: examId,
+        questions: {
+          partI: fbQ._part === 1 || fbQ.type === "mc" ? [fbQ] : [],
+          partII: fbQ._part === 2 || fbQ.type === "tf" ? [fbQ] : [],
+          partIII: fbQ._part === 3 || fbQ.type === "sa" ? [fbQ] : [],
+        },
+      };
     }
 
     if (!examData) {
       return res.status(404).json({ error: "Không tìm thấy đề thi" });
     }
 
-    if (!examData.instant_feedback) {
-      return res.status(403).json({ error: "Tính năng phản hồi tức thì không được bật cho đề này" });
+    let qs = examData.questions || {};
+    if (typeof qs === "string") {
+      try {
+        qs = JSON.parse(qs);
+      } catch {
+        qs = {};
+      }
+    }
+    if (qs.questions && !qs.partI && !qs.partII && !qs.partIII) {
+      qs = qs.questions;
+      if (typeof qs === "string") {
+        try {
+          qs = JSON.parse(qs);
+        } catch {
+          qs = {};
+        }
+      }
     }
 
-    const qs = examData.questions || {};
-    const p1 = Array.isArray(qs.partI) ? qs.partI : [];
-    const p2 = Array.isArray(qs.partII) ? qs.partII : [];
-    const p3 = Array.isArray(qs.partIII) ? qs.partIII : [];
+    let p1 = Array.isArray(qs.partI) ? qs.partI : Array.isArray(qs.part1) ? qs.part1 : Array.isArray(qs.PartI) ? qs.PartI : [];
+    let p2 = Array.isArray(qs.partII) ? qs.partII : Array.isArray(qs.part2) ? qs.part2 : Array.isArray(qs.PartII) ? qs.PartII : [];
+    let p3 = Array.isArray(qs.partIII) ? qs.partIII : Array.isArray(qs.part3) ? qs.part3 : Array.isArray(qs.PartIII) ? qs.PartIII : [];
+
+    if (Array.isArray(qs)) {
+      p1 = qs.filter((q: any) => q.type === "mc" || q._part === 1);
+      p2 = qs.filter((q: any) => q.type === "tf" || q._part === 2);
+      p3 = qs.filter((q: any) => q.type === "sa" || q._part === 3);
+    }
+
+    const matchQ = (q: any, i: number, prefix: string) => {
+      if (!q) return false;
+      const qid = String(q.id || "").toLowerCase();
+      const targetId = String(questionId || "").toLowerCase();
+      if (qid && qid === targetId) return true;
+      if (targetId === `${prefix}_q_${i + 1}` || targetId === `q_${i + 1}`) return true;
+      if (qid && qid.replace(new RegExp(`^${prefix}_`), "") === targetId.replace(new RegExp(`^${prefix}_`), "")) return true;
+      return false;
+    };
 
     // Part I: MC
-    const q1 = p1.find((q: any) => q.id === questionId);
+    const q1 = p1.find((q: any, i: number) => matchQ(q, i, "p1"));
     if (q1) {
       const isCorrect = String(answer ?? "").trim().toUpperCase() === String(q1.answer ?? "").trim().toUpperCase();
       return res.json({
@@ -919,7 +1016,7 @@ app.post("/api/check-question-answer", async (req, res) => {
     }
 
     // Part II: TF
-    const q2 = p2.find((q: any) => q.id === questionId);
+    const q2 = p2.find((q: any, i: number) => matchQ(q, i, "p2"));
     if (q2) {
       const items = Array.isArray(q2.items) ? q2.items : [];
       let okItems = 0;
@@ -952,7 +1049,7 @@ app.post("/api/check-question-answer", async (req, res) => {
     }
 
     // Part III: SA
-    const q3 = p3.find((q: any) => q.id === questionId);
+    const q3 = p3.find((q: any, i: number) => matchQ(q, i, "p3"));
     if (q3) {
       const strip = (t: string) => (t || "").replace(/<[^>]*>/g, "").trim().toLowerCase();
       const correctAns = strip(q3.answer || "");

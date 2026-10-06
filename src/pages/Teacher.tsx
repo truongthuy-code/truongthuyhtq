@@ -78,7 +78,7 @@ export default function Teacher() {
   const [allowReview, setAllowReview] = useState(false);
   const [displayMode, setDisplayMode] = useState<"standard" | "quizizz" | "team">("standard");
   const [teamConfig, setTeamConfig] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG);
-  const [instantFeedback, setInstantFeedback] = useState(false);
+  const [instantFeedback, setInstantFeedback] = useState(true);
   const [lockMode, setLockMode] = useState<LockMode>(DEFAULT_LOCK);
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
   const [saving, setSaving] = useState(false);

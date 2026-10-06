@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label";
 import { getTFValue, gradeExam, DEFAULT_SCORING } from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
-import { findSampleExam, getSampleExamByCode, getSampleExamById } from "@/lib/sampleExams";
+import { findSampleExam, getSampleExamByCode, getSampleExamById, SAMPLE_EXAMS } from "@/lib/sampleExams";
+import { getLocalStoredExams } from "@/lib/allExamsStorage";
 import { findAssignmentOrExamByCode, isUuid, normalizeExamCode } from "@/lib/examAssignments";
 import {
   ChevronLeft,
@@ -176,16 +177,14 @@ export default function Take() {
   });
 
   const currentExamId = useMemo(() => {
-    if (exam?.id && isUuid(exam.id)) return exam.id;
+    if (exam?.id) return exam.id;
     if (id) {
       const trimmed = String(id).trim();
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
-        return trimmed;
-      }
       const uuidMatch = trimmed.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       if (uuidMatch) return uuidMatch[0];
+      return trimmed;
     }
-    return "";
+    return exam?.code || "";
   }, [exam, id]);
 
   const [loading, setLoading] = useState<boolean>(() => {
@@ -232,7 +231,7 @@ export default function Take() {
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
   const showSingleMode = isQuiz || standardViewMode === "single";
-  const instantFb = !!exam?.instant_feedback;
+  const instantFb = exam?.instant_feedback !== false;
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
 
@@ -1326,15 +1325,127 @@ export default function Take() {
     setChecking(true);
     setCheckingQId(targetQ.id);
 
+    const evaluateQuestionData = (qData: any, value: any) => {
+      if (!qData) return null;
+      if (qData.type === "mc" || qData._part === 1 || (Array.isArray(qData.options) && qData.options.length > 0)) {
+        const correct = String(value || "").trim().toUpperCase() === String(qData.answer || "").trim().toUpperCase();
+        return {
+          type: "mc",
+          correct,
+          answer: qData.answer,
+          explanation: qData.explanation || "",
+        };
+      }
+      if (qData.type === "tf" || qData._part === 2 || (Array.isArray(qData.items) && qData.items.length > 0)) {
+        const items = qData.items || [];
+        let okItems = 0;
+        const evItems = items.map((it: any) => {
+          const stuVal = value?.[it.key] ?? null;
+          const ok = stuVal !== null && stuVal === it.correct;
+          if (ok) okItems++;
+          return { key: it.key, correct: it.correct, student: stuVal };
+        });
+        return {
+          type: "tf",
+          correct: items.length > 0 && okItems === items.length,
+          okItems,
+          totalItems: items.length,
+          items: evItems,
+          explanation: qData.explanation || "",
+        };
+      }
+      if (qData.type === "sa" || qData._part === 3) {
+        const strip = (t: string) => (t || "").replace(/<[^>]*>/g, "").trim().toLowerCase();
+        const cAns = strip(qData.answer || "");
+        const gAns = strip(String(value || ""));
+        let isCorrect = gAns !== "" && cAns === gAns;
+        if (!isCorrect && gAns !== "" && cAns !== "") {
+          const nc = parseFloat(cAns.replace(",", "."));
+          const ng = parseFloat(gAns.replace(",", "."));
+          if (!isNaN(nc) && !isNaN(ng) && Math.abs(nc - ng) < 1e-6) {
+            isCorrect = true;
+          }
+        }
+        return {
+          type: "sa",
+          correct: isCorrect,
+          answer: qData.answer,
+          explanation: qData.explanation || "",
+        };
+      }
+      return null;
+    };
+
+    const commitFeedback = (resData: any) => {
+      setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
+      if (resData?.correct) {
+        try {
+          confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+        } catch {}
+      }
+      setChecking(false);
+      setCheckingQId(null);
+    };
+
+    // 1. Đánh giá ngay lập tức nếu targetQ đã có sẵn đáp án trong bộ nhớ (Zero latency!)
+    if (targetQ.answer !== undefined || (targetQ.items && targetQ.items[0]?.correct !== undefined)) {
+      const localResult = evaluateQuestionData(targetQ, ansValue);
+      if (localResult) {
+        commitFeedback(localResult);
+        return;
+      }
+    }
+
+    // 2. Tra cứu trong các đề thi mẫu có sẵn
+    for (const s of SAMPLE_EXAMS) {
+      const allQ = [
+        ...(s.questions?.partI || []).map((x: any) => ({ ...x, _part: 1 })),
+        ...(s.questions?.partII || []).map((x: any) => ({ ...x, _part: 2 })),
+        ...(s.questions?.partIII || []).map((x: any) => ({ ...x, _part: 3 })),
+      ];
+      const match = allQ.find((x: any) => x.id === targetQ.id);
+      if (match) {
+        const sampleResult = evaluateQuestionData(match, ansValue);
+        if (sampleResult) {
+          commitFeedback(sampleResult);
+          return;
+        }
+      }
+    }
+
+    // 3. Tra cứu trong bộ nhớ đề thi đã lưu cục bộ (Local Storage Exams)
     try {
-      // 1. Primary endpoint: server API
+      const stored = getLocalStoredExams();
+      for (const ex of stored) {
+        if (ex.id === currentExamId || ex.id === exam?.id) {
+          const allStoredQ = [
+            ...(ex.questions?.partI || []),
+            ...(ex.questions?.partII || []),
+            ...(ex.questions?.partIII || []),
+          ];
+          const match = allStoredQ.find((x: any) => x.id === targetQ.id);
+          if (match && (match.answer !== undefined || match.items?.[0]?.correct !== undefined)) {
+            const storedResult = evaluateQuestionData(match, ansValue);
+            if (storedResult) {
+              commitFeedback(storedResult);
+              return;
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // 4. Gọi API server kiểm tra đáp án (sử dụng quyền hệ thống truy vấn Supabase chính xác)
+    try {
       const response = await fetch("/api/check-question-answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           examId: currentExamId,
+          examCode: exam?.code || (exam?.team_config as any)?.primary_code,
           questionId: targetQ.id,
           answer: ansValue,
+          fallbackQuestion: targetQ,
         }),
       });
 
@@ -1342,22 +1453,15 @@ export default function Take() {
       if (response.ok && contentType.includes("application/json")) {
         const resData = await response.json();
         if (resData && !resData.error) {
-          setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
-          if (resData?.correct) {
-            try {
-              confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-            } catch {}
-          }
-          setChecking(false);
-          setCheckingQId(null);
+          commitFeedback(resData);
           return;
         }
       }
     } catch (e) {
-      console.warn("API check failed, trying fallback:", e);
+      console.warn("API check failed, trying Supabase RPC fallback:", e);
     }
 
-    // 2. Supabase RPC fallback
+    // 5. Dự phòng qua Supabase RPC
     try {
       const { data, error } = await supabase.rpc("check_question_answer", {
         p_exam_id: currentExamId,
@@ -1366,133 +1470,16 @@ export default function Take() {
       } as any);
 
       if (!error && data) {
-        setFeedback((prev) => ({ ...prev, [targetQ.id]: data }));
-        if ((data as any)?.correct) {
-          try {
-            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-          } catch {}
-        }
-        setChecking(false);
-        setCheckingQId(null);
+        commitFeedback(data);
         return;
       }
     } catch (e) {
       console.warn("RPC check error:", e);
     }
 
-    // 3. Fallback for sample exams
-    const sample = findSampleExam(currentExamId);
-    if (sample) {
-      const allSampleQ = [
-        ...(sample.questions?.partI || []).map((x: any) => ({ ...x, _part: 1 })),
-        ...(sample.questions?.partII || []).map((x: any) => ({ ...x, _part: 2 })),
-        ...(sample.questions?.partIII || []).map((x: any) => ({ ...x, _part: 3 })),
-      ];
-      const sq = allSampleQ.find((x: any) => x.id === targetQ.id);
-      if (sq) {
-        let resData: any = null;
-        if (sq._part === 1) {
-          resData = {
-            type: "mc",
-            correct: String(ansValue || "").toUpperCase() === String(sq.answer || "").toUpperCase(),
-            answer: sq.answer,
-            explanation: sq.explanation || "",
-          };
-        } else if (sq._part === 2) {
-          const items = sq.items || [];
-          let okItems = 0;
-          const evItems = items.map((it: any) => {
-            const stuVal = ansValue?.[it.key] ?? null;
-            const ok = stuVal !== null && stuVal === it.correct;
-            if (ok) okItems++;
-            return { key: it.key, correct: it.correct, student: stuVal };
-          });
-          resData = {
-            type: "tf",
-            correct: items.length > 0 && okItems === items.length,
-            okItems,
-            totalItems: items.length,
-            items: evItems,
-            explanation: sq.explanation || "",
-          };
-        } else if (sq._part === 3) {
-          const cAns = String(sq.answer || "").trim().toLowerCase();
-          const gAns = String(ansValue || "").trim().toLowerCase();
-          resData = {
-            type: "sa",
-            correct: cAns === gAns,
-            answer: sq.answer,
-            explanation: sq.explanation || "",
-          };
-        }
-        if (resData) {
-          setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
-          if (resData.correct) {
-            try {
-              confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-            } catch {}
-          }
-        }
-      }
-    }
-
-    // 4. Fallback if targetQ already has answer in memory (e.g. local / preview mode)
-    if (targetQ.answer !== undefined || (targetQ.items && targetQ.items[0]?.correct !== undefined)) {
-      let resData: any = null;
-      if (targetQ.type === "mc") {
-        resData = {
-          type: "mc",
-          correct: String(ansValue || "").toUpperCase() === String(targetQ.answer || "").toUpperCase(),
-          answer: targetQ.answer,
-          explanation: targetQ.explanation || "",
-        };
-      } else if (targetQ.type === "tf") {
-        const items = targetQ.items || [];
-        let okItems = 0;
-        const evItems = items.map((it: any) => {
-          const stuVal = ansValue?.[it.key] ?? null;
-          const ok = stuVal !== null && stuVal === it.correct;
-          if (ok) okItems++;
-          return { key: it.key, correct: it.correct, student: stuVal };
-        });
-        resData = {
-          type: "tf",
-          correct: items.length > 0 && okItems === items.length,
-          okItems,
-          totalItems: items.length,
-          items: evItems,
-          explanation: targetQ.explanation || "",
-        };
-      } else if (targetQ.type === "sa") {
-        const cAns = String(targetQ.answer || "").trim().toLowerCase();
-        const gAns = String(ansValue || "").trim().toLowerCase();
-        let isCorrect = cAns === gAns;
-        if (!isCorrect) {
-          const nc = parseFloat(cAns.replace(",", "."));
-          const ng = parseFloat(gAns.replace(",", "."));
-          if (!isNaN(nc) && !isNaN(ng) && Math.abs(nc - ng) < 1e-6) {
-            isCorrect = true;
-          }
-        }
-        resData = {
-          type: "sa",
-          correct: isCorrect,
-          answer: targetQ.answer,
-          explanation: targetQ.explanation || "",
-        };
-      }
-      if (resData) {
-        setFeedback((prev) => ({ ...prev, [targetQ.id]: resData }));
-        if (resData.correct) {
-          try {
-            confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
-          } catch {}
-        }
-      }
-    }
-
     setChecking(false);
     setCheckingQId(null);
+    toast.error("Không thể kiểm tra đáp án cho câu hỏi này. Vui lòng thử lại!");
   };
 
   const checkAnswer = async () => {

@@ -64,7 +64,7 @@ export default function Exams() {
     }
 
     let q = supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by")
+      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,instant_feedback")
       .order("created_at", { ascending: false });
 
     if (user && isUuid(user.id)) {
