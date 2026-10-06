@@ -782,11 +782,12 @@ export default function Take() {
   };
 
   const setAns = (qId: string, v: any) => {
+    if (instantFb && feedback[qId]) return;
     setAnswers((prev) => ({ ...prev, [qId]: v }));
   };
 
   const setTF = (qq: any, key: string, val: boolean) => {
-    if (isQuiz && instantFb && feedback[qq.id]) return;
+    if (instantFb && feedback[qq?.id]) return;
     setAnswers((prev) => ({
       ...prev,
       [qq.id]: {
@@ -794,13 +795,6 @@ export default function Take() {
         [key]: val,
       },
     }));
-    if (!isQuiz && feedback[qq.id]) {
-      setFeedback((prev) => {
-        const next = { ...prev };
-        delete next[qq.id];
-        return next;
-      });
-    }
   };
 
   const toggleBookmark = (qId: string) => {
@@ -812,11 +806,13 @@ export default function Take() {
   };
 
   const isAnswered = (qq: any) => {
+    if (!qq) return false;
     const a = answers[qq.id];
     if (qq.type === "tf") {
       if (Array.isArray(a)) return a.length > 0;
       return !!a && typeof a === "object" && Object.values(a).some((v) => v === true || v === false);
     }
+    if (typeof a === "string") return a.trim() !== "";
     return a !== undefined && a !== "" && a !== null;
   };
 
@@ -1307,19 +1303,13 @@ export default function Take() {
   };
 
   const onMcSelect = (qId: string, v: string) => {
-    if (isQuiz && instantFb && feedback[qId]) return;
+    if (instantFb && feedback[qId]) return;
     setAns(qId, v);
     if (isQuiz && instantFb) {
       const targetQ = questions.find((item) => item.id === qId);
       if (targetQ) {
         checkQuestion(targetQ, v);
       }
-    } else if (!isQuiz && feedback[qId]) {
-      setFeedback((prev) => {
-        const next = { ...prev };
-        delete next[qId];
-        return next;
-      });
     }
   };
 
@@ -1328,8 +1318,8 @@ export default function Take() {
   const checkQuestion = async (targetQ: any, specificAnswer?: any) => {
     if (!targetQ || !instantFb || feedback[targetQ.id]) return;
     const ansValue = specificAnswer !== undefined ? specificAnswer : answers[targetQ.id];
-    if (ansValue === undefined || ansValue === null || ansValue === "") {
-      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi kiểm tra!");
+    if (ansValue === undefined || ansValue === null || ansValue === "" || (typeof ansValue === "string" && ansValue.trim() === "")) {
+      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
       return;
     }
 
@@ -2068,6 +2058,27 @@ export default function Take() {
     const isCurrentMarked = !!bookmarks[currentQ.id];
     const qFb = feedback[currentQ.id];
 
+    const handleStandardAnswer = (targetQ: any) => {
+      if (!targetQ) return;
+      if (checkingQId === targetQ.id) return;
+
+      // 1. Kiểm tra nếu học sinh chưa chọn/nhập câu trả lời
+      if (!isAnswered(targetQ)) {
+        toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
+        return;
+      }
+
+      // 2. Nếu giáo viên BẬT tính năng instant_feedback:
+      if (instantFb) {
+        if (feedback[targetQ.id]) return;
+        checkQuestion(targetQ);
+      } else {
+        // 3. Nếu giáo viên KHÔNG BẬT tính năng instant_feedback:
+        // Ghi nhận câu trả lời theo logic hiện tại, tuyệt đối KHÔNG hiển thị đáp án hoặc lời giải
+        toast.success(`Đã ghi nhận câu trả lời cho Câu ${questionIndex + 1}!`);
+      }
+    };
+
     return (
       <Card
         key={currentQ.id}
@@ -2128,12 +2139,17 @@ export default function Take() {
                   const optKey = opt.key || key;
                   const theme = OPTION_THEMES[optIndex % OPTION_THEMES.length];
                   const isChosen = answers[currentQ.id] === optKey;
-                  const isCorrectOpt = !!qFb && qFb.answer === optKey;
+                  const isCorrectOpt =
+                    !!qFb && String(qFb.answer || "").trim().toUpperCase() === String(optKey).trim().toUpperCase();
 
                   return (
                     <label
                       key={optKey}
-                      className={`group flex items-center gap-4 sm:gap-5 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] cursor-pointer transition-all duration-200 select-none shadow-sm ${
+                      className={`group flex items-center gap-4 sm:gap-5 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] select-none shadow-sm transition-all duration-200 ${
+                        qFb
+                          ? "cursor-not-allowed pointer-events-none"
+                          : "cursor-pointer"
+                      } ${
                         qFb
                           ? isCorrectOpt
                             ? "border-emerald-500 bg-emerald-500/15 ring-4 ring-emerald-500/30"
@@ -2242,6 +2258,8 @@ export default function Take() {
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, true)}
                           className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
+                            qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
+                          } ${
                             val === true
                               ? "border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25 scale-105"
                               : "border-border bg-card hover:bg-muted text-foreground"
@@ -2254,6 +2272,8 @@ export default function Take() {
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, false)}
                           className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
+                            qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
+                          } ${
                             val === false
                               ? "border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-105"
                               : "border-border bg-card hover:bg-muted text-foreground"
@@ -2278,9 +2298,15 @@ export default function Take() {
               <Input
                 value={answers[currentQ.id] || ""}
                 onChange={(e) => setAns(currentQ.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleStandardAnswer(currentQ);
+                  }
+                }}
                 disabled={!!qFb}
-                className="h-14 sm:h-18 text-xl sm:text-3xl font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground"
-                placeholder="Nhập câu trả lời hoặc số liệu..."
+                className="h-14 sm:h-18 text-xl sm:text-3xl font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                placeholder={instantFb ? "Nhập câu trả lời hoặc số liệu..." : "Nhập câu trả lời hoặc số liệu..."}
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
                 <span>
@@ -2292,38 +2318,180 @@ export default function Take() {
                 </span>
                 <span>Chấm điểm tự động</span>
               </div>
+              {qFb && (
+                <div className="mt-4 text-base sm:text-lg font-bold rounded-2xl bg-muted/60 p-4 border">
+                  {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
+                  <b className="text-emerald-600">
+                    <RichText text={String(qFb.answer ?? "")} />
+                  </b>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Instant feedback nếu có */}
-          {instantFb && !qFb && (
-            <div className="mt-6 pt-4 border-t flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-2xl border border-dashed border-primary/30">
-              <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-1.5 font-medium">
+          {/* KHU VỰC NÚT "TRẢ LỜI" VÀ PHẢN HỒI (CHẾ ĐỘ TIÊU CHUẨN) */}
+          <div className="mt-6 pt-5 border-t border-border">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-3xl border border-dashed border-primary/30">
+              <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-2 font-medium">
                 <Sparkles className="size-4 text-primary shrink-0" />
-                <span>Bấm Kiểm tra để xem kết quả đúng/sai câu này</span>
+                <span>
+                  {qFb
+                    ? "Câu hỏi đã được trả lời."
+                    : instantFb
+                    ? isAnswered(currentQ)
+                      ? "Bấm \"Trả lời\" để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết."
+                      : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\"."
+                    : isAnswered(currentQ)
+                    ? "Đã chọn đáp án. Bấm \"Trả lời\" để ghi nhận câu này."
+                    : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\"."}
+                </span>
               </div>
-              <Button
-                type="button"
-                onClick={() => checkQuestion(currentQ)}
-                disabled={!isAnswered(currentQ) || checkingQId === currentQ.id}
-                className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white"
-              >
-                {checkingQId === currentQ.id ? "Đang kiểm tra..." : "KIỂM TRA CÂU NÀY"}
-              </Button>
-            </div>
-          )}
 
-          {qFb && (
-            <div
-              className={`mt-6 rounded-2xl border-2 p-5 ${
-                qFb.correct ? "border-emerald-500 bg-emerald-500/10" : "border-rose-500 bg-rose-500/10"
-              }`}
-            >
-              <div className={`font-black text-xl ${qFb.correct ? "text-emerald-600" : "text-rose-600"}`}>
-                {qFb.correct ? "✓ Chính xác!" : "✗ Chưa chính xác!"}
-              </div>
+              {qFb ? (
+                <Button
+                  type="button"
+                  disabled
+                  className="rounded-2xl font-black bg-muted text-muted-foreground border-2 border-border cursor-not-allowed flex items-center gap-2 px-6 py-3 h-12 text-sm sm:text-base opacity-95 select-none"
+                >
+                  <CheckCircle2 className="size-5 text-emerald-600" />
+                  <span>ĐÃ TRẢ LỜI</span>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => handleStandardAnswer(currentQ)}
+                  disabled={checkingQId === currentQ.id}
+                  className="rounded-2xl font-black bg-gradient-to-r from-primary to-sky-600 hover:from-primary/95 hover:to-sky-600/95 text-white shadow-md hover:shadow-lg transition-all flex items-center gap-2 px-6 py-3 h-12 text-sm sm:text-base active:scale-95"
+                >
+                  {checkingQId === currentQ.id ? (
+                    <>
+                      <Loader2 className="size-5 animate-spin" />
+                      <span>Đang kiểm tra...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="size-5" />
+                      <span>TRẢ LỜI</span>
+                    </>
+                  )}
+                </Button>
+              )}
             </div>
-          )}
+
+            {/* HỘP HIỂN THỊ ĐÁP ÁN ĐÚNG & LỜI GIẢI (CHỈ KHI instantFb VÀ ĐÃ BẤM TRẢ LỜI -> CÓ qFb) */}
+            {instantFb && qFb && (
+              <div
+                className={`mt-5 rounded-3xl border-2 p-5 sm:p-7 shadow-sm transition-all animate-fade-in ${
+                  qFb.correct
+                    ? "border-emerald-500/80 bg-emerald-500/10"
+                    : "border-rose-500/80 bg-rose-500/10"
+                }`}
+              >
+                {/* 1. Trạng thái Đúng / Sai */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div
+                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-black text-base sm:text-xl shadow-xs ${
+                      qFb.correct
+                        ? "bg-emerald-500 text-white"
+                        : "bg-rose-500 text-white"
+                    }`}
+                  >
+                    {qFb.correct ? (
+                      <>
+                        <CheckCircle2 className="size-5 sm:size-6" />
+                        <span>✓ Đúng</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xl font-black leading-none">✗</span>
+                        <span>Chưa chính xác</span>
+                      </>
+                    )}
+                  </div>
+
+                  {qFb.type === "tf" && (
+                    <span className="text-xs sm:text-sm font-bold text-foreground bg-card px-3.5 py-1.5 rounded-xl border">
+                      Đúng {qFb.okItems}/{qFb.totalItems} ý
+                    </span>
+                  )}
+                </div>
+
+                {/* 2. Hiển thị Đáp án đúng */}
+                {qFb.type === "mc" && (
+                  <div className="mt-4 p-4 rounded-2xl bg-card border text-sm sm:text-base">
+                    <span className="font-bold text-muted-foreground">Đáp án đúng: </span>
+                    <span className="font-black text-emerald-600">
+                      {(() => {
+                        const order = optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || [];
+                        const pos = order.indexOf(qFb.answer);
+                        const letter = String.fromCharCode(65 + (pos < 0 ? 0 : pos));
+                        const optObj = currentQ.options?.find(
+                          (o: any) => String(o.key).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
+                        );
+                        return (
+                          <>
+                            <b>{letter}.</b> {optObj ? <RichText text={optObj.text} /> : qFb.answer}
+                          </>
+                        );
+                      })()}
+                    </span>
+                  </div>
+                )}
+
+                {qFb.type === "sa" && (
+                  <div className="mt-4 p-4 rounded-2xl bg-card border text-sm sm:text-base">
+                    <span className="font-bold text-muted-foreground">Đáp án đúng: </span>
+                    <span className="font-black text-emerald-600">
+                      <RichText text={String(qFb.answer ?? "")} />
+                    </span>
+                  </div>
+                )}
+
+                {qFb.type === "tf" && qFb.items && (
+                  <div className="mt-4 p-4 rounded-2xl bg-card border space-y-2">
+                    <div className="font-bold text-xs sm:text-sm text-muted-foreground mb-1">
+                      Đáp án chi tiết từng ý:
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {qFb.items.map((it: any, iIdx: number) => {
+                        const lbl = String.fromCharCode(97 + iIdx);
+                        const isItCorrect = it.student !== null && it.student === it.correct;
+                        return (
+                          <div
+                            key={it.key || iIdx}
+                            className={`p-2.5 rounded-xl border text-xs sm:text-sm flex items-center justify-between ${
+                              isItCorrect
+                                ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-800 dark:text-emerald-300"
+                                : "bg-rose-500/10 border-rose-500/40 text-rose-800 dark:text-rose-300"
+                            }`}
+                          >
+                            <span className="font-black">Ý {lbl})</span>
+                            <span className="font-bold">
+                              Đáp án: <b>{it.correct ? "Đúng" : "Sai"}</b>
+                            </span>
+                            <span>{isItCorrect ? "✅ Chính xác" : "❌ Chưa đúng"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Hiển thị phần "Lời giải" / "Giải thích" nếu đề có nội dung giải thích */}
+                {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
+                  <div className="mt-4 rounded-2xl bg-card p-4 sm:p-5 border-2 border-primary/20 shadow-xs">
+                    <div className="font-black text-primary text-sm sm:text-base mb-1.5 flex items-center gap-2">
+                      <Sparkles className="size-4.5" />
+                      <span>Lời giải chi tiết:</span>
+                    </div>
+                    <div className="whitespace-pre-wrap leading-relaxed font-medium text-foreground text-xs sm:text-sm">
+                      <RichText text={qFb.explanation} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* NÚT ĐIỀU HƯỚNG CÂU TRƯỚC / CÂU SAU (YÊU CẦU 3) */}
