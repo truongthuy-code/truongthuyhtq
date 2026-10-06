@@ -1304,12 +1304,6 @@ export default function Take() {
   const onMcSelect = (qId: string, v: string) => {
     if (instantFb && feedback[qId]) return;
     setAns(qId, v);
-    if (isQuiz && instantFb) {
-      const targetQ = questions.find((item) => item.id === qId);
-      if (targetQ) {
-        checkQuestion(targetQ, v);
-      }
-    }
   };
 
   const fb = q ? feedback[q.id] : null;
@@ -1318,7 +1312,7 @@ export default function Take() {
     if (!targetQ || !instantFb || feedback[targetQ.id]) return;
     const ansValue = specificAnswer !== undefined ? specificAnswer : answers[targetQ.id];
     if (ansValue === undefined || ansValue === null || ansValue === "" || (typeof ansValue === "string" && ansValue.trim() === "")) {
-      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
+      toast.warning("Vui lòng chọn đáp án trước khi trả lời.");
       return;
     }
 
@@ -1955,21 +1949,27 @@ export default function Take() {
             </div>
           )}
 
-          {/* Nút kiểm tra phản hồi tức thì nếu chưa có kết quả (áp dụng cho cả chế độ tiêu chuẩn và từng câu) */}
+          {/* Nút Trả lời trong Chế độ từng câu hỏi */}
           {instantFb && !qFb && (
             <div className="mt-6 pt-4 border-t flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-2xl border border-dashed border-primary/30">
               <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-1.5 font-medium">
                 <Sparkles className="size-4 text-primary shrink-0" />
                 <span>
                   {isAnswered(currentQ)
-                    ? "Bấm Kiểm tra để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết"
-                    : "Chọn hoặc nhập câu trả lời để kiểm tra đáp án & lời giải"}
+                    ? "Bấm \"Trả lời\" để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết"
+                    : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\""}
                 </span>
               </div>
               <Button
                 type="button"
-                onClick={() => checkQuestion(currentQ)}
-                disabled={!isAnswered(currentQ) || checkingQId === currentQ.id}
+                onClick={() => {
+                  if (!isAnswered(currentQ)) {
+                    toast.warning("Vui lòng chọn đáp án trước khi trả lời.");
+                    return;
+                  }
+                  checkQuestion(currentQ);
+                }}
+                disabled={checkingQId === currentQ.id}
                 className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white hover:opacity-95 shadow-md flex items-center gap-2 px-5 py-2.5 h-11"
               >
                 {checkingQId === currentQ.id ? (
@@ -1980,7 +1980,7 @@ export default function Take() {
                 ) : (
                   <>
                     <CheckCircle2 className="size-4" />
-                    <span>KIỂM TRA CÂU NÀY</span>
+                    <span>TRẢ LỜI</span>
                   </>
                 )}
               </Button>
@@ -2766,13 +2766,19 @@ export default function Take() {
             <div>
               {instantFb && !fb ? (
                 <Button
-                  onClick={checkAnswer}
+                  onClick={() => {
+                    if (!isAnswered(q)) {
+                      toast.warning("Vui lòng chọn đáp án trước khi trả lời.");
+                      return;
+                    }
+                    checkAnswer();
+                  }}
                   size="lg"
-                  disabled={!isAnswered(q) || checking}
+                  disabled={checking}
                   className="bg-gradient-to-r from-primary to-sky-600 text-white font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-primary/25 hover:scale-105 active:scale-95 transition-all"
                 >
                   {checking && <Loader2 className="size-5 mr-2 animate-spin" />}
-                  <span>KIỂM TRA</span>
+                  <span>TRẢ LỜI</span>
                 </Button>
               ) : idx >= questions.length - 1 ? (
                 <Button

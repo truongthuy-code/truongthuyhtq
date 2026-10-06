@@ -6,6 +6,10 @@ import {
   setCurrentAuthUser,
   logoutCurrentUser,
   getTeacherById,
+  getTeacherByUsernameOrEmail,
+  getAdminById,
+  getAdminByUsernameOrEmail,
+  saveAdminAccount,
   upsertTeacher,
   AuthSessionUser,
   TeacherUser,
@@ -341,7 +345,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           school_name: nextAuth.school,
           subject_name: nextAuth.subject,
           avatar: nextAuth.avatar,
-        }).eq("id", session.user.id);
+        } as any).eq("id", session.user.id);
       }
     } catch {}
 
