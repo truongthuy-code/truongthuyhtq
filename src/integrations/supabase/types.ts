@@ -199,39 +199,51 @@ export type Database = {
           email: string | null
           full_name: string | null
           id: string
+          must_change_password: boolean
           phone: string | null
           profile_completed: boolean
+          role: string | null
           school_id: string | null
           school_name: string | null
+          status: string
           subject_id: string | null
           subject_name: string | null
           updated_at: string
+          username: string | null
         }
         Insert: {
           created_at?: string
           email?: string | null
           full_name?: string | null
           id: string
+          must_change_password?: boolean
           phone?: string | null
           profile_completed?: boolean
+          role?: string | null
           school_id?: string | null
           school_name?: string | null
+          status?: string
           subject_id?: string | null
           subject_name?: string | null
           updated_at?: string
+          username?: string | null
         }
         Update: {
           created_at?: string
           email?: string | null
           full_name?: string | null
           id?: string
+          must_change_password?: boolean
           phone?: string | null
           profile_completed?: boolean
+          role?: string | null
           school_id?: string | null
           school_name?: string | null
+          status?: string
           subject_id?: string | null
           subject_name?: string | null
           updated_at?: string
+          username?: string | null
         }
         Relationships: [
           {

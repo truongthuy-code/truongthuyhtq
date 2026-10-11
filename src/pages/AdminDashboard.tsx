@@ -853,8 +853,8 @@ export default function AdminDashboard() {
               <BarChart3 className="size-3.5 mr-1.5" /> Tổng quan
             </TabsTrigger>
 
-            {/* ONLY VISIBLE TO SUPER ADMIN */}
-            {isSuperAdmin && (
+            {/* QUẢN LÝ QUẢN TRỊ VIÊN */}
+            {isAdmin && (
               <TabsTrigger
                 value="admins"
                 className="rounded-lg text-xs py-2 px-3 font-semibold data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-600 data-[state=active]:to-purple-600 data-[state=active]:text-white"
@@ -1004,9 +1004,9 @@ export default function AdminDashboard() {
         </TabsContent>
 
         {/* ============================================================ */}
-        {/* TAB 2: QUẢN LÝ QUẢN TRỊ VIÊN (SUPER ADMIN ONLY) */}
+        {/* TAB 2: QUẢN LÝ QUẢN TRỊ VIÊN */}
         {/* ============================================================ */}
-        {isSuperAdmin && (
+        {isAdmin && (
           <TabsContent value="admins" className="space-y-4">
             <Card className="p-4 md:p-6 space-y-4">
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b">
@@ -1015,7 +1015,7 @@ export default function AdminDashboard() {
                     <Crown className="size-5 text-amber-500" /> Danh sách Quản trị viên Hệ thống
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Super Admin gốc có quyền tạo, quản lý và phân quyền cho các tài khoản Quản trị viên (Admin).
+                    Quản lý tài khoản quản trị hệ thống, cấp quyền và bảo mật tài khoản.
                   </p>
                 </div>
                 <Button

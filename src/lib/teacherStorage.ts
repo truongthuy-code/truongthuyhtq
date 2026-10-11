@@ -80,8 +80,8 @@ export function normalizeUsername(u: string): string {
 export const ROOT_SUPER_ADMIN_ID = "b9e61e93-caa6-4e72-a534-55072d943ad2";
 export const LEGACY_ROOT_SUPER_ADMIN_ID = "00000000-0000-4000-8000-000000000000";
 export const LEGACY_ROOT_SUPER_ADMIN_STRING_ID = "super-admin-system-root-001";
-export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Thuy@123456");
-export const LEGACY_ROOT_ADMIN_PASSWORD_HASH = hashPassword("Admin@123456");
+export const DEFAULT_ROOT_ADMIN_PASSWORD_HASH = hashPassword("123456");
+export const LEGACY_ROOT_ADMIN_PASSWORD_HASH = hashPassword("123456");
 
 export const DEFAULT_ROOT_ADMIN: AdminUser = {
   id: ROOT_SUPER_ADMIN_ID,
@@ -90,7 +90,7 @@ export const DEFAULT_ROOT_ADMIN: AdminUser = {
   email: "admin@admin.com",
   role: "super_admin",
   passwordHash: DEFAULT_ROOT_ADMIN_PASSWORD_HASH,
-  mustChangePassword: false,
+  mustChangePassword: true,
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
@@ -135,6 +135,7 @@ export function getAllAdmins(): AdminUser[] {
 
         if (rootIdx >= 0) {
           const currentRoot = parsed[rootIdx];
+          const hasDefaultPassword = !currentRoot.passwordHash || currentRoot.passwordHash === DEFAULT_ROOT_ADMIN_PASSWORD_HASH;
           // Protect root admin integrity while PRESERVING updated password & mustChangePassword flag!
           parsed[rootIdx] = {
             ...currentRoot,
@@ -142,9 +143,9 @@ export function getAllAdmins(): AdminUser[] {
             username: "admin",
             name: currentRoot.name || "Quản trị viên hệ thống",
             email: currentRoot.email || "admin@admin.com",
-            role: "super_admin", // Strictly super_admin
+            role: "super_admin",
             status: "active", // Never locked
-            mustChangePassword: currentRoot.mustChangePassword ?? false,
+            mustChangePassword: hasDefaultPassword ? (currentRoot.mustChangePassword ?? true) : !!currentRoot.mustChangePassword,
             passwordHash: currentRoot.passwordHash || DEFAULT_ROOT_ADMIN.passwordHash,
           };
         } else {

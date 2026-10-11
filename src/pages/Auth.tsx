@@ -117,25 +117,22 @@ export default function AuthPage() {
             return;
           }
 
-          const isSuper = matchedAdmin.role === "super_admin" || matchedAdmin.id === ROOT_SUPER_ADMIN_ID || matchedAdmin.email?.toLowerCase() === "admin@admin.com";
-          const pwdMatch =
-            matchedAdmin.passwordHash === inputHash ||
-            (isSuper && (password === "Thuy@123456" || password === "Admin@123456" || password === "123456" || password === "admin" || password === "Admin@123"));
+          const pwdMatch = matchedAdmin.passwordHash === inputHash;
 
           if (pwdMatch) {
             // Ensure Supabase Auth session exists for PostgreSQL RLS & table permissions
             const adminEmail = matchedAdmin.email?.trim() || `${matchedAdmin.username.toLowerCase()}@admin.local`;
             try {
               let { data: signData } = await supabase.auth.signInWithPassword({
-                email: isSuper ? "admin@admin.com" : adminEmail,
-                password: isSuper ? "Admin@123456" : password,
+                email: adminEmail,
+                password: password,
               });
               if (!signData?.user) {
                 await supabase.auth.signUp({
                   email: adminEmail,
-                  password: isSuper ? "Admin@123456" : password,
+                  password: password,
                   options: {
-                    data: { role: matchedAdmin.role, full_name: matchedAdmin.name },
+                    data: { role: matchedAdmin.role, full_name: matchedAdmin.name, username: matchedAdmin.username },
                   },
                 });
               }
@@ -219,25 +216,21 @@ export default function AuthPage() {
           const isSuper =
             matchedAdmin.role === "super_admin" ||
             matchedAdmin.id === ROOT_SUPER_ADMIN_ID ||
-            matchedAdmin.email?.toLowerCase() === "admin@admin.com" ||
-            normInput === "admin" ||
-            normInput === "admin@admin.com";
-          const pwdMatch =
-            matchedAdmin.passwordHash === inputHash ||
-            (isSuper && (password === "Thuy@123456" || password === "Admin@123456" || password === "123456" || password === "admin" || password === "Admin@123"));
+            matchedAdmin.email?.toLowerCase() === "admin@admin.com";
+          const pwdMatch = matchedAdmin.passwordHash === inputHash;
 
           if (pwdMatch) {
             const adminEmail = matchedAdmin.email?.trim() || `${matchedAdmin.username.toLowerCase()}@admin.local`;
             try {
               let { data: signData } = await supabase.auth.signInWithPassword({
-                email: isSuper ? "admin@admin.com" : adminEmail,
-                password: isSuper ? "Admin@123456" : password,
+                email: adminEmail,
+                password: password,
               });
               if (!signData?.user) {
                 await supabase.auth.signUp({
                   email: adminEmail,
-                  password: isSuper ? "Admin@123456" : password,
-                  options: { data: { role: matchedAdmin.role, full_name: matchedAdmin.name } },
+                  password: password,
+                  options: { data: { role: matchedAdmin.role, full_name: matchedAdmin.name, username: matchedAdmin.username } },
                 });
               }
             } catch (err) {

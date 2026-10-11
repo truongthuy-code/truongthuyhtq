@@ -231,7 +231,7 @@ export default function Take() {
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
   const showSingleMode = isQuiz || standardViewMode === "single";
-  const instantFb = exam?.instant_feedback !== false;
+  const instantFb = !!exam?.instant_feedback;
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
 

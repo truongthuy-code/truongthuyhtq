@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Lock,
 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import {
   hashPassword,
@@ -43,7 +44,11 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
   const [busy, setBusy] = useState(false);
 
   // Password rules validation
-  const isDifferentFromDefault = newPassword.length > 0 && newPassword !== "Admin@123456" && newPassword !== "Admin@123";
+  const isDifferentFromDefault =
+    newPassword.length > 0 &&
+    newPassword !== "123456" &&
+    newPassword !== "Admin@123456" &&
+    newPassword !== "Admin@123";
   const hasMinLength = newPassword.length >= 6;
   const hasUpperCase = /[A-Z]/.test(newPassword);
   const hasLowerCase = /[a-z]/.test(newPassword);
@@ -68,7 +73,7 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
     }
 
     if (!isDifferentFromDefault) {
-      toast.error("Mật khẩu mới không được trùng với mật khẩu mặc định (Admin@123456)!");
+      toast.error("Mật khẩu mới không được trùng với mật khẩu mặc định (123456)!");
       return;
     }
 
@@ -97,12 +102,12 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
       // Check current password hash
       const currentHash = hashPassword(currentPassword);
       if (admin.passwordHash !== currentHash) {
-        toast.error("Mật khẩu hiện tại không chính xác. Mật khẩu khởi tạo là Admin@123456");
+        toast.error("Mật khẩu hiện tại không chính xác. Mật khẩu khởi tạo ban đầu là 123456");
         setBusy(false);
         return;
       }
 
-      // Update password and clear mustChangePassword
+      // 1. Update password and clear mustChangePassword in local storage registry
       const res = changeAdminPassword(admin.id, newPassword);
       if (!res.ok) {
         toast.error(res.message || "Không thể cập nhật mật khẩu");
@@ -114,6 +119,26 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
       admin.passwordHash = hashPassword(newPassword);
       admin.mustChangePassword = false;
       saveAdminAccount(admin);
+
+      // 2. Synchronize password update with Supabase Auth
+      try {
+        await supabase.auth.updateUser({ password: newPassword });
+      } catch (sbAuthErr) {
+        console.warn("Supabase auth updateUser notice:", sbAuthErr);
+      }
+
+      // 3. Synchronize must_change_password flag with Supabase DB profiles
+      try {
+        await supabase
+          .from("profiles")
+          .update({
+            must_change_password: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", admin.id);
+      } catch (sbDbErr) {
+        console.warn("Supabase profiles update notice:", sbDbErr);
+      }
 
       await refreshProfile();
 

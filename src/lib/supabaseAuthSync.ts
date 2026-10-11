@@ -51,9 +51,18 @@ export async function ensureSupabaseSession(user?: AuthSessionUser | null): Prom
         let signData = (
           await supabase.auth.signInWithPassword({
             email: "admin@admin.com",
-            password: "Admin@123456",
+            password: "123456",
           })
         ).data;
+
+        if (!signData?.user) {
+          signData = (
+            await supabase.auth.signInWithPassword({
+              email: "admin@admin.com",
+              password: "Admin@123456",
+            })
+          ).data;
+        }
 
         if (!signData?.user) {
           signData = (
