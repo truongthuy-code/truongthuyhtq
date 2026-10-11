@@ -79,6 +79,7 @@ export default function Teacher() {
   const [displayMode, setDisplayMode] = useState<"standard" | "quizizz" | "team">("standard");
   const [teamConfig, setTeamConfig] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG);
   const [instantFeedback, setInstantFeedback] = useState(false);
+  const [allowBack, setAllowBack] = useState(true);
   const [lockMode, setLockMode] = useState<LockMode>(DEFAULT_LOCK);
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
   const [saving, setSaving] = useState(false);
@@ -257,8 +258,14 @@ export default function Teacher() {
           allow_review: allowReview,
           display_mode: displayMode,
           instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-          team_config: finalTeamConfig as any,
-          lock_mode: lockMode as any,
+          team_config: {
+            ...(finalTeamConfig || {}),
+            allow_back: displayMode === "quizizz" ? allowBack : true,
+          } as any,
+          lock_mode: {
+            ...(lockMode || {}),
+            allow_back: displayMode === "quizizz" ? allowBack : true,
+          } as any,
           open_at: schedule.open_at,
           close_at: schedule.close_at,
           auto_submit_on_close: schedule.auto_submit_on_close,
@@ -333,6 +340,8 @@ export default function Teacher() {
       subject_name: profile?.subject_name || "",
       manual_closed: false,
       display_mode: displayMode,
+      allow_back: displayMode === "quizizz" ? allowBack : true,
+      instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,
@@ -512,8 +521,38 @@ export default function Teacher() {
               </Select>
               <div className="text-xs text-muted-foreground">
                 Tiêu chuẩn: học sinh thấy toàn bộ câu, được phép quay lại sửa.
-                Quizizz: mỗi lần 1 câu, không quay lại, tự lưu tiến độ.
+                Quizizz: mỗi lần 1 câu, tự lưu tiến độ.
               </div>
+
+              {displayMode === "quizizz" && (
+                <div className="flex items-center justify-between rounded-xl border-2 p-3.5 mt-3 bg-card shadow-xs">
+                  <div className="pr-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Label htmlFor="allow-back" className="text-sm font-bold text-foreground cursor-pointer">
+                        🔄 Cho phép học sinh quay lại câu hỏi trước
+                      </Label>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-black tracking-wide border ${
+                        allowBack
+                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
+                          : "bg-muted text-muted-foreground border-border"
+                      }`}>
+                        {allowBack ? "BẬT" : "TẮT"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      {allowBack
+                        ? "Học sinh có thể bấm quay lại câu trước để xem lại hoặc chỉnh sửa câu trả lời đã chọn."
+                        : "Học sinh chỉ được làm bài một chiều từ đầu đến cuối, không thể quay lại câu hỏi trước."}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-bold text-muted-foreground hidden sm:inline">
+                      {allowBack ? "BẬT" : "TẮT"}
+                    </span>
+                    <Switch id="allow-back" checked={allowBack} onCheckedChange={setAllowBack} />
+                  </div>
+                </div>
+              )}
 
               {displayMode === "team" && (
               <div className="mt-3">

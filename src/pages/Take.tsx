@@ -230,6 +230,10 @@ export default function Take() {
   const submittedRef = useRef(false);
   const startedAtRef = useRef<string | null>(null);
   const isQuiz = exam?.display_mode === "quizizz";
+  const allowQuizBack =
+    (exam as any)?.allow_back !== false &&
+    (exam as any)?.lock_mode?.allow_back !== false &&
+    (exam as any)?.team_config?.allow_back !== false;
   const showSingleMode = isQuiz || standardViewMode === "single";
   const instantFb = !!exam?.instant_feedback;
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
@@ -1138,11 +1142,26 @@ export default function Take() {
           </div>
 
           {exam.display_mode === "quizizz" && (
-            <div className="mt-4 text-xs sm:text-sm rounded-2xl bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/30 p-3.5 flex items-start gap-2.5">
-              <Lock className="size-5 shrink-0 text-amber-600 mt-0.5" />
-              <div>
-                <b>Lưu ý quan trọng:</b> Bài thi làm theo <b>chế độ từng câu hỏi một chiều</b>. Khi đã bấm chuyển sang câu tiếp theo, câu hỏi trước sẽ <b>tự động khóa và không thể quay lại</b>. Hãy kiểm tra kỹ câu trả lời trước khi chuyển câu!
-              </div>
+            <div className={`mt-4 text-xs sm:text-sm rounded-2xl border p-3.5 flex items-start gap-2.5 ${
+              allowQuizBack
+                ? "bg-sky-500/10 text-sky-800 dark:text-sky-300 border-sky-500/30"
+                : "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/30"
+            }`}>
+              {allowQuizBack ? (
+                <>
+                  <Sparkles className="size-5 shrink-0 text-sky-600 mt-0.5" />
+                  <div>
+                    <b>Chế độ Từng câu hỏi:</b> Mỗi lần hiển thị 1 câu. Bạn có thể sử dụng nút <b>“CÂU TRƯỚC”</b> hoặc mở <b>Danh sách câu</b> để quay lại xem và sửa câu trả lời trước khi nộp bài.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Lock className="size-5 shrink-0 text-amber-600 mt-0.5" />
+                  <div>
+                    <b>Lưu ý quan trọng:</b> Bài thi làm theo <b>chế độ từng câu hỏi một chiều</b>. Khi đã bấm chuyển sang câu tiếp theo, câu hỏi trước sẽ <b>tự động khóa và không thể quay lại</b>. Hãy kiểm tra kỹ câu trả lời trước khi chuyển câu!
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1294,7 +1313,7 @@ export default function Take() {
   };
 
   const goPrev = () => {
-    if (isQuiz) {
+    if (isQuiz && !allowQuizBack) {
       toast.warning("Chế độ một chiều: Không thể quay lại câu hỏi trước!");
       return;
     }
@@ -1524,7 +1543,7 @@ export default function Take() {
         </div>
 
         {/* Legend */}
-        {showSingleMode ? (
+        {isQuiz && !allowQuizBack ? (
           <div className="space-y-2.5 mb-4">
             <div className="flex flex-wrap gap-3 text-xs text-muted-foreground bg-muted/40 p-3 rounded-2xl">
               <div className="flex items-center gap-1.5 font-medium">
@@ -1571,14 +1590,14 @@ export default function Take() {
             const isPast = i < idx;
             const isFuture = i > idx;
 
-            if (showSingleMode) {
+            if (isQuiz && !allowQuizBack) {
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => {
                     if (isPast) {
-                      toast.warning(`Câu ${i + 1} đã hoàn thành và được khóa, không thể quay lại!`);
+                      toast.warning(`Chế độ một chiều: Câu ${i + 1} đã hoàn thành và được khóa, không thể quay lại!`);
                     } else if (isFuture) {
                       toast.info(`Vui lòng hoàn thành lần lượt từ câu ${idx + 1}.`);
                     } else {
@@ -1722,8 +1741,8 @@ export default function Take() {
               </div>
             </div>
 
-            {/* Nút đánh dấu xem lại (chỉ hiển thị ở chế độ xem toàn bộ, ở chế độ từng câu hiển thị huy hiệu Khóa khi chuyển câu) */}
-            {isSingleView ? (
+            {/* Nút đánh dấu xem lại */}
+            {isSingleView && !allowQuizBack ? (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25">
                 <Lock className="size-3.5 text-amber-600 dark:text-amber-400" />
                 <span>Khóa khi chuyển câu</span>
@@ -1949,43 +1968,6 @@ export default function Take() {
             </div>
           )}
 
-          {/* Nút Trả lời trong Chế độ từng câu hỏi */}
-          {instantFb && !qFb && (
-            <div className="mt-6 pt-4 border-t flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-2xl border border-dashed border-primary/30">
-              <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-1.5 font-medium">
-                <Sparkles className="size-4 text-primary shrink-0" />
-                <span>
-                  {isAnswered(currentQ)
-                    ? "Bấm \"Trả lời\" để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết"
-                    : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\""}
-                </span>
-              </div>
-              <Button
-                type="button"
-                onClick={() => {
-                  if (!isAnswered(currentQ)) {
-                    toast.warning("Vui lòng chọn đáp án trước khi trả lời.");
-                    return;
-                  }
-                  checkQuestion(currentQ);
-                }}
-                disabled={checkingQId === currentQ.id}
-                className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white hover:opacity-95 shadow-md flex items-center gap-2 px-5 py-2.5 h-11"
-              >
-                {checkingQId === currentQ.id ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    <span>Đang kiểm tra...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="size-4" />
-                    <span>TRẢ LỜI</span>
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
 
           {/* Hộp phản hồi tức thì (Instant Feedback) */}
           {qFb && (
@@ -2743,11 +2725,25 @@ export default function Take() {
 
           {/* THANH ĐIỀU HƯỚNG CHẾ ĐỘ QUIZIZZ */}
           <div className="mt-4 sm:mt-6 w-full flex items-center justify-between gap-3 bg-card/90 backdrop-blur p-3 sm:p-4 rounded-3xl border shadow-lg">
-            <div className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 font-bold text-xs sm:text-sm shadow-xs select-none">
-              <Lock className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <span className="hidden md:inline">Chế độ một chiều:</span>
-              <span>Không quay lại câu trước</span>
-            </div>
+            {allowQuizBack ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                onClick={goPrev}
+                disabled={idx === 0}
+                className="rounded-2xl font-bold text-xs sm:text-sm px-4 sm:px-6 h-12 sm:h-14 border-2 flex items-center gap-2 hover:bg-muted active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="size-5" />
+                <span>CÂU TRƯỚC</span>
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 font-bold text-xs sm:text-sm shadow-xs select-none">
+                <Lock className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="hidden md:inline">Chế độ một chiều:</span>
+                <span>Không quay lại câu trước</span>
+              </div>
+            )}
 
             <div className="flex items-center gap-2">
               <Button

@@ -198,7 +198,7 @@ export default function Exams() {
     toast.success("Đã reset kết quả"); load();
   };
   const duplicate = async (exam: any, copyMusic = true) => {
-    const { id, created_at, ...rest } = exam as any;
+    const { id, created_at, allow_back, ...rest } = exam as any;
     let finalTeamConfig = rest.team_config;
 
     // Nếu không muốn sao chép nhạc nền, gỡ bỏ nhạc nền khỏi bản sao

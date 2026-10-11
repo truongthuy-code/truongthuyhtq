@@ -21,6 +21,7 @@ export interface SystemExam {
   original_file_path?: string | null;
   scoring?: any;
   allow_review?: boolean;
+  allow_back?: boolean;
   open_at?: string | null;
   close_at?: string | null;
   team_config?: any;
@@ -131,6 +132,7 @@ export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam
 
         examMap.set(e.id, {
           ...e,
+          allow_back: e.allow_back !== false && e.lock_mode?.allow_back !== false && e.team_config?.allow_back !== false,
           teacher_name: tName || "Giáo viên",
           school_name: sName || "",
           subject_name: subName || "Chưa phân loại",
