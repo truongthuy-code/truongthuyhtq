@@ -22,16 +22,24 @@ export function shuffleArray<T>(arr: T[]): T[] {
 }
 
 export type ShuffleOptions = {
-  shuffleQuestions: boolean;
-  shuffleAnswers: boolean;
-  keepSaOrder: boolean;
+  shuffleQuestions?: boolean;
+  shuffleAnswers?: boolean;
+  keepSaOrder?: boolean;
+  // Per-part granular controls:
+  shuffle_q_p1?: boolean;
+  shuffle_q_p2?: boolean;
+  shuffle_q_p3?: boolean;
+  shuffle_o_p1?: boolean;
+  shuffle_o_p2?: boolean;
+  shuffle_o_p3?: boolean;
 };
 
 const MC_KEYS: ("A" | "B" | "C" | "D")[] = ["A", "B", "C", "D"];
 const TF_KEYS: ("a" | "b" | "c" | "d")[] = ["a", "b", "c", "d"];
 
 export function shuffleMC(q: MCQuestion, opts: ShuffleOptions): MCQuestion {
-  if (!opts.shuffleAnswers) return { ...q };
+  const shouldShuffleOptions = opts.shuffle_o_p1 ?? opts.shuffleAnswers ?? false;
+  if (!shouldShuffleOptions) return { ...q };
   const shuffled = shuffleArray(q.options);
   const oldCorrect = q.options.find((o) => o.key === q.answer);
   const newOptions = shuffled.map((o, i) => ({ key: MC_KEYS[i], text: o.text }));
@@ -40,7 +48,8 @@ export function shuffleMC(q: MCQuestion, opts: ShuffleOptions): MCQuestion {
 }
 
 export function shuffleTF(q: TFQuestion, opts: ShuffleOptions): TFQuestion {
-  if (!opts.shuffleAnswers) return { ...q };
+  const shouldShuffleItems = opts.shuffle_o_p2 ?? opts.shuffleAnswers ?? false;
+  if (!shouldShuffleItems) return { ...q };
   const shuffled = shuffleArray(q.items);
   const newItems = shuffled.map((it, i) => ({
     key: TF_KEYS[i],
@@ -53,14 +62,19 @@ export function shuffleTF(q: TFQuestion, opts: ShuffleOptions): TFQuestion {
 }
 
 export function buildVariant(base: ParsedExam, opts: ShuffleOptions): ParsedExam {
+  // Determine question shuffle per part
+  const shuffleQ1 = opts.shuffle_q_p1 ?? opts.shuffleQuestions ?? false;
+  const shuffleQ2 = opts.shuffle_q_p2 ?? opts.shuffleQuestions ?? false;
+  const shuffleQ3 = opts.shuffle_q_p3 ?? (opts.shuffleQuestions && !opts.keepSaOrder) ?? false;
+
   let p1 = base.partI.map((q) => shuffleMC(q, opts));
   let p2 = base.partII.map((q) => shuffleTF(q, opts));
   let p3 = base.partIII.map((q) => ({ ...q }));
-  if (opts.shuffleQuestions) {
-    p1 = shuffleArray(p1);
-    p2 = shuffleArray(p2);
-    if (!opts.keepSaOrder) p3 = shuffleArray(p3);
-  }
+
+  if (shuffleQ1) p1 = shuffleArray(p1);
+  if (shuffleQ2) p2 = shuffleArray(p2);
+  if (shuffleQ3) p3 = shuffleArray(p3);
+
   return { partI: p1, partII: p2, partIII: p3 };
 }
 
@@ -73,13 +87,21 @@ function factorial(n: number): number {
 
 export function estimateMaxVariants(base: ParsedExam, opts: ShuffleOptions): number {
   let total = 1;
-  if (opts.shuffleQuestions) {
-    total *= factorial(base.partI.length);
-    total *= factorial(base.partII.length);
-    if (!opts.keepSaOrder) total *= factorial(base.partIII.length);
-  }
-  if (opts.shuffleAnswers) {
+  const shuffleQ1 = opts.shuffle_q_p1 ?? opts.shuffleQuestions ?? false;
+  const shuffleQ2 = opts.shuffle_q_p2 ?? opts.shuffleQuestions ?? false;
+  const shuffleQ3 = opts.shuffle_q_p3 ?? (opts.shuffleQuestions && !opts.keepSaOrder) ?? false;
+
+  const shuffleO1 = opts.shuffle_o_p1 ?? opts.shuffleAnswers ?? false;
+  const shuffleO2 = opts.shuffle_o_p2 ?? opts.shuffleAnswers ?? false;
+
+  if (shuffleQ1) total *= factorial(base.partI.length);
+  if (shuffleQ2) total *= factorial(base.partII.length);
+  if (shuffleQ3) total *= factorial(base.partIII.length);
+
+  if (shuffleO1) {
     base.partI.forEach(() => (total *= 24));
+  }
+  if (shuffleO2) {
     base.partII.forEach(() => (total *= 24));
   }
   return total;

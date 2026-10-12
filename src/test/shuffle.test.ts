@@ -152,4 +152,25 @@ describe("Shuffle Engine & Exam Generation", () => {
     expect(blob4).toBeDefined();
     expect(blob4.size).toBeGreaterThan(0);
   });
+
+  it("xáo độc lập theo từng phần: bật phần I, tắt phần II và III", () => {
+    const v = generateVariants(sampleExam, 1, {
+      shuffle_q_p1: true,
+      shuffle_o_p1: true,
+      shuffle_q_p2: false,
+      shuffle_o_p2: false,
+      shuffle_q_p3: false,
+    });
+    expect(v.length).toBe(1);
+    const variant = v[0];
+
+    // Phần II giữ nguyên thứ tự câu và thứ tự items
+    expect(variant.partII[0].id).toBe(sampleExam.partII[0].id);
+    expect(variant.partII[0].items[0].text).toBe(sampleExam.partII[0].items[0].text);
+    expect(variant.partII[0].items[1].text).toBe(sampleExam.partII[0].items[1].text);
+
+    // Phần III giữ nguyên thứ tự câu
+    expect(variant.partIII[0].id).toBe(sampleExam.partIII[0].id);
+    expect(variant.partIII[0].text).toBe(sampleExam.partIII[0].text);
+  });
 });

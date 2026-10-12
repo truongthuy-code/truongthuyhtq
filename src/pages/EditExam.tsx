@@ -182,27 +182,53 @@ export default function EditExam() {
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <div className="text-sm font-medium mb-2">Xáo thứ tự câu hỏi theo phần</div>
-              <div className="grid grid-cols-3 gap-3">
-                {(["p1","p2","p3"] as const).map((k, i) => (
-                  <div key={k} className="flex items-center justify-between rounded-md border p-2">
-                    <Label htmlFor={`sq-${k}`} className="text-xs">Phần {["I","II","III"][i]}</Label>
-                    <Switch id={`sq-${k}`} checked={shuffleQ[k]} onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, [k]: v })} />
-                  </div>
-                ))}
+          <div className="space-y-3 rounded-xl border p-4 bg-muted/20">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-bold text-foreground">Cấu hình xáo đề theo từng phần</div>
+              <div className="text-xs text-muted-foreground">Độc lập cho từng phần</div>
+            </div>
+
+            {/* PHẦN I */}
+            <div className="rounded-lg border bg-background p-3 space-y-2">
+              <div className="text-xs font-bold text-primary">PHẦN I – Trắc nghiệm nhiều lựa chọn</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="flex items-center justify-between rounded-md border p-2 bg-muted/30">
+                  <Label htmlFor="sq-p1" className="text-xs font-medium cursor-pointer">Xáo thứ tự câu hỏi</Label>
+                  <Switch id="sq-p1" checked={shuffleQ.p1} onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p1: v })} />
+                </div>
+                <div className="flex items-center justify-between rounded-md border p-2 bg-muted/30">
+                  <Label htmlFor="so-p1" className="text-xs font-medium cursor-pointer">Xáo thứ tự phương án A/B/C/D</Label>
+                  <Switch id="so-p1" checked={shuffleO.p1} onCheckedChange={(v) => setShuffleO({ ...shuffleO, p1: v })} />
+                </div>
               </div>
             </div>
-            <div>
-              <div className="text-sm font-medium mb-2">Xáo thứ tự đáp án theo phần</div>
-              <div className="grid grid-cols-3 gap-3">
-                {(["p1","p2","p3"] as const).map((k, i) => (
-                  <div key={k} className="flex items-center justify-between rounded-md border p-2">
-                    <Label htmlFor={`so-${k}`} className="text-xs">Phần {["I","II","III"][i]}</Label>
-                    <Switch id={`so-${k}`} checked={shuffleO[k]} onCheckedChange={(v) => setShuffleO({ ...shuffleO, [k]: v })} />
-                  </div>
-                ))}
+
+            {/* PHẦN II */}
+            <div className="rounded-lg border bg-background p-3 space-y-2">
+              <div className="text-xs font-bold text-primary">PHẦN II – Đúng/Sai</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="flex items-center justify-between rounded-md border p-2 bg-muted/30">
+                  <Label htmlFor="sq-p2" className="text-xs font-medium cursor-pointer">Xáo thứ tự câu hỏi</Label>
+                  <Switch id="sq-p2" checked={shuffleQ.p2} onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p2: v })} />
+                </div>
+                <div className="flex items-center justify-between rounded-md border p-2 bg-muted/30">
+                  <Label htmlFor="so-p2" className="text-xs font-medium cursor-pointer">Xáo thứ tự phương án a/b/c/d</Label>
+                  <Switch id="so-p2" checked={shuffleO.p2} onCheckedChange={(v) => setShuffleO({ ...shuffleO, p2: v })} />
+                </div>
+              </div>
+            </div>
+
+            {/* PHẦN III */}
+            <div className="rounded-lg border bg-background p-3 space-y-2">
+              <div className="text-xs font-bold text-primary">PHẦN III – Trả lời ngắn</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="flex items-center justify-between rounded-md border p-2 bg-muted/30">
+                  <Label htmlFor="sq-p3" className="text-xs font-medium cursor-pointer">Xáo thứ tự câu hỏi</Label>
+                  <Switch id="sq-p3" checked={shuffleQ.p3} onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p3: v })} />
+                </div>
+                <div className="flex items-center text-xs text-muted-foreground italic p-2">
+                  (Không có phương án để xáo)
+                </div>
               </div>
             </div>
           </div>

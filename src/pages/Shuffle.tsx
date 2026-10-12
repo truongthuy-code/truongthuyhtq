@@ -29,7 +29,7 @@ export default function Shuffle() {
   const fileReadSeq = useRef(0);
 
   const [meta, setMeta] = useState<ExamMeta>({
-    agency: "SỞ GIÁO DỤC & ĐÀO TẠO",
+    agency: "SỞ GD&ĐT TP ĐÀ NẴNG",
     unit: "TRƯỜNG THPT",
     session: "KỲ THI KIỂM TRA",
     subject: "",
@@ -40,16 +40,16 @@ export default function Shuffle() {
   const [numVariants, setNumVariants] = useState(4);
   const [codesInput, setCodesInput] = useState("");
   const [codePrefix, setCodePrefix] = useState("7");
-  const [codeLen, setCodeLen] = useState(3);
+  const [codeLen, setCodeLen] = useState(4);
+
+  const [shuffleQ, setShuffleQ] = useState({ p1: true, p2: true, p3: true });
+  const [shuffleO, setShuffleO] = useState({ p1: true, p2: true, p3: false });
 
   const [opts, setOpts] = useState({
     renumberPerPart: true,
     singleFile: true,
     answersAsTable: true,
-    keepSaOrder: false,
     keepPartOrder: true,
-    shuffleQuestions: true,
-    shuffleAnswers: true,
   });
 
   const [variants, setVariants] = useState<ParsedExam[]>([]);
@@ -59,7 +59,7 @@ export default function Shuffle() {
 
   useEffect(() => {
     (async () => {
-      let q = supabase.from("exams").select("id,title,questions,subject_name,duration_minutes,created_by").order("created_at", { ascending: false });
+      let q = supabase.from("exams").select("id,title,questions,subject_name,duration_minutes,created_by,shuffle_questions,shuffle_options,shuffle_q_p1,shuffle_q_p2,shuffle_q_p3,shuffle_o_p1,shuffle_o_p2,shuffle_o_p3").order("created_at", { ascending: false });
       if (!isAdmin && user) {
         if (isUuid(user.id)) {
           q = q.eq("created_by", user.id);
@@ -79,6 +79,20 @@ export default function Shuffle() {
     setBaseExam({ partI: q.partI || [], partII: q.partII || [], partIII: q.partIII || [] });
     setBaseTitle((ex.title || "de").replace(/[^\w\-]+/g, "_").slice(0, 40));
     setMeta((m) => ({ ...m, subject: ex.subject_name || m.subject, duration: String(ex.duration_minutes || m.duration) }));
+    if (ex.shuffle_q_p1 !== undefined || ex.shuffle_questions !== undefined) {
+      setShuffleQ({
+        p1: ex.shuffle_q_p1 ?? ex.shuffle_questions ?? true,
+        p2: ex.shuffle_q_p2 ?? ex.shuffle_questions ?? true,
+        p3: ex.shuffle_q_p3 ?? ex.shuffle_questions ?? true,
+      });
+    }
+    if (ex.shuffle_o_p1 !== undefined || ex.shuffle_options !== undefined) {
+      setShuffleO({
+        p1: ex.shuffle_o_p1 ?? ex.shuffle_options ?? true,
+        p2: ex.shuffle_o_p2 ?? ex.shuffle_options ?? true,
+        p3: false,
+      });
+    }
   };
 
   const clearGeneratedState = () => {
@@ -134,8 +148,12 @@ export default function Shuffle() {
   }, [baseExam]);
 
   const maxVariants = useMemo(() => (baseExam ? estimateMaxVariants(baseExam, {
-    shuffleQuestions: opts.shuffleQuestions, shuffleAnswers: opts.shuffleAnswers, keepSaOrder: opts.keepSaOrder,
-  }) : 0), [baseExam, opts]);
+    shuffle_q_p1: shuffleQ.p1,
+    shuffle_q_p2: shuffleQ.p2,
+    shuffle_q_p3: shuffleQ.p3,
+    shuffle_o_p1: shuffleO.p1,
+    shuffle_o_p2: shuffleO.p2,
+  }) : 0), [baseExam, shuffleQ, shuffleO]);
 
   const computedCodes = useMemo(() => {
     const r = generateExamCodes({ prefix: codePrefix, codeLength: codeLen, quantity: numVariants, manualCodes: codesInput });
@@ -158,7 +176,11 @@ export default function Shuffle() {
     setBusy(true);
     try {
       const vs = generateVariants(baseExam!, numVariants, {
-        shuffleQuestions: opts.shuffleQuestions, shuffleAnswers: opts.shuffleAnswers, keepSaOrder: opts.keepSaOrder,
+        shuffle_q_p1: shuffleQ.p1,
+        shuffle_q_p2: shuffleQ.p2,
+        shuffle_q_p3: shuffleQ.p3,
+        shuffle_o_p1: shuffleO.p1,
+        shuffle_o_p2: shuffleO.p2,
       });
       setVariants(vs);
       setCodes(computedCodes);
@@ -268,24 +290,99 @@ export default function Shuffle() {
             </div>
           </Card>
 
-          <Card className="p-4 rounded-2xl space-y-3">
-            <h3 className="font-semibold">3. Tùy chọn</h3>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              {[
-                ["renumberPerPart", "Đánh lại số câu từ 1 mỗi phần"],
-                ["singleFile", "Tất cả đề trong 1 file Word"],
-                ["answersAsTable", "Xuất đáp án dạng bảng"],
-                ["keepSaOrder", "Giữ nguyên thứ tự câu tự luận"],
-                ["keepPartOrder", "Giữ nguyên thứ tự phần"],
-                ["shuffleQuestions", "Xáo thứ tự câu"],
-                ["shuffleAnswers", "Xáo đáp án"],
-              ].map(([k, l]) => (
-                <label key={k} className="flex items-center gap-2 cursor-pointer">
-                  <Checkbox checked={(opts as any)[k]} onCheckedChange={(v) => setOpts({ ...opts, [k]: !!v })} />
-                  <span>{l}</span>
-                </label>
-              ))}
+          <Card className="p-4 rounded-2xl space-y-4">
+            <h3 className="font-semibold text-base flex items-center justify-between">
+              <span>3. Cấu hình xáo đề theo từng phần</span>
+              <span className="text-xs font-normal text-muted-foreground">Tùy chọn độc lập cho từng phần</span>
+            </h3>
+
+            <div className="space-y-3">
+              {/* PHẦN I */}
+              <div className="rounded-xl border p-3 bg-muted/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sm text-foreground">PHẦN I – Trắc nghiệm nhiều lựa chọn</span>
+                  {stats && <span className="text-xs text-muted-foreground">({stats.p1} câu)</span>}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer bg-background/80 p-2 rounded-lg border hover:bg-background transition-colors">
+                    <Checkbox
+                      checked={shuffleQ.p1}
+                      onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p1: !!v })}
+                    />
+                    <span>Xáo thứ tự câu hỏi</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer bg-background/80 p-2 rounded-lg border hover:bg-background transition-colors">
+                    <Checkbox
+                      checked={shuffleO.p1}
+                      onCheckedChange={(v) => setShuffleO({ ...shuffleO, p1: !!v })}
+                    />
+                    <span>Xáo thứ tự phương án A/B/C/D</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* PHẦN II */}
+              <div className="rounded-xl border p-3 bg-muted/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sm text-foreground">PHẦN II – Đúng/Sai</span>
+                  {stats && <span className="text-xs text-muted-foreground">({stats.p2} câu)</span>}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer bg-background/80 p-2 rounded-lg border hover:bg-background transition-colors">
+                    <Checkbox
+                      checked={shuffleQ.p2}
+                      onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p2: !!v })}
+                    />
+                    <span>Xáo thứ tự câu hỏi</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer bg-background/80 p-2 rounded-lg border hover:bg-background transition-colors">
+                    <Checkbox
+                      checked={shuffleO.p2}
+                      onCheckedChange={(v) => setShuffleO({ ...shuffleO, p2: !!v })}
+                    />
+                    <span>Xáo thứ tự các ý a/b/c/d</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* PHẦN III */}
+              <div className="rounded-xl border p-3 bg-muted/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sm text-foreground">PHẦN III – Trả lời ngắn</span>
+                  {stats && <span className="text-xs text-muted-foreground">({stats.p3} câu)</span>}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer bg-background/80 p-2 rounded-lg border hover:bg-background transition-colors">
+                    <Checkbox
+                      checked={shuffleQ.p3}
+                      onCheckedChange={(v) => setShuffleQ({ ...shuffleQ, p3: !!v })}
+                    />
+                    <span>Xáo thứ tự câu hỏi</span>
+                  </label>
+                  <div className="text-xs text-muted-foreground flex items-center p-2 italic">
+                    (Không có phương án để xáo)
+                  </div>
+                </div>
+              </div>
             </div>
+
+            <div className="pt-2 border-t space-y-2">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tùy chọn xuất file</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {[
+                  ["renumberPerPart", "Đánh lại số câu từ 1 mỗi phần"],
+                  ["singleFile", "Tất cả đề trong 1 file Word"],
+                  ["answersAsTable", "Xuất đáp án dạng bảng"],
+                  ["keepPartOrder", "Giữ nguyên thứ tự phần"],
+                ].map(([k, l]) => (
+                  <label key={k} className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox checked={(opts as any)[k]} onCheckedChange={(v) => setOpts({ ...opts, [k]: !!v })} />
+                    <span>{l}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3 pt-2">
               <div>
                 <Label className="text-xs">Số lượng mã đề</Label>
