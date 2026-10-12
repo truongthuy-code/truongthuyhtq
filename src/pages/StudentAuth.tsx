@@ -112,9 +112,9 @@ export default function StudentAuth() {
           </span>
         </div>
 
-        {/* 3 Role buttons */}
+        {/* Role buttons */}
         <div className="mb-4">
-          <div className="grid grid-cols-3 gap-1.5 p-1 bg-muted/60 rounded-xl">
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted/60 rounded-xl">
             <Link
               to="/auth?role=teacher"
               className="py-1.5 px-2 rounded-lg font-bold text-xs text-center text-muted-foreground hover:text-foreground transition-all"
@@ -126,12 +126,6 @@ export default function StudentAuth() {
             >
               HỌC SINH
             </span>
-            <Link
-              to="/auth?role=admin"
-              className="py-1.5 px-2 rounded-lg font-bold text-xs text-center text-muted-foreground hover:text-foreground transition-all"
-            >
-              ADMIN
-            </Link>
           </div>
         </div>
 

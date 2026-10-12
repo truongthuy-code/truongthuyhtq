@@ -488,16 +488,16 @@ export default function AuthPage() {
             Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Đăng nhập phân quyền theo 3 vai trò: Giáo viên, Học sinh, Quản trị viên
+            Đăng nhập phân quyền: Giáo viên, Học sinh
           </p>
         </div>
 
-        {/* 3 ROLE SELECTOR BUTTONS */}
+        {/* ROLE SELECTOR BUTTONS */}
         <div className="mb-6">
           <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-2 text-center">
             Chọn vai trò đăng nhập
           </Label>
-          <div className="grid grid-cols-3 gap-2 p-1.5 bg-muted/60 rounded-xl">
+          <div className="grid grid-cols-2 gap-2 p-1.5 bg-muted/60 rounded-xl">
             <button
               type="button"
               onClick={() => handleSelectRole("teacher")}
@@ -522,19 +522,6 @@ export default function AuthPage() {
             >
               <GraduationCap className="size-4 mb-1" />
               <span>HỌC SINH</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSelectRole("admin")}
-              className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg font-bold text-xs transition-all ${
-                selectedRole === "admin"
-                  ? "bg-white text-amber-600 shadow-sm ring-1 ring-amber-500/20 scale-[1.02]"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <ShieldCheck className="size-4 mb-1" />
-              <span>ADMIN</span>
             </button>
           </div>
         </div>
