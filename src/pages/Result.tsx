@@ -91,7 +91,24 @@ export default function Result() {
   }
 
   const total = (sub.correct_count ?? 0) + (sub.wrong_count ?? 0);
+  const correctCount = sub.correct_count ?? 0;
+  const correctRate = total > 0 ? (correctCount / total) * 100 : 0;
+  const isStandard = !exam?.display_mode || exam?.display_mode === "standard";
+  const enableMinCorrect = !!(
+    exam?.enable_min_correct_percentage ??
+    exam?.lock_mode?.enable_min_correct_percentage ??
+    exam?.scoring?.enable_min_correct_percentage ??
+    false
+  );
+  const threshold = Number(
+    exam?.min_correct_percentage_for_review ??
+    exam?.lock_mode?.min_correct_percentage_for_review ??
+    exam?.scoring?.min_correct_percentage_for_review ??
+    0
+  );
   const allowReviewAnswers = !!(exam?.allow_review ?? (exam as any)?.allowReviewAnswers ?? false);
+  const isThresholdActive = isStandard && enableMinCorrect;
+  const isThresholdFailed = allowReviewAnswers && isThresholdActive && correctRate < threshold - 1e-6;
   const answers = sub.answers || {};
 
   // Helper number matching for Part III
@@ -205,6 +222,76 @@ export default function Result() {
   );
 
   /**
+   * KHI CHƯA ĐẠT TỶ LỆ TRẢ LỜI ĐÚNG TỐI THIỂU TRONG CHẾ ĐỘ TIÊU CHUẨN:
+   * Chỉ hiển thị: Điểm, Số câu đúng, Số câu sai, Họ tên, Lớp.
+   * KHÔNG hiển thị: Nội dung câu hỏi, Đáp án đúng, Đáp án học sinh chọn, Lời giải.
+   * Kèm thông báo rõ tỷ lệ đạt được và mức tối thiểu do giáo viên quy định.
+   */
+  const renderThresholdFailedResult = () => (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 sm:px-4 relative selection:bg-primary/20 flex flex-col justify-center items-center">
+      <QuizBackground />
+      <div className="max-w-md w-full space-y-4 relative z-10">
+        {/* Top navigation header */}
+        <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-card/90 backdrop-blur border shadow-sm">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-2xl shrink-0">🎓</span>
+            <div className="min-w-0">
+              <div className="font-bold text-sm truncate text-foreground">
+                {exam?.title || "Kết quả bài kiểm tra"}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                {sub.student_name} • Lớp {sub.student_class}
+              </div>
+            </div>
+          </div>
+          <Link
+            to="/student"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white font-bold text-xs shrink-0 shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all"
+          >
+            <span>🏠</span>
+            <span>Trang cá nhân</span>
+          </Link>
+        </div>
+
+        {renderSummaryCard()}
+
+        {/* Thông báo chưa đạt tỷ lệ đúng tối thiểu */}
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-center text-xs text-amber-950 dark:text-amber-200 space-y-3">
+          <div className="font-extrabold text-base flex items-center justify-center gap-2 text-amber-800 dark:text-amber-300">
+            <Lock className="size-5 text-amber-600 dark:text-amber-400" />
+            <span>Chưa đạt tỷ lệ đúng tối thiểu để xem đáp án</span>
+          </div>
+
+          <div className="bg-card/90 rounded-2xl p-4 border border-amber-500/25 max-w-sm mx-auto space-y-2 text-xs text-foreground shadow-xs">
+            <div className="flex justify-between items-center py-1 border-b border-border/50">
+              <span className="text-muted-foreground font-medium">Tỷ lệ trả lời đúng của bạn:</span>
+              <span className="font-black text-rose-600 dark:text-rose-400 text-sm">
+                {correctRate.toFixed(1)}% ({correctCount}/{total} câu)
+              </span>
+            </div>
+            <div className="flex justify-between items-center py-1">
+              <span className="text-muted-foreground font-medium">Yêu cầu tối thiểu để xem đáp án:</span>
+              <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm">
+                ≥ {threshold}%
+              </span>
+            </div>
+          </div>
+
+          <div className="leading-relaxed text-muted-foreground text-xs max-w-md mx-auto">
+            Giáo viên đã quy định: Sau khi nộp bài, học sinh chỉ được xem <b>Đáp án</b> và <b>Lời giải</b> khi tỷ lệ trả lời đúng đạt từ <b>{threshold}%</b> trở lên. Điểm số của bạn đã được ghi nhận an toàn trên hệ thống.
+          </div>
+
+          <div className="pt-2">
+            <Link to="/student" className="inline-flex items-center text-primary font-bold hover:underline">
+              <span className="mr-1.5">🏠</span> Vào trang cá nhân học sinh để theo dõi lịch sử bài thi
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  /**
    * 2, 3, 4, 5. KHI GIÁO VIÊN BẬT TÍNH NĂNG NÀY (allowReviewAnswers = true):
    * Hiển thị: Điểm, Số câu đúng, Số câu sai, Họ tên, Lớp.
    * Danh sách câu hỏi kèm: Nội dung câu hỏi, Đáp án học sinh chọn, Đáp án đúng highlight màu xanh,
@@ -248,9 +335,16 @@ export default function Result() {
                 <BookOpen className="size-5 text-primary" />
                 <h2 className="font-bold text-lg text-foreground">Xem lại chi tiết bài làm & đáp án</h2>
               </div>
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
-                Đã bật xem lại đáp án
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {isThresholdActive && (
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
+                    🎯 Đạt {correctRate.toFixed(1)}% (yêu cầu ≥ {threshold}%)
+                  </span>
+                )}
+                <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
+                  Đã bật xem lại đáp án
+                </span>
+              </div>
             </div>
 
             {/* PHẦN I: TRẮC NGHIỆM NHIỀU LỰA CHỌN */}
@@ -551,14 +645,17 @@ export default function Result() {
     );
   };
 
-  // 7. YÊU CẦU KỸ THUẬT:
-  // Sau khi học sinh nộp bài:
-  // Kiểm tra cấu hình bài thi:
-  // Nếu allowReviewAnswers = true (hoặc allow_review = true) và có questions: renderReviewPage()
-  // Nếu false: renderSimpleResult()
+  // 7. ĐIỀU KIỆN HIỂN THỊ ĐÁP ÁN VÀ LỜI GIẢI (Phối hợp thiết lập):
+  // 1. Nếu giáo viên tắt xem lại đáp án hoặc không có câu hỏi: không cho xem (kể cả đạt 100%)
   if (!allowReviewAnswers || !exam?.questions) {
     return renderSimpleResult();
   }
 
+  // 2. Nếu bật xem lại + bật áp dụng tỷ lệ tối thiểu nhưng học sinh chưa đạt ngưỡng: hiển thị thông báo chưa đạt ngưỡng
+  if (isThresholdFailed) {
+    return renderThresholdFailedResult();
+  }
+
+  // 3. Đủ điều kiện: hiển thị toàn bộ đáp án và lời giải chi tiết
   return renderReviewPage();
 }

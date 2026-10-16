@@ -755,6 +755,24 @@ export default function Take() {
       console.error("Failed to link student submission:", e);
     }
 
+    const totalGraded = (sInfo?.correct_count ?? 0) + (sInfo?.wrong_count ?? 0);
+    const correctRate = totalGraded > 0 ? ((sInfo?.correct_count ?? 0) / totalGraded) * 100 : 0;
+    const isStandard = !exam?.display_mode || exam?.display_mode === "standard";
+    const enableMinCorrect = !!(
+      exam?.enable_min_correct_percentage ??
+      exam?.lock_mode?.enable_min_correct_percentage ??
+      exam?.scoring?.enable_min_correct_percentage ??
+      false
+    );
+    const minPct = Number(
+      exam?.min_correct_percentage_for_review ??
+      exam?.lock_mode?.min_correct_percentage_for_review ??
+      exam?.scoring?.min_correct_percentage_for_review ??
+      0
+    );
+    const meetsThreshold = !isStandard || !enableMinCorrect || correctRate >= minPct - 1e-6;
+    const canReview = !!exam?.allow_review && meetsThreshold;
+
     await lock.exitFullscreen().catch(() => {});
     navigate(`/result/${submissionId}`, {
       state: {
@@ -772,7 +790,9 @@ export default function Take() {
         exam: exam
           ? {
               ...exam,
-              questions: exam.allow_review ? exam.questions : null,
+              enable_min_correct_percentage: enableMinCorrect,
+              min_correct_percentage_for_review: minPct,
+              questions: canReview ? exam.questions : null,
             }
           : null,
       },

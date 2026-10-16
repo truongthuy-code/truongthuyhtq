@@ -214,6 +214,19 @@ export default function StudentDashboard() {
             isClosed: true,
             questions: examObj.questions,
             allowReview: true,
+            displayMode: examObj.display_mode || "standard",
+            enableMinCorrect: !!(
+              examObj.enable_min_correct_percentage ??
+              examObj.lock_mode?.enable_min_correct_percentage ??
+              examObj.scoring?.enable_min_correct_percentage ??
+              false
+            ),
+            minCorrectPercentage: Number(
+              examObj.min_correct_percentage_for_review ??
+              examObj.lock_mode?.min_correct_percentage_for_review ??
+              examObj.scoring?.min_correct_percentage_for_review ??
+              0
+            ),
           });
           setReviewLoading(false);
           return;
@@ -234,6 +247,19 @@ export default function StudentDashboard() {
         isClosed,
         questions: (exData as any)?.questions || null,
         allowReview: !!(exData as any)?.allow_review || isClosed,
+        displayMode: (exData as any)?.display_mode || "standard",
+        enableMinCorrect: !!(
+          (exData as any)?.enable_min_correct_percentage ??
+          (exData as any)?.lock_mode?.enable_min_correct_percentage ??
+          (exData as any)?.scoring?.enable_min_correct_percentage ??
+          false
+        ),
+        minCorrectPercentage: Number(
+          (exData as any)?.min_correct_percentage_for_review ??
+          (exData as any)?.lock_mode?.min_correct_percentage_for_review ??
+          (exData as any)?.scoring?.min_correct_percentage_for_review ??
+          0
+        ),
       });
     } catch (err) {
       console.error("Error loading review:", err);
@@ -668,20 +694,69 @@ export default function StudentDashboard() {
               {reviewLoading ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">Đang tải đáp án chi tiết...</div>
               ) : reviewExamData?.isClosed && reviewExamData?.questions ? (
-                <div className="space-y-6">
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                    <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
-                    <div>
-                      <b>Đề thi đã được giáo viên đóng.</b> Toàn bộ đáp án chính thức và lời giải chi tiết đã được công bố bên dưới.
-                    </div>
-                  </div>
+                (() => {
+                  const isStandard = !reviewExamData?.displayMode || reviewExamData?.displayMode === "standard";
+                  const enableMinCorrect = !!reviewExamData?.enableMinCorrect;
+                  const threshold = Number(reviewExamData?.minCorrectPercentage || 0);
+                  const totalQ = (selectedSub.correctCount ?? 0) + (selectedSub.wrongCount ?? 0);
+                  const correctRate = totalQ > 0 ? ((selectedSub.correctCount ?? 0) / totalQ) * 100 : 0;
+                  const isThresholdActive = isStandard && enableMinCorrect;
+                  const isThresholdFailed = isThresholdActive && correctRate < threshold - 1e-6;
 
-                  {/* Render questions review */}
-                  <ExamReviewQuestions
-                    questions={reviewExamData.questions}
-                    answers={selectedSub.answers || {}}
-                  />
-                </div>
+                  if (isThresholdFailed) {
+                    return (
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-center text-xs text-amber-950 dark:text-amber-200 space-y-3">
+                        <div className="font-extrabold text-base flex items-center justify-center gap-2 text-amber-800 dark:text-amber-300">
+                          <Lock className="size-5 text-amber-600 dark:text-amber-400" />
+                          <span>Chưa đạt tỷ lệ đúng tối thiểu để xem đáp án</span>
+                        </div>
+
+                        <div className="bg-card/90 rounded-2xl p-4 border border-amber-500/25 max-w-sm mx-auto space-y-2 text-xs text-foreground shadow-xs">
+                          <div className="flex justify-between items-center py-1 border-b border-border/50">
+                            <span className="text-muted-foreground font-medium">Tỷ lệ trả lời đúng của bạn:</span>
+                            <span className="font-black text-rose-600 dark:text-rose-400 text-sm">
+                              {correctRate.toFixed(1)}% ({selectedSub.correctCount ?? 0}/{totalQ} câu)
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center py-1">
+                            <span className="text-muted-foreground font-medium">Yêu cầu tối thiểu để xem đáp án:</span>
+                            <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm">
+                              ≥ {threshold}%
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="leading-relaxed text-muted-foreground text-xs max-w-md mx-auto">
+                          Giáo viên đã quy định: Sau khi nộp bài, học sinh chỉ được xem <b>Đáp án</b> và <b>Lời giải</b> khi tỷ lệ trả lời đúng đạt từ <b>{threshold}%</b> trở lên.
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-6">
+                      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-800 dark:text-emerald-300 flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+                          <div>
+                            <b>Đề thi đã được giáo viên đóng.</b> Toàn bộ đáp án chính thức và lời giải chi tiết đã được công bố bên dưới.
+                          </div>
+                        </div>
+                        {isThresholdActive && (
+                          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
+                            🎯 Đạt {correctRate.toFixed(1)}% (yêu cầu ≥ {threshold}%)
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Render questions review */}
+                      <ExamReviewQuestions
+                        questions={reviewExamData.questions}
+                        answers={selectedSub.answers || {}}
+                      />
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-300 text-xs space-y-2">
                   <div className="flex items-center gap-2 font-semibold text-sm text-amber-900 dark:text-amber-200">

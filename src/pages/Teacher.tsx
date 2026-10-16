@@ -76,6 +76,8 @@ export default function Teacher() {
   const [shuffleO, setShuffleO] = useState({ p1: false, p2: false, p3: false });
   const [scoring, setScoring] = useState<ScoringConfig>(DEFAULT_SCORING);
   const [allowReview, setAllowReview] = useState(false);
+  const [enableMinCorrect, setEnableMinCorrect] = useState<boolean>(false);
+  const [minCorrectPercentage, setMinCorrectPercentage] = useState<number>(70);
   const [displayMode, setDisplayMode] = useState<"standard" | "quizizz" | "team">("standard");
   const [teamConfig, setTeamConfig] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG);
   const [instantFeedback, setInstantFeedback] = useState(false);
@@ -254,7 +256,11 @@ export default function Teacher() {
           shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
           shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
           shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-          scoring: scoring as any,
+          scoring: {
+            ...(scoring as any),
+            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+          } as any,
           allow_review: allowReview,
           display_mode: displayMode,
           instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
@@ -265,6 +271,8 @@ export default function Teacher() {
           lock_mode: {
             ...(lockMode || {}),
             allow_back: displayMode === "quizizz" ? allowBack : true,
+            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
           } as any,
           open_at: schedule.open_at,
           close_at: schedule.close_at,
@@ -342,6 +350,11 @@ export default function Teacher() {
       display_mode: displayMode,
       allow_back: displayMode === "quizizz" ? allowBack : true,
       instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
+      scoring: {
+        ...(scoring as any),
+        enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+        min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+      } as any,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,
@@ -611,6 +624,85 @@ export default function Teacher() {
                     </span>
                     <Switch id="instant-fb" checked={instantFeedback} onCheckedChange={setInstantFeedback} />
                   </div>
+                </div>
+              )}
+
+              {displayMode === "standard" && (
+                <div className="rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 p-4 space-y-3 mt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-1 pr-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Label htmlFor="create-toggle-min-correct" className="text-sm font-bold text-foreground flex items-center gap-1.5 cursor-pointer">
+                          <span>🎯</span>
+                          <span>Áp dụng tỷ lệ trả lời đúng tối thiểu để xem đáp án và lời giải</span>
+                        </Label>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                          enableMinCorrect
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-muted text-muted-foreground border-border"
+                        }`}>
+                          {enableMinCorrect ? "BẬT" : "TẮT"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground leading-relaxed">
+                        {enableMinCorrect
+                          ? "BẬT: Áp dụng điều kiện tỷ lệ trả lời đúng tối thiểu do giáo viên thiết lập bên dưới."
+                          : "TẮT: Không áp dụng điều kiện tỷ lệ đúng tối thiểu; học sinh được xét quyền xem đáp án và lời giải theo cơ chế hiện có."}
+                      </div>
+                    </div>
+                    <Switch
+                      id="create-toggle-min-correct"
+                      checked={enableMinCorrect}
+                      onCheckedChange={setEnableMinCorrect}
+                    />
+                  </div>
+
+                  {enableMinCorrect && (
+                    <div className="pt-3 border-t border-indigo-200/60 dark:border-indigo-900/60 space-y-3 animate-in fade-in duration-200">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <Label htmlFor="create-min-correct-percent" className="text-xs font-semibold text-foreground flex items-center gap-1.5 cursor-pointer">
+                          <span>Tỷ lệ trả lời đúng tối thiểu:</span>
+                        </Label>
+                        <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
+                          <Input
+                            id="create-min-correct-percent"
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={minCorrectPercentage}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                              setMinCorrectPercentage(v);
+                            }}
+                            className="w-20 text-center font-bold h-9 bg-card border-indigo-300 dark:border-indigo-800"
+                          />
+                          <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400">%</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => setMinCorrectPercentage(pct)}
+                            className={`px-2.5 py-1 text-xs rounded-lg font-bold border transition-all ${
+                              minCorrectPercentage === pct
+                                ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                                : "bg-card hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 border-border text-muted-foreground"
+                            }`}
+                          >
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="text-xs text-muted-foreground leading-relaxed">
+                        Sau khi nộp bài, học sinh chỉ được xem Đáp án và Lời giải khi tỷ lệ trả lời đúng đạt từ <b>{minCorrectPercentage}%</b> trở lên.
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
