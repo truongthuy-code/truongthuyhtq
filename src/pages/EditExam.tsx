@@ -18,6 +18,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
+import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
+import { sha256, encryptExamPassword, decryptExamPassword } from "@/lib/examSecurity";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -40,6 +42,7 @@ export default function EditExam() {
   const [allowBack, setAllowBack] = useState(true);
   const [lockMode, setLockMode] = useState<LockMode>(DEFAULT_LOCK);
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
+  const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
 
   useEffect(() => {
     if (!id) return;
@@ -105,13 +108,38 @@ export default function EditExam() {
         close_at: (examData as any).close_at ?? null,
         auto_submit_on_close: (examData as any).auto_submit_on_close ?? true,
       });
+
+      const lockData = (examData as any).lock_mode || {};
+      const reqPass = !!(lockData.has_password || lockData.require_password || (examData as any).has_password);
+      const decPass = lockData.encrypted_password
+        ? decryptExamPassword(lockData.encrypted_password, id)
+        : (lockData.password || "");
+      setPasswordConfig({
+        requirePassword: reqPass,
+        password: decPass,
+      });
+
       setLoading(false);
     })();
   }, [id, navigate, isAdmin, user]);
 
   const onSave = async () => {
     if (!id) return;
+
+    if (passwordConfig.requirePassword && !passwordConfig.password.trim()) {
+      toast.error("Vui lòng nhập mật khẩu bài thi trước khi lưu!");
+      return;
+    }
+
     setSaving(true);
+
+    const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
+      ? await sha256(passwordConfig.password.trim())
+      : "";
+    const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
+      ? encryptExamPassword(passwordConfig.password.trim(), id)
+      : "";
+
     const updates = {
       title,
       duration_minutes: duration,
@@ -137,6 +165,10 @@ export default function EditExam() {
         allow_back: displayMode === "quizizz" ? allowBack : true,
         enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
         min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+        has_password: passwordConfig.requirePassword,
+        require_password: passwordConfig.requirePassword,
+        password_hash: passHash,
+        encrypted_password: encPass,
       } as any,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
@@ -448,6 +480,7 @@ export default function EditExam() {
 
           <LockModeSettings value={lockMode} onChange={setLockMode} />
 
+          <ExamPasswordSettings value={passwordConfig} onChange={setPasswordConfig} />
 
           <div className="flex items-center justify-between rounded-xl border border-border/80 bg-card p-4 hover:border-primary/40 transition-colors">
             <div className="space-y-1 pr-4">

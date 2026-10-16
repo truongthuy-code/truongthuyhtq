@@ -32,6 +32,8 @@ import {
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { saveUnifiedExam } from "@/lib/allExamsStorage";
+import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
+import { sha256, encryptExamPassword } from "@/lib/examSecurity";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -84,6 +86,7 @@ export default function Teacher() {
   const [allowBack, setAllowBack] = useState(true);
   const [lockMode, setLockMode] = useState<LockMode>(DEFAULT_LOCK);
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
+  const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
   const [saving, setSaving] = useState(false);
 
   const issues = useMemo(() => (exam ? validateExam(exam) : []), [exam]);
@@ -197,6 +200,12 @@ export default function Teacher() {
     if (!exam || !title) return;
     const currentUser = user;
     if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
+
+    if (passwordConfig.requirePassword && !passwordConfig.password.trim()) {
+      toast.error("Vui lòng nhập mật khẩu bài thi trước khi lưu!");
+      return;
+    }
+
     setSaving(true);
 
     // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
@@ -223,6 +232,14 @@ export default function Teacher() {
         original_file_name = originalFile.name;
       }
     }
+
+    // Hash and encrypt exam password if enabled
+    const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
+      ? await sha256(passwordConfig.password.trim())
+      : "";
+    const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
+      ? encryptExamPassword(passwordConfig.password.trim(), "default")
+      : "";
 
     // BƯỚC 1, 2, 3: Lưu đề thi thành công vào Supabase và nhận UUID chính thức
     const examCode = await generateUniqueNumericExamCode();
@@ -273,6 +290,10 @@ export default function Teacher() {
             allow_back: displayMode === "quizizz" ? allowBack : true,
             enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
             min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+            has_password: passwordConfig.requirePassword,
+            require_password: passwordConfig.requirePassword,
+            password_hash: passHash,
+            encrypted_password: encPass,
           } as any,
           open_at: schedule.open_at,
           close_at: schedule.close_at,
@@ -358,6 +379,16 @@ export default function Teacher() {
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,
+      lock_mode: {
+        ...(lockMode || {}),
+        allow_back: displayMode === "quizizz" ? allowBack : true,
+        enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+        min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+        has_password: passwordConfig.requirePassword,
+        require_password: passwordConfig.requirePassword,
+        password_hash: passHash,
+        encrypted_password: encPass,
+      } as any,
     });
 
     setSaving(false);
@@ -711,6 +742,7 @@ export default function Teacher() {
 
             <LockModeSettings value={lockMode} onChange={setLockMode} />
 
+            <ExamPasswordSettings value={passwordConfig} onChange={setPasswordConfig} />
 
             <div className="flex items-center justify-between rounded-xl border border-border/80 bg-card p-4 hover:border-primary/40 transition-colors">
               <div className="space-y-1 pr-4">

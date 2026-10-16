@@ -30,12 +30,15 @@ import {
   AlertCircle,
   RotateCcw,
   Eye,
+  EyeOff,
   UserCheck,
   Lock,
+  KeyRound,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
 import { useExamLock } from "@/hooks/useExamLock";
+import { sha256, decryptExamPassword } from "@/lib/examSecurity";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -236,6 +239,99 @@ export default function Take() {
     (exam as any)?.team_config?.allow_back !== false;
   const showSingleMode = isQuiz || standardViewMode === "single";
   const instantFb = !!exam?.instant_feedback;
+
+  // 1. Kiểm tra yêu cầu mật khẩu bài thi
+  const requiresPassword = useMemo(() => {
+    if (!exam) return false;
+    const lock = (exam as any).lock_mode || {};
+    return !!(lock.has_password || lock.require_password || (exam as any).has_password);
+  }, [exam]);
+
+  const [isPasswordUnlocked, setIsPasswordUnlocked] = useState<boolean>(() => {
+    try {
+      const cleanId = id ? decodeURIComponent(id).trim() : "";
+      if (cleanId && sessionStorage.getItem(`exam_unlocked_${cleanId}`) === "true") {
+        return true;
+      }
+    } catch {}
+    return false;
+  });
+
+  const [inputPassword, setInputPassword] = useState("");
+  const [showInputPassword, setShowInputPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [checkingPassword, setCheckingPassword] = useState(false);
+
+  // Sync session unlock status when exam is loaded
+  useEffect(() => {
+    if (!exam) return;
+    if (!requiresPassword) {
+      setIsPasswordUnlocked(true);
+      return;
+    }
+    try {
+      if (
+        (exam.id && sessionStorage.getItem(`exam_unlocked_${exam.id}`) === "true") ||
+        (exam.code && sessionStorage.getItem(`exam_unlocked_${exam.code}`) === "true") ||
+        (id && sessionStorage.getItem(`exam_unlocked_${decodeURIComponent(id).trim()}`) === "true")
+      ) {
+        setIsPasswordUnlocked(true);
+      }
+    } catch {}
+  }, [exam, requiresPassword, id]);
+
+  const handleVerifyPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!exam) return;
+    const cleanEntered = inputPassword.trim();
+    if (!cleanEntered) {
+      setPasswordError("Vui lòng nhập mật khẩu bài thi");
+      return;
+    }
+
+    setCheckingPassword(true);
+    setPasswordError(null);
+
+    try {
+      const lock = (exam as any).lock_mode || {};
+      const expectedHash = lock.password_hash;
+      const enteredHash = await sha256(cleanEntered);
+
+      let isMatch = false;
+      if (expectedHash && enteredHash.toLowerCase() === String(expectedHash).toLowerCase()) {
+        isMatch = true;
+      } else if (lock.encrypted_password) {
+        const dec1 = decryptExamPassword(lock.encrypted_password, exam.id);
+        const dec2 = decryptExamPassword(lock.encrypted_password, "default");
+        if ((dec1 && dec1.trim() === cleanEntered) || (dec2 && dec2.trim() === cleanEntered)) {
+          isMatch = true;
+        }
+      } else if (lock.password) {
+        if (String(lock.password).trim() === cleanEntered) {
+          isMatch = true;
+        }
+      }
+
+      if (isMatch) {
+        setIsPasswordUnlocked(true);
+        try {
+          if (exam.id) sessionStorage.setItem(`exam_unlocked_${exam.id}`, "true");
+          if (exam.code) sessionStorage.setItem(`exam_unlocked_${exam.code}`, "true");
+          if (id) sessionStorage.setItem(`exam_unlocked_${decodeURIComponent(id).trim()}`, "true");
+        } catch {}
+        toast.success("Mật khẩu chính xác! Đang vào bài thi...");
+      } else {
+        setPasswordError("Mật khẩu không chính xác. Vui lòng thử lại");
+        toast.error("Mật khẩu không chính xác. Vui lòng thử lại");
+      }
+    } catch (err) {
+      console.error("Error verifying password:", err);
+      setPasswordError("Có lỗi xảy ra khi xác thực mật khẩu. Vui lòng thử lại");
+    } finally {
+      setCheckingPassword(false);
+    }
+  };
+
   const storageKey = useMemo(() => (currentExamId && name && klass ? `take:${currentExamId}:${name}:${klass}` : ""), [currentExamId, name, klass]);
   const doneKey = storageKey ? `${storageKey}:done` : "";
 
@@ -487,12 +583,12 @@ export default function Take() {
   }, [location]);
 
   useEffect(() => {
-    if (!started && exam && autoStartRequested) {
-      // Auto-start once exam data is available
+    if (!started && exam && autoStartRequested && (!requiresPassword || isPasswordUnlocked)) {
+      // Auto-start once exam data is available and password is confirmed
       start();
     }
     // eslint-disable-next-line
-  }, [exam, autoStartRequested, started]);
+  }, [exam, autoStartRequested, started, requiresPassword, isPasswordUnlocked]);
 
   const start = async () => {
     if (!exam) return;
@@ -1116,6 +1212,114 @@ export default function Take() {
               <Link to="/student">Quay lại trang học sinh</Link>
             </Button>
           </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // 13.5. MÀN HÌNH NHẬP MẬT KHẨU BÀI THI (KHI ĐỀ THI YÊU CẦU MẬT KHẨU)
+  if (!started && requiresPassword && !isPasswordUnlocked) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
+        <QuizBackground />
+        <Card className="p-6 sm:p-10 max-w-md w-full relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up space-y-6">
+          {/* Header với biểu tượng khóa bảo mật */}
+          <div className="text-center space-y-3">
+            <div className="size-16 rounded-3xl bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 grid place-items-center mx-auto shadow-lg shadow-amber-500/10">
+              <KeyRound className="size-8" />
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+              <Lock className="size-3.5" />
+              <span>BẢO MẬT BÀI THI</span>
+            </div>
+            <h1 className="text-2xl font-black text-foreground tracking-tight">
+              Bài thi yêu cầu mật khẩu
+            </h1>
+            <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
+              Giáo viên đã đặt mật khẩu bảo vệ cho bài thi này. Vui lòng nhập đúng mật khẩu để vào làm bài.
+            </p>
+          </div>
+
+          {/* Hộp tóm tắt thông tin đề thi */}
+          <div className="rounded-2xl border border-border/70 bg-muted/40 p-4 text-xs space-y-2">
+            <div className="font-bold text-foreground text-sm line-clamp-2">
+              {exam.title}
+            </div>
+            <div className="flex items-center gap-3 text-muted-foreground flex-wrap font-medium">
+              <span>⏱ {exam.duration_minutes || 45} phút</span>
+              {exam.teacher_name && <span>• GV: {exam.teacher_name}</span>}
+              {exam.subject_name && <span>• Môn: {exam.subject_name}</span>}
+            </div>
+          </div>
+
+          {/* Form nhập mật khẩu */}
+          <form onSubmit={handleVerifyPassword} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="student-exam-password" className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                <Lock className="size-3.5 text-muted-foreground" />
+                <span>Mật khẩu bài thi <span className="text-rose-500">*</span></span>
+              </Label>
+              <div className="relative">
+                <Input
+                  id="student-exam-password"
+                  type={showInputPassword ? "text" : "password"}
+                  placeholder="Nhập mật khẩu bài thi..."
+                  value={inputPassword}
+                  onChange={(e) => {
+                    setInputPassword(e.target.value);
+                    if (passwordError) setPasswordError(null);
+                  }}
+                  autoFocus
+                  autoComplete="off"
+                  disabled={checkingPassword}
+                  className="h-12 pr-11 font-mono text-base px-4 rounded-xl border-2 tracking-wide bg-background focus-visible:ring-amber-500"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 size-9 rounded-lg text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowInputPassword(!showInputPassword)}
+                  tabIndex={-1}
+                >
+                  {showInputPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </Button>
+              </div>
+            </div>
+
+            {/* Thông báo lỗi nếu mật khẩu sai */}
+            {passwordError && (
+              <div className="rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-500/10 p-3 text-xs text-rose-700 dark:text-rose-300 font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                <AlertTriangle className="size-4 shrink-0 text-rose-500" />
+                <span>{passwordError}</span>
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              disabled={checkingPassword || !inputPassword.trim()}
+              size="lg"
+              className="w-full h-12 rounded-xl text-base font-black bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-lg shadow-amber-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {checkingPassword ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>Đang kiểm tra...</span>
+                </>
+              ) : (
+                <>
+                  <KeyRound className="size-4" />
+                  <span>Vào làm bài</span>
+                </>
+              )}
+            </Button>
+
+            <div className="pt-2 text-center">
+              <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground hover:text-foreground">
+                <Link to="/student">Quay lại trang học sinh</Link>
+              </Button>
+            </div>
+          </form>
         </Card>
       </div>
     );

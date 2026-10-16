@@ -4,6 +4,7 @@ import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } from "./src/lib/sampleExams";
+import verifyExamPasswordHandler from "./api/verify-exam-password";
 
 const app = express();
 const PORT = 3000;
@@ -1075,6 +1076,14 @@ app.post("/api/check-question-answer", async (req, res) => {
     console.error("check-question-answer server error:", err);
     return res.status(500).json({ error: "Lỗi hệ thống khi kiểm tra đáp án" });
   }
+});
+
+// -------------------------------------------------------------
+// POST /api/verify-exam-password
+// Securely verifies exam password without exposing raw password to student
+// -------------------------------------------------------------
+app.post("/api/verify-exam-password", async (req, res) => {
+  return verifyExamPasswordHandler(req, res);
 });
 
 // -------------------------------------------------------------
