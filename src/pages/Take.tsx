@@ -3039,8 +3039,9 @@ export default function Take() {
         <main className="flex-1 w-full max-w-[96vw] 2xl:max-w-[94vw] mx-auto px-2 sm:px-4 py-3 sm:py-5 flex flex-col justify-between relative z-10">
           {renderQuestionCard(q, idx, true)}
 
-          {/* THANH ĐIỀU HƯỚNG CHẾ ĐỘ QUIZIZZ */}
-          <div className="mt-4 sm:mt-6 w-full flex items-center justify-between gap-3 bg-card/90 backdrop-blur p-3 sm:p-4 rounded-3xl border shadow-lg">
+          {/* THANH ĐIỀU HƯỚNG CHẾ ĐỘ QUIZIZZ (CHẾ ĐỘ TỪNG CÂU HỎI) */}
+          <div className="mt-4 sm:mt-6 w-full flex items-center justify-between gap-2 sm:gap-4 bg-card/90 backdrop-blur p-2.5 sm:p-4 rounded-3xl border shadow-lg max-w-full overflow-hidden">
+            {/* VỊ TRÍ 1 (BÊN TRÁI): NÚT CÂU TRƯỚC HOẶC THÔNG BÁO CHẾ ĐỘ MỘT CHIỀU */}
             {allowQuizBack ? (
               <Button
                 type="button"
@@ -3048,67 +3049,96 @@ export default function Take() {
                 size="lg"
                 onClick={goPrev}
                 disabled={idx === 0}
-                className="rounded-2xl font-bold text-xs sm:text-sm px-4 sm:px-6 h-12 sm:h-14 border-2 flex items-center gap-2 hover:bg-muted active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="rounded-2xl font-bold text-xs sm:text-base px-3 sm:px-6 h-12 sm:h-14 border-2 flex items-center justify-center gap-1 sm:gap-2 hover:bg-muted active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
-                <ChevronLeft className="size-5" />
-                <span>CÂU TRƯỚC</span>
+                <ChevronLeft className="size-4 sm:size-5" />
+                <span className="hidden sm:inline">CÂU TRƯỚC</span>
+                <span className="sm:hidden">Câu trước</span>
               </Button>
             ) : (
-              <div className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 font-bold text-xs sm:text-sm shadow-xs select-none">
-                <Lock className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 font-bold text-xs sm:text-sm shadow-xs select-none shrink-0">
+                <Lock className="size-3.5 sm:size-4 shrink-0 text-amber-600 dark:text-amber-400" />
                 <span className="hidden md:inline">Chế độ một chiều:</span>
-                <span>Không quay lại câu trước</span>
+                <span className="hidden sm:inline md:hidden">Một chiều</span>
+                <span className="sm:hidden">Một chiều</span>
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="lg"
-                onClick={() => setNavDrawerOpen(true)}
-                className="rounded-2xl font-bold text-xs sm:text-sm px-3 sm:px-5 h-12 sm:h-14 border-2 flex items-center gap-2"
-              >
-                <LayoutGrid className="size-4 text-primary" />
-                <span>
-                  Danh sách câu (<b className="text-primary">{idx + 1}</b>/{questions.length})
-                </span>
-              </Button>
-            </div>
-
-            <div>
-              {instantFb && !fb ? (
+            {/* VỊ TRÍ 2 (CHÍNH GIỮA - TRƯỚC ĐÂY LÀ "DANH SÁCH CÂU"): NÚT "TRẢ LỜI" HIỂN THỊ RÕ RÀNG, THUẬN TIỆN */}
+            <div className="flex items-center justify-center">
+              {fb ? (
                 <Button
+                  type="button"
+                  disabled
+                  className="rounded-2xl font-black text-xs sm:text-base px-4 sm:px-8 h-12 sm:h-14 bg-muted text-muted-foreground border-2 border-border cursor-not-allowed flex items-center justify-center gap-1.5 opacity-95 select-none shrink-0"
+                >
+                  <CheckCircle2 className="size-4 sm:size-5 text-emerald-600" />
+                  <span>ĐÃ TRẢ LỜI</span>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
                   onClick={() => {
                     if (!isAnswered(q)) {
-                      toast.warning("Vui lòng chọn đáp án trước khi trả lời.");
+                      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
                       return;
                     }
-                    checkAnswer();
+                    if (instantFb) {
+                      checkAnswer();
+                    } else {
+                      toast.success(`Đã ghi nhận câu trả lời cho Câu ${idx + 1}!`);
+                    }
                   }}
-                  size="lg"
                   disabled={checking}
-                  className="bg-gradient-to-r from-primary to-sky-600 text-white font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-primary/25 hover:scale-105 active:scale-95 transition-all"
+                  className="rounded-2xl font-black text-xs sm:text-base px-5 sm:px-9 h-12 sm:h-14 bg-gradient-to-r from-primary to-sky-600 hover:from-primary/95 hover:to-sky-600/95 text-white shadow-lg shadow-primary/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 sm:gap-2 shrink-0 cursor-pointer"
                 >
-                  {checking && <Loader2 className="size-5 mr-2 animate-spin" />}
-                  <span>TRẢ LỜI</span>
+                  {checking ? (
+                    <>
+                      <Loader2 className="size-4 sm:size-5 animate-spin" />
+                      <span>Đang kiểm tra...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="size-4 sm:size-5" />
+                      <span>TRẢ LỜI</span>
+                    </>
+                  )}
                 </Button>
-              ) : idx >= questions.length - 1 ? (
+              )}
+            </div>
+
+            {/* VỊ TRÍ 3 (BÊN PHẢI): NÚT CÂU TIẾP THEO HOẶC NỘP BÀI (KHÔNG CÒN NÚT TRẢ LỜI BỊ TRÙNG LẶP) */}
+            <div>
+              {idx >= questions.length - 1 ? (
                 <Button
+                  type="button"
                   onClick={() => setConfirmOpen(true)}
                   size="lg"
-                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-destructive/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-xs sm:text-base px-4 sm:px-8 h-12 sm:h-14 rounded-2xl shadow-lg shadow-destructive/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 sm:gap-2 shrink-0 cursor-pointer"
                 >
-                  <Send className="size-5" />
+                  <Send className="size-4 sm:size-5" />
                   <span>NỘP BÀI</span>
                 </Button>
               ) : (
                 <Button
-                  onClick={goNext}
+                  type="button"
+                  onClick={() => {
+                    if (instantFb && !fb) {
+                      if (!isAnswered(q)) {
+                        toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi chuyển câu!");
+                        return;
+                      }
+                      toast.info("Vui lòng bấm nút 'TRẢ LỜI' ở giữa để xem kết quả trước khi sang câu tiếp theo!");
+                      return;
+                    }
+                    goNext();
+                  }}
                   size="lg"
-                  className="bg-gradient-to-r from-primary to-sky-600 text-white font-black text-base sm:text-xl px-6 sm:px-10 h-12 sm:h-14 rounded-2xl shadow-xl shadow-primary/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
+                  className="bg-gradient-to-r from-primary to-sky-600 hover:from-primary/95 hover:to-sky-600/95 text-white font-black text-xs sm:text-base px-3.5 sm:px-7 h-12 sm:h-14 rounded-2xl shadow-lg shadow-primary/25 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1 sm:gap-2 shrink-0 cursor-pointer"
                 >
-                  <span>CÂU TIẾP THEO</span>
-                  <ChevronRight className="size-5" />
+                  <span className="hidden sm:inline">CÂU TIẾP THEO</span>
+                  <span className="sm:hidden">Câu sau</span>
+                  <ChevronRight className="size-4 sm:size-5" />
                 </Button>
               )}
             </div>
