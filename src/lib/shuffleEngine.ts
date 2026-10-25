@@ -40,10 +40,10 @@ const TF_KEYS: ("a" | "b" | "c" | "d")[] = ["a", "b", "c", "d"];
 export function shuffleMC(q: MCQuestion, opts: ShuffleOptions): MCQuestion {
   const shouldShuffleOptions = opts.shuffle_o_p1 ?? opts.shuffleAnswers ?? false;
   if (!shouldShuffleOptions) return { ...q };
-  const shuffled = shuffleArray(q.options);
   const oldCorrect = q.options.find((o) => o.key === q.answer);
+  const shuffled = shuffleArray(q.options);
   const newOptions = shuffled.map((o, i) => ({ key: MC_KEYS[i], text: o.text }));
-  const newAnswerIdx = shuffled.findIndex((o) => o.text === oldCorrect?.text && o.key === oldCorrect?.key);
+  const newAnswerIdx = shuffled.findIndex((o) => o === oldCorrect || (o.text === oldCorrect?.text && o.key === oldCorrect?.key));
   return { ...q, options: newOptions, answer: MC_KEYS[newAnswerIdx >= 0 ? newAnswerIdx : 0] };
 }
 
@@ -108,8 +108,8 @@ export function estimateMaxVariants(base: ParsedExam, opts: ShuffleOptions): num
 }
 
 function variantSignature(v: ParsedExam): string {
-  const p1 = v.partI.map((q) => q.id + ":" + q.options.map((o) => o.text.slice(0, 8)).join("|")).join(";");
-  const p2 = v.partII.map((q) => q.id + ":" + q.items.map((it) => it.key + it.text.slice(0, 5)).join("|")).join(";");
+  const p1 = v.partI.map((q) => q.id + ":" + q.options.map((o) => o.text).join("|")).join(";");
+  const p2 = v.partII.map((q) => q.id + ":" + q.items.map((it) => it.key + ":" + it.text).join("|")).join(";");
   const p3 = v.partIII.map((q) => q.id).join(";");
   return p1 + "##" + p2 + "##" + p3;
 }

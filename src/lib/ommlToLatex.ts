@@ -121,11 +121,57 @@ function convert(n: Element): string {
       if (dPr) {
         const begChr = findChild(dPr, "begChr");
         const endChr = findChild(dPr, "endChr");
-        if (begChr) beg = begChr.getAttributeNS(M_NS, "val") || begChr.getAttribute("m:val") || "(";
-        if (endChr) end = endChr.getAttributeNS(M_NS, "val") || endChr.getAttribute("m:val") || ")";
+        if (begChr) beg = begChr.getAttributeNS(M_NS, "val") ?? begChr.getAttribute("m:val") ?? "(";
+        if (endChr) end = endChr.getAttributeNS(M_NS, "val") ?? endChr.getAttribute("m:val") ?? ")";
       }
-      const inner = children(n).filter((c) => localName(c) === "e").map((e) => children(e).map(convert).join("")).join(", ");
-      return `\\left${beg === "{" ? "\\{" : beg}${inner}\\right${end === "}" ? "\\}" : end}`;
+      const eElements = children(n).filter((c) => localName(c) === "e");
+      // System of equations with left brace and no right brace:
+      if (beg === "{" && (!end || end === "")) {
+        const lines = eElements.map((e) => children(e).map(convert).join(""));
+        return `\\begin{cases}${lines.join(" \\\\ ")}\\end{cases}`;
+      }
+      const inner = eElements.map((e) => children(e).map(convert).join("")).join(", ");
+      const leftDelim = beg === "{" ? "\\{" : beg === "" ? "." : beg;
+      const rightDelim = end === "}" ? "\\}" : end === "" ? "." : end;
+      return `\\left${leftDelim}${inner}\\right${rightDelim}`;
+    }
+    case "eqArr": {
+      // Equation array / system
+      const eElements = children(n).filter((c) => localName(c) === "e");
+      const lines = eElements.map((e) => children(e).map(convert).join(""));
+      return `\\begin{matrix}${lines.join(" \\\\ ")}\\end{matrix}`;
+    }
+    case "borderBox": {
+      const e = findChild(n, "e");
+      return `\\boxed{${e ? children(e).map(convert).join("") : ""}}`;
+    }
+    case "box": {
+      const e = findChild(n, "e");
+      return e ? children(e).map(convert).join("") : "";
+    }
+    case "groupChr": {
+      const groupChrPr = findChild(n, "groupChrPr");
+      let pos = "bot";
+      let chr = "⏟";
+      if (groupChrPr) {
+        const posEl = findChild(groupChrPr, "pos");
+        const chrEl = findChild(groupChrPr, "chr");
+        if (posEl) pos = posEl.getAttributeNS(M_NS, "val") || posEl.getAttribute("m:val") || "bot";
+        if (chrEl) chr = chrEl.getAttributeNS(M_NS, "val") || chrEl.getAttribute("m:val") || "⏟";
+      }
+      const e = findChild(n, "e");
+      const ebody = e ? children(e).map(convert).join("") : "";
+      if (pos === "top" || chr === "⏞") return `\\overbrace{${ebody}}`;
+      return `\\underbrace{${ebody}}`;
+    }
+    case "sPre": {
+      const e = findChild(n, "e");
+      const sub = findChild(n, "sub");
+      const sup = findChild(n, "sup");
+      const subStr = sub ? `_{${children(sub).map(convert).join("")}}` : "";
+      const supStr = sup ? `^{${children(sup).map(convert).join("")}}` : "";
+      const eStr = e ? children(e).map(convert).join("") : "";
+      return `{}${subStr}${supStr}{${eStr}}`;
     }
     case "m": {
       // matrix

@@ -1,7 +1,7 @@
 import {
   Document, Packer, Paragraph, TextRun, PageBreak, Table, TableRow, TableCell,
   WidthType, AlignmentType, BorderStyle, Footer, PageNumber, TabStopType,
-  ShadingType, HeightRule, VerticalAlign,
+  ShadingType, HeightRule, VerticalAlign, Math as DMath, MathRun, ImageRun,
 } from "docx";
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
@@ -55,6 +55,179 @@ function P(children: any[], opts: { alignment?: any; tabStops?: any[]; spacingBe
   });
 }
 
+function parseDataUrl(dataUrl: string): { data: Uint8Array; type: "png" | "jpg" | "gif" | "svg" } | null {
+  if (!dataUrl || !dataUrl.startsWith("data:image/")) return null;
+  const match = dataUrl.match(/^data:image\/(png|jpe?g|gif|svg\+xml);base64,(.+)$/i);
+  if (!match) return null;
+  const rawType = match[1].toLowerCase();
+  const type = rawType.includes("jp") ? "jpg" : rawType.includes("png") ? "png" : rawType.includes("gif") ? "gif" : "png";
+  try {
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return { data: bytes, type };
+  } catch {
+    return null;
+  }
+}
+
+const SENT_OPEN = "\u27E6";
+const SENT_CLOSE = "\u27E7";
+
+type RichTok =
+  | { kind: "text"; text: string }
+  | { kind: "math"; latex: string }
+  | { kind: "img"; src: string }
+  | { kind: "tbl"; rows: string[][] }
+  | { kind: "code"; content: string };
+
+function tokenizeRich(s: string): RichTok[] {
+  const out: RichTok[] = [];
+  let i = 0;
+  while (i < s.length) {
+    const open = s.indexOf(SENT_OPEN, i);
+    if (open === -1) {
+      if (i < s.length) out.push({ kind: "text", text: s.slice(i) });
+      break;
+    }
+    if (open > i) out.push({ kind: "text", text: s.slice(i, open) });
+    const close = s.indexOf(SENT_CLOSE, open);
+    if (close === -1) {
+      out.push({ kind: "text", text: s.slice(open) });
+      break;
+    }
+    const payload = s.slice(open + 1, close);
+    if (payload.startsWith("MATH:")) {
+      out.push({ kind: "math", latex: payload.slice(5) });
+    } else if (payload.startsWith("IMG:")) {
+      out.push({ kind: "img", src: decodeURIComponent(payload.slice(4)) });
+    } else if (payload.startsWith("TBL:")) {
+      try {
+        out.push({ kind: "tbl", rows: JSON.parse(decodeURIComponent(payload.slice(4))) });
+      } catch {
+        out.push({ kind: "text", text: "" });
+      }
+    } else if (payload.startsWith("CODE:")) {
+      const rest = payload.slice(5);
+      const sep = rest.indexOf(":");
+      out.push({ kind: "code", content: sep === -1 ? "" : decodeURIComponent(rest.slice(sep + 1)) });
+    } else {
+      out.push({ kind: "text", text: s.slice(open, close + 1) });
+    }
+    i = close + 1;
+  }
+  return out;
+}
+
+function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean } = {}): any[] {
+  const toks = tokenizeRich(s || "");
+  const runs: any[] = [];
+
+  for (const tok of toks) {
+    if (tok.kind === "text") {
+      const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<![\\\w])\$([^\$\n]+?)\$(?![\w])/g;
+      let last = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(tok.text)) !== null) {
+        if (m.index > last) {
+          runs.push(T(tok.text.slice(last, m.index), baseOpts));
+        }
+        const latex = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim();
+        if (latex) {
+          runs.push(new DMath({ children: [new MathRun(latex)] }));
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < tok.text.length) {
+        runs.push(T(tok.text.slice(last), baseOpts));
+      }
+    } else if (tok.kind === "math") {
+      runs.push(new DMath({ children: [new MathRun(tok.latex)] }));
+    } else if (tok.kind === "img") {
+      const parsed = parseDataUrl(tok.src);
+      if (parsed) {
+        runs.push(new ImageRun({
+          data: parsed.data,
+          transformation: { width: 280, height: 180 },
+          type: parsed.type,
+        }));
+      }
+    } else if (tok.kind === "code") {
+      runs.push(new TextRun({ text: tok.content, font: "Consolas", size: 20, color: "1E293B" }));
+    }
+  }
+  return runs;
+}
+
+function renderRichBlock(prefixRuns: any[], richText: string): (Paragraph | Table)[] {
+  const toks = tokenizeRich(richText || "");
+  const out: (Paragraph | Table)[] = [];
+  let currentRuns: any[] = [...prefixRuns];
+
+  const flushRuns = () => {
+    if (currentRuns.length > 0) {
+      out.push(P(currentRuns));
+      currentRuns = [];
+    }
+  };
+
+  for (const tok of toks) {
+    if (tok.kind === "tbl") {
+      flushRuns();
+      if (tok.rows && tok.rows.length > 0) {
+        const numCols = Math.max(...tok.rows.map((r) => r.length), 1);
+        const colW = Math.floor(CONTENT_W / numCols);
+        const border = { style: BorderStyle.SINGLE, size: 4, color: "999999" };
+        const borders = { top: border, bottom: border, left: border, right: border };
+        const table = new Table({
+          width: { size: CONTENT_W, type: WidthType.DXA },
+          columnWidths: Array(numCols).fill(colW),
+          rows: tok.rows.map((row) =>
+            new TableRow({
+              children: row.map((cell) =>
+                new TableCell({
+                  borders,
+                  margins: { top: 60, bottom: 60, left: 80, right: 80 },
+                  width: { size: colW, type: WidthType.DXA },
+                  children: [P(parseRichRuns(cell))],
+                })
+              ),
+            })
+          ),
+        });
+        out.push(table);
+      }
+    } else if (tok.kind === "img") {
+      const parsed = parseDataUrl(tok.src);
+      if (parsed) {
+        flushRuns();
+        out.push(P([new ImageRun({
+          data: parsed.data,
+          transformation: { width: 320, height: 200 },
+          type: parsed.type,
+        })], { alignment: AlignmentType.CENTER, spacingBefore: 120, spacingAfter: 120 }));
+      }
+    } else if (tok.kind === "math") {
+      currentRuns.push(new DMath({ children: [new MathRun(tok.latex)] }));
+    } else if (tok.kind === "code") {
+      currentRuns.push(new TextRun({ text: tok.content, font: "Consolas", size: 20, color: "1E293B" }));
+    } else if (tok.kind === "text") {
+      const lines = tok.text.split("\n");
+      for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+        if (lIdx > 0) flushRuns();
+        const line = lines[lIdx];
+        if (line) {
+          const runs = parseRichRuns(line);
+          currentRuns.push(...runs);
+        }
+      }
+    }
+  }
+
+  flushRuns();
+  return out;
+}
+
 // ---------- Header (two columns) ----------
 function buildHeader(meta: ExamMeta, pageCount: number): Table {
   const leftCellChildren: Paragraph[] = [
@@ -90,20 +263,22 @@ function buildHeader(meta: ExamMeta, pageCount: number): Table {
 
 // ---------- Options layout ----------
 function decideOptionLayout(options: { key: string; text: string }[]): 4 | 2 | 1 {
-  // Approx: 12pt TNR ~ 110 DXA per char. Content width 10206 DXA ~ 92 chars per row.
+  const hasComplex = options.some((o) =>
+    /[\u27E6](IMG|TBL|CODE):/.test(o.text) || o.text.includes("\n")
+  );
+  if (hasComplex) return 1;
+
   const lens = options.map((o) => plain(o.text).length + 3); // "A. " prefix
   const max = Math.max(...lens);
   const total = lens.reduce((a, b) => a + b, 0);
-  // 4/row: each cell width ≈ 22 chars; require max ≤ 20 and total ≤ 82
   if (max <= 20 && total <= 82) return 4;
-  // 2/row: each cell ≈ 45 chars
   if (max <= 44) return 2;
   return 1;
 }
 
-function optionParagraphs(options: { key: string; text: string }[]): Paragraph[] {
+function optionParagraphs(options: { key: string; text: string }[]): (Paragraph | Table)[] {
   const layout = decideOptionLayout(options);
-  const rows: Paragraph[] = [];
+  const rows: (Paragraph | Table)[] = [];
   if (layout === 4) {
     const step = Math.floor(CONTENT_W / 4);
     const tabStops = [
@@ -111,26 +286,29 @@ function optionParagraphs(options: { key: string; text: string }[]): Paragraph[]
       { type: TabStopType.LEFT, position: step * 2 },
       { type: TabStopType.LEFT, position: step * 3 },
     ];
-    const runs: TextRun[] = [];
+    const runs: any[] = [];
     options.forEach((o, i) => {
       if (i > 0) runs.push(T("\t"));
-      runs.push(T(`${o.key}. ${plain(o.text)}`));
+      runs.push(T(`${o.key}. `, { bold: true }));
+      runs.push(...parseRichRuns(o.text));
     });
     rows.push(P(runs, { tabStops }));
   } else if (layout === 2) {
     const step = Math.floor(CONTENT_W / 2);
     const tabStops = [{ type: TabStopType.LEFT, position: step }];
     for (let i = 0; i < options.length; i += 2) {
-      const runs: TextRun[] = [T(`${options[i].key}. ${plain(options[i].text)}`)];
+      const runs: any[] = [T(`${options[i].key}. `, { bold: true }), ...parseRichRuns(options[i].text)];
       if (options[i + 1]) {
         runs.push(T("\t"));
-        runs.push(T(`${options[i + 1].key}. ${plain(options[i + 1].text)}`));
+        runs.push(T(`${options[i + 1].key}. `, { bold: true }));
+        runs.push(...parseRichRuns(options[i + 1].text));
       }
       rows.push(P(runs, { tabStops }));
     }
   } else {
     options.forEach((o) => {
-      rows.push(P([T(`${o.key}. ${plain(o.text)}`)]));
+      const blocks = renderRichBlock([T(`${o.key}. `, { bold: true })], o.text);
+      blocks.forEach((b) => rows.push(b));
     });
   }
   return rows;
@@ -157,15 +335,14 @@ function buildExamChildren(variant: ParsedExam, code: string, meta: ExamMeta, op
   out.push(P([T("")], {}));
 
   let n = 0;
-  const emitQuestionHead = (num: number, text: string) =>
-    P([T(`${meta.questionPrefix || "Câu"} ${num}: `, { bold: true }), T(plain(text))]);
 
   if (variant.partI.length) {
     out.push(P([T("PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn.", { bold: true })]));
     if (opts.renumberPerPart) n = 0;
     variant.partI.forEach((q) => {
       n++;
-      out.push(emitQuestionHead(n, q.text));
+      const qBlocks = renderRichBlock([T(`${meta.questionPrefix || "Câu"} ${n}: `, { bold: true })], q.text);
+      qBlocks.forEach((b) => out.push(b));
       optionParagraphs(q.options).forEach((p) => out.push(p));
     });
   }
@@ -176,20 +353,23 @@ function buildExamChildren(variant: ParsedExam, code: string, meta: ExamMeta, op
     if (opts.renumberPerPart) n = 0;
     variant.partII.forEach((q) => {
       n++;
-      out.push(emitQuestionHead(n, q.text));
+      const qBlocks = renderRichBlock([T(`${meta.questionPrefix || "Câu"} ${n}: `, { bold: true })], q.text);
+      qBlocks.forEach((b) => out.push(b));
       q.items.forEach((it) => {
-        out.push(P([T(`${it.key}) ${plain(it.text)}`)]));
+        const itBlocks = renderRichBlock([T(`${it.key}) `, { bold: true })], it.text);
+        itBlocks.forEach((b) => out.push(b));
       });
     });
   }
 
   if (variant.partIII.length) {
     out.push(P([T("")], {}));
-    out.push(P([T("PHẦN III. TỰ LUẬN.", { bold: true })]));
+    out.push(P([T("PHẦN III. TỰ LUẬN / TRẢ LỜI NGẮN.", { bold: true })]));
     if (opts.renumberPerPart) n = 0;
     variant.partIII.forEach((q) => {
       n++;
-      out.push(emitQuestionHead(n, q.text));
+      const qBlocks = renderRichBlock([T(`${meta.questionPrefix || "Câu"} ${n}: `, { bold: true })], q.text);
+      qBlocks.forEach((b) => out.push(b));
     });
   }
 

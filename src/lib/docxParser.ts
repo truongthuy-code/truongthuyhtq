@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { ommlElementToLatex } from "./ommlToLatex";
 import { buildOleMathMap, type OleMap } from "./mathtypeOle";
+import { convertMetafileToDisplayable } from "./metafileToImage";
 
 
 export const QUESTION_LEVELS = ["NB", "TH", "VD", "VDC"] as const;
@@ -53,10 +54,22 @@ export type SAQuestion = {
 
 export type ParsedQuestion = MCQuestion | TFQuestion | SAQuestion;
 
+export type DocxObjectAudit = {
+  index: number;
+  type: "DrawingML" | "VML" | "OLE" | "OMML" | "Shape" | "Table" | "External";
+  rId?: string;
+  target?: string;
+  format?: string;
+  status: "DETECTED" | "CONVERTED" | "FALLBACK" | "NOT_DETECTED";
+  location?: string;
+  reason?: string;
+};
+
 export type ParsedExam = {
   partI: MCQuestion[];
   partII: TFQuestion[];
   partIII: SAQuestion[];
+  auditLog?: DocxObjectAudit[];
 };
 
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -235,141 +248,395 @@ function mimeFromExt(name: string): string {
   if (ext === "bmp") return "image/bmp";
   if (ext === "webp") return "image/webp";
   if (ext === "svg") return "image/svg+xml";
+  if (ext === "wmf") return "image/wmf";
+  if (ext === "emf") return "image/emf";
+  if (ext === "tif" || ext === "tiff") return "image/tiff";
   return "application/octet-stream";
 }
 
-async function loadImageMap(zip: JSZip): Promise<ImageMap> {
+/**
+ * Resolves a relationship Target to an actual file inside the DOCX zip.
+ * Handles:
+ * - Direct paths: "media/image1.png", "/word/media/image1.png"
+ * - Relative paths with "..": "../media/image1.png"
+ * - Percent-encoded URIs: "media/image%201.png", "media/h%C3%ACnh%201.jpg"
+ * - Case-insensitive and basename lookups in word/media/
+ */
+function resolveZipFile(zip: JSZip, target: string): { file: JSZip.JSZipObject | null; path: string } {
+  const cleanTarget = target.trim();
+  const decodedTarget = decodeURIComponent(cleanTarget);
+
+  const candidates: string[] = [
+    cleanTarget,
+    cleanTarget.replace(/^\//, ""),
+    "word/" + cleanTarget.replace(/^\.?\//, ""),
+    cleanTarget.replace(/^\.\.\//, ""),
+    "word/" + cleanTarget.replace(/^\.\.\//, ""),
+    "word/media/" + cleanTarget.split("/").pop(),
+    decodedTarget,
+    decodedTarget.replace(/^\//, ""),
+    "word/" + decodedTarget.replace(/^\.?\//, ""),
+    decodedTarget.replace(/^\.\.\//, ""),
+    "word/" + decodedTarget.replace(/^\.\.\//, ""),
+    "word/media/" + decodedTarget.split("/").pop(),
+  ];
+
+  for (const c of candidates) {
+    const f = zip.file(c);
+    if (f) return { file: f, path: c };
+  }
+
+  // Search by exact basename in all zip entries
+  const base = decodedTarget.split("/").pop()?.toLowerCase();
+  if (base) {
+    for (const zipPath of Object.keys(zip.files)) {
+      const lower = zipPath.toLowerCase();
+      if (lower.endsWith("/" + base) || lower === base) {
+        const f = zip.file(zipPath);
+        if (f) return { file: f, path: zipPath };
+      }
+    }
+  }
+
+  return { file: null, path: cleanTarget };
+}
+
+async function loadImageMap(zip: JSZip, auditLog?: DocxObjectAudit[]): Promise<ImageMap> {
   const map: ImageMap = new Map();
   const relsFile = zip.file("word/_rels/document.xml.rels");
   if (!relsFile) return map;
   const relsXml = await relsFile.async("string");
   const relsDoc = new DOMParser().parseFromString(relsXml, "application/xml");
   const rels = relsDoc.getElementsByTagName("Relationship");
+
   for (let i = 0; i < rels.length; i++) {
     const rel = rels[i];
-    const type = rel.getAttribute("Type") || "";
-    if (!/\/image$/.test(type)) continue;
+    const type = (rel.getAttribute("Type") || "").trim();
+    const target = (rel.getAttribute("Target") || "").trim();
     const id = rel.getAttribute("Id") || "";
-    let target = rel.getAttribute("Target") || "";
-    if (!target) continue;
-    if (!target.startsWith("/")) target = "word/" + target.replace(/^\.?\//, "");
-    else target = target.replace(/^\//, "");
-    const f = zip.file(target);
-    if (!f) continue;
+    if (!id || !target) continue;
+
+    const isImageRel = /\/(image|picture|hdphoto)$/i.test(type) || /media\//i.test(target);
+    if (!isImageRel) continue;
+
+    // 1. External images
+    if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("data:")) {
+      map.set(id, target);
+      auditLog?.push({
+        index: i,
+        type: "External",
+        rId: id,
+        target,
+        status: "DETECTED",
+      });
+      continue;
+    }
+
+    // 2. Embedded package media
+    const resolved = resolveZipFile(zip, target);
+    if (!resolved.file) {
+      auditLog?.push({
+        index: i,
+        type: "DrawingML",
+        rId: id,
+        target,
+        status: "NOT_DETECTED",
+        reason: "File not found in DOCX package: " + target,
+      });
+      continue;
+    }
+
     try {
-      const b64 = await f.async("base64");
-      map.set(id, `data:${mimeFromExt(target)};base64,${b64}`);
-    } catch {/* ignore */}
+      const ext = resolved.path.toLowerCase().split(".").pop() || "";
+      // Handle vector EMF / WMF
+      if (ext === "emf" || ext === "wmf") {
+        const u8 = new Uint8Array(await resolved.file.async("uint8array"));
+        const displayable = convertMetafileToDisplayable(u8, resolved.path);
+        if (displayable) {
+          map.set(id, displayable);
+          auditLog?.push({
+            index: i,
+            type: "DrawingML",
+            rId: id,
+            target,
+            format: ext,
+            status: "CONVERTED",
+            reason: "Converted vector metafile to displayable image/SVG",
+          });
+          continue;
+        }
+      }
+
+      const b64 = await resolved.file.async("base64");
+      const mime = mimeFromExt(resolved.path);
+      map.set(id, `data:${mime};base64,${b64}`);
+      auditLog?.push({
+        index: i,
+        type: "DrawingML",
+        rId: id,
+        target,
+        format: ext,
+        status: "DETECTED",
+      });
+    } catch (e) {
+      auditLog?.push({
+        index: i,
+        type: "DrawingML",
+        rId: id,
+        target,
+        status: "NOT_DETECTED",
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
+
   return map;
 }
 
 function extractImageRefs(el: Element, images: ImageMap): string[] {
   // Walk the subtree in document order so images keep their original order.
-  // Rules:
-  //  - inside <mc:AlternateContent>, only <mc:Choice> is read (the
-  //    <mc:Fallback> VML copy would duplicate the very same picture);
-  //  - inside a blipFill, only the first <a:blip> is read (an SVG picture
-  //    carries both the raster blip and an <asvg:svgBlip> of the same image);
-  //  - VML <v:imagedata> is read when no drawing covered it already.
   const out: string[] = [];
   const pushRef = (id: string) => {
     if (!id) return;
     const src = images.get(id);
-    if (src) out.push(src);
+    if (src && !out.includes(src)) out.push(src);
   };
-  const firstBlipRef = (node: Element): string => {
-    const blips = node.getElementsByTagNameNS(A_NS, "blip");
-    if (!blips.length) return "";
-    return blips[0].getAttributeNS(R_NS, "embed") || blips[0].getAttribute("r:embed") || "";
+
+  const getBlipId = (node: Element): string => {
+    return (
+      node.getAttributeNS(R_NS, "embed") ||
+      node.getAttribute("r:embed") ||
+      node.getAttribute("embed") ||
+      node.getAttributeNS(R_NS, "link") ||
+      node.getAttribute("r:link") ||
+      node.getAttribute("link") ||
+      node.getAttribute("id") ||
+      node.getAttributeNS(R_NS, "id") ||
+      ""
+    );
   };
+
   const walk = (node: Element) => {
     for (let i = 0; i < node.childNodes.length; i++) {
       const c = node.childNodes[i];
       if (c.nodeType !== 1) continue;
       const child = c as Element;
       const ln = child.localName || child.nodeName.replace(/^.*:/, "");
+
       if (ln === "AlternateContent") {
-        const choices = child.getElementsByTagName("*");
-        let choice: Element | null = null;
-        for (let k = 0; k < choices.length; k++) {
-          const n = choices[k];
-          const nl = n.localName || n.nodeName.replace(/^.*:/, "");
-          if (nl === "Choice") { choice = n as Element; break; }
+        const allChildren = Array.from(child.childNodes).filter((n) => n.nodeType === 1) as Element[];
+        const choice = allChildren.find(
+          (n) => (n.localName || n.nodeName.replace(/^.*:/, "")) === "Choice",
+        );
+        const fallback = allChildren.find(
+          (n) => (n.localName || n.nodeName.replace(/^.*:/, "")) === "Fallback",
+        );
+        let found = false;
+        if (choice) {
+          const before = out.length;
+          walk(choice);
+          if (out.length > before) found = true;
         }
-        if (choice) walk(choice);
-        else walk(child); // only a Fallback exists
+        if (!found && fallback) {
+          walk(fallback);
+        }
         continue;
       }
-      if (ln === "blipFill") {
-        pushRef(firstBlipRef(child));
+
+      if (ln === "blip" || ln === "svgBlip") {
+        pushRef(getBlipId(child));
         continue;
       }
+
       if (ln === "imagedata") {
-        pushRef(child.getAttributeNS(R_NS, "id") || child.getAttribute("r:id") || "");
+        const id =
+          child.getAttributeNS(R_NS, "id") ||
+          child.getAttribute("r:id") ||
+          child.getAttribute("o:relid") ||
+          child.getAttribute("r:href") ||
+          child.getAttribute("o:href") ||
+          child.getAttribute("id") ||
+          child.getAttribute("src") ||
+          "";
+        pushRef(id);
         continue;
       }
-      if (ln === "blip") {
-        // A blip not wrapped in a blipFill (rare) — still keep the image.
-        pushRef(child.getAttributeNS(R_NS, "embed") || child.getAttribute("r:embed") || "");
-        continue;
+
+      if (ln === "fill") {
+        const id =
+          child.getAttributeNS(R_NS, "id") ||
+          child.getAttribute("r:id") ||
+          child.getAttribute("o:relid") ||
+          child.getAttribute("r:href") ||
+          child.getAttribute("id") ||
+          "";
+        if (id) pushRef(id);
       }
+
       walk(child);
     }
   };
+
   walk(el);
   return out;
 }
 
-
 function oleRefOf(el: Element): { rId: string; progId: string } | null {
-  const objs = el.getElementsByTagNameNS(W_NS, "object");
-  if (!objs.length) return null;
-  const all = objs[0].getElementsByTagName("*");
+  const lnEl = el.localName || el.nodeName.replace(/^.*:/, "");
+  let objEl: Element | null = null;
+  if (lnEl === "object") {
+    objEl = el;
+  } else {
+    const objs = el.getElementsByTagNameNS(W_NS, "object");
+    if (objs.length > 0) {
+      objEl = objs[0];
+    } else {
+      const all = el.getElementsByTagName("*");
+      for (let i = 0; i < all.length; i++) {
+        const ln = all[i].localName || all[i].nodeName.replace(/^.*:/, "");
+        if (ln === "object") {
+          objEl = all[i];
+          break;
+        }
+      }
+    }
+  }
+  if (!objEl) return null;
+
+  const all = [objEl, ...Array.from(objEl.getElementsByTagName("*"))];
   for (let i = 0; i < all.length; i++) {
     const n = all[i];
     const ln = n.localName || n.nodeName.replace(/^.*:/, "");
-    if (ln !== "OLEObject") continue;
-    const rId = n.getAttributeNS(R_NS, "id") || n.getAttribute("r:id") || "";
-    const progId = n.getAttribute("ProgID") || n.getAttribute("progid") || "";
-    return { rId, progId };
+    if (ln === "OLEObject" || ln === "oleObject") {
+      const rId = n.getAttributeNS(R_NS, "id") || n.getAttribute("r:id") || n.getAttribute("id") || "";
+      const progId = n.getAttribute("ProgID") || n.getAttribute("progid") || "";
+      if (rId || progId) return { rId, progId };
+    }
   }
-  return { rId: "", progId: "" };
+  return null;
 }
 
 function parseParagraph(p: Element, images: ImageMap, ole?: OleMap): Para {
   const toks: Tok[] = [];
   let hasAnyMark = false;
-  const walk = (parent: Element) => {
+
+  const handleOle = (node: Element): boolean => {
+    const oleRef = oleRefOf(node);
+    if (!oleRef) return false;
+    const imgs = extractImageRefs(node, images);
+    const entry = oleRef.rId ? ole?.get(oleRef.rId) : undefined;
+    const latex = entry?.formula?.latex || null;
+    if (latex) {
+      toks.push({ kind: "math", latex });
+      return true;
+    }
+    if (imgs.length > 0) {
+      for (const src of imgs) toks.push({ kind: "img", src });
+      return true;
+    }
+    if (entry?.isMathType) {
+      toks.push({ kind: "obj" });
+      return true;
+    }
+    return false;
+  };
+
+  const processAlternateContent = (acNode: Element, props?: RunProps) => {
+    const allChildren = Array.from(acNode.childNodes).filter((n) => n.nodeType === 1) as Element[];
+    const choice = allChildren.find(
+      (n) => (n.localName || n.nodeName.replace(/^.*:/, "")) === "Choice",
+    );
+    const fallback = allChildren.find(
+      (n) => (n.localName || n.nodeName.replace(/^.*:/, "")) === "Fallback",
+    );
+
+    // 1. MathType OLE in Choice or Fallback
+    if (choice && handleOle(choice)) return;
+    if (fallback && handleOle(fallback)) return;
+
+    // 2. OMML in Choice or Fallback
+    const checkOMML = (target: Element): boolean => {
+      const maths = Array.from(target.getElementsByTagNameNS(M_NS, "oMath"));
+      if (maths.length > 0) {
+        for (const m of maths) {
+          const latex = ommlElementToLatex(m);
+          if (latex) toks.push({ kind: "math", latex });
+        }
+        return true;
+      }
+      return false;
+    };
+    if (choice && checkOMML(choice)) return;
+    if (fallback && checkOMML(fallback)) return;
+
+    // 3. Images (Choice first, then Fallback)
+    if (choice) {
+      const imgs = extractImageRefs(choice, images);
+      if (imgs.length > 0) {
+        for (const src of imgs) toks.push({ kind: "img", src });
+        return;
+      }
+    }
+    if (fallback) {
+      const imgs = extractImageRefs(fallback, images);
+      if (imgs.length > 0) {
+        for (const src of imgs) toks.push({ kind: "img", src });
+        return;
+      }
+    }
+
+    // 4. Default walk Choice if available, else Fallback
+    if (choice) walk(choice, props);
+    else if (fallback) walk(fallback, props);
+  };
+
+  const walk = (parent: Element, parentProps?: RunProps) => {
     for (let j = 0; j < parent.childNodes.length; j++) {
       const node = parent.childNodes[j];
       if (node.nodeType !== 1) continue;
       const el = node as Element;
       const ln = el.localName || el.nodeName.replace(/^.*:/, "");
       const ns = el.namespaceURI;
+
       if (ns === W_NS && ln === "r") {
         const rPr = el.getElementsByTagNameNS(W_NS, "rPr")[0];
         const props = readRunProps(rPr);
-        const t = runText(el);
-        const oleRef = oleRefOf(el);
-        const imgs = extractImageRefs(el, images);
-        if (oleRef) {
-          // MathType 6/7 (and Equation 3.0) OLE → structured LaTeX, in place.
-          const entry = oleRef.rId ? ole?.get(oleRef.rId) : undefined;
-          const latex = entry?.formula?.latex || null;
-          if (latex) {
-            toks.push({ kind: "math", latex });
-          } else if (imgs.length) {
+        if (props.red || props.underline) hasAnyMark = true;
+
+        // Traverse children of run in exact document order
+        for (let k = 0; k < el.childNodes.length; k++) {
+          const rc = el.childNodes[k];
+          if (rc.nodeType !== 1) continue;
+          const rEl = rc as Element;
+          const rLn = rEl.localName || rEl.nodeName.replace(/^.*:/, "");
+          const rNs = rEl.namespaceURI;
+
+          if (rLn === "t") {
+            const txt = rEl.textContent || "";
+            if (txt) toks.push({ kind: "text", text: txt, props });
+          } else if (rLn === "tab") {
+            toks.push({ kind: "text", text: "\t", props });
+          } else if (rLn === "br") {
+            toks.push({ kind: "text", text: "\n", props });
+          } else if (rLn === "drawing" || rLn === "pict") {
+            const imgs = extractImageRefs(rEl, images);
             for (const src of imgs) toks.push({ kind: "img", src });
-          } else {
-            toks.push({ kind: "obj" });
+          } else if (rLn === "object") {
+            if (!handleOle(rEl)) {
+              const imgs = extractImageRefs(rEl, images);
+              for (const src of imgs) toks.push({ kind: "img", src });
+            }
+          } else if (rLn === "AlternateContent") {
+            processAlternateContent(rEl, props);
+          } else if (rNs === M_NS && (rLn === "oMath" || rLn === "oMathPara")) {
+            const maths = rLn === "oMathPara"
+              ? Array.from(rEl.getElementsByTagNameNS(M_NS, "oMath"))
+              : [rEl];
+            for (const m of maths) {
+              const latex = ommlElementToLatex(m as Element);
+              if (latex) toks.push({ kind: "math", latex });
+            }
           }
-        } else {
-          for (const src of imgs) toks.push({ kind: "img", src });
-        }
-        if (t) {
-          toks.push({ kind: "text", text: t, props });
-          if (props.red || props.underline) hasAnyMark = true;
         }
       } else if (ns === M_NS && (ln === "oMath" || ln === "oMathPara")) {
         const maths = ln === "oMathPara"
@@ -379,15 +646,33 @@ function parseParagraph(p: Element, images: ImageMap, ole?: OleMap): Para {
           const latex = ommlElementToLatex(m as Element);
           if (latex) toks.push({ kind: "math", latex });
         }
-      } else if (ln === "drawing" || ln === "pict" || ln === "AlternateContent" || ln === "object") {
-        // Picture placed directly inside the paragraph (not wrapped in a run).
-        for (const src of extractImageRefs(el, images)) toks.push({ kind: "img", src });
-      } else if (ns === W_NS && (ln === "hyperlink" || ln === "smartTag" || ln === "sdt" || ln === "sdtContent" || ln === "ins")) {
-
-        walk(el);
+      } else if (ln === "object") {
+        if (!handleOle(el)) {
+          const imgs = extractImageRefs(el, images);
+          for (const src of imgs) toks.push({ kind: "img", src });
+        }
+      } else if (ln === "drawing" || ln === "pict") {
+        for (const src of extractImageRefs(el, images)) {
+          toks.push({ kind: "img", src });
+        }
+      } else if (ln === "AlternateContent") {
+        processAlternateContent(el, parentProps);
+      } else if (
+        ns === W_NS &&
+        (ln === "hyperlink" ||
+          ln === "smartTag" ||
+          ln === "sdt" ||
+          ln === "sdtContent" ||
+          ln === "ins" ||
+          ln === "fldSimple")
+      ) {
+        walk(el, parentProps);
+      } else if (el.childNodes.length > 0 && ns === W_NS) {
+        walk(el, parentProps);
       }
     }
   };
+
   walk(p);
   return { toks, plain: tokensToPlain(toks), rich: tokensToRich(toks), hasAnyMark };
 }
@@ -462,6 +747,8 @@ function detectPart(line: string): 1 | 2 | 3 | 0 {
   if (t.includes("<g3>")) return 1;
   if (t.includes("<g2>")) return 2;
   if (t.includes("<g1>")) return 3;
+  // If line begins with "Câu \d+", it is a question stem, not a section header!
+  if (/^\s*C[âa]u\s*\d+/i.test(line)) return 0;
   const u = line.toUpperCase().replace(/\s+/g, " ").trim();
   if (/PH[ẦA]N\s*(III|3)\b/.test(u)) return 3;
   if (/PH[ẦA]N\s*(II|2)\b/.test(u)) return 2;
@@ -603,6 +890,59 @@ export function detectOptionMarkerAtParaStart(p: Para): OptionMarkerMatch | null
     order,
     level,
   };
+}
+
+export type SplittedOption = {
+  key: string;
+  toks: Tok[];
+  marked: boolean;
+};
+
+/**
+ * Splits sequential options if multiple options are formatted in a single paragraph
+ * (e.g. "A. x=1 \t B. x=2 \t C. x=3 \t D. x=4" or 2 options per line).
+ * Preserves all math tokens, images, tables, and formats intact for each option.
+ */
+export function splitOptionTokens(firstKey: string, initialToks: Tok[], isPartI: boolean): SplittedOption[] {
+  const options: SplittedOption[] = [{ key: firstKey, toks: [], marked: false }];
+  const keys = isPartI ? ["A", "B", "C", "D"] : ["a", "b", "c", "d"];
+  const startIdx = keys.findIndex((k) => k.toLowerCase() === firstKey.toLowerCase());
+  let expectedNextIdx = startIdx >= 0 ? startIdx + 1 : -1;
+
+  if (expectedNextIdx < 0 || expectedNextIdx >= keys.length) {
+    options[0].toks = [...initialToks];
+    return options;
+  }
+
+  const toks = [...initialToks];
+  for (let i = 0; i < toks.length; i++) {
+    const tok = toks[i];
+    if (tok.kind === "text" && expectedNextIdx < keys.length) {
+      const nextKey = keys[expectedNextIdx];
+      // Marker must be preceded by tab, newline, or 2+ spaces (or start of text token, or following a math/img token)
+      const isAfterNonText = i > 0 && toks[i - 1].kind !== "text";
+      const prefixPattern = isAfterNonText ? "(?:[\\t\\u00A0]|[ ]*|^)" : "(?:[\\t\\u00A0]|[ ]{2,}|^)";
+      const re = new RegExp(prefixPattern + "[ \\t\\u00A0]*(\\*?)[ \\t\\u00A0]*(?:\\[[^\\]]*\\][ \\t\\u00A0]*)?(" + nextKey + ")[.)](?=[ \\t\\u00A0]|$|[^\\w\\d\\p{L}])", "u");
+      const m = tok.text.match(re);
+      if (m && m.index !== undefined) {
+        const beforeText = tok.text.slice(0, m.index);
+        if (beforeText) {
+          options[options.length - 1].toks.push({ ...tok, text: beforeText });
+        }
+        const markerLen = m[0].length;
+        const afterText = tok.text.slice(m.index + markerLen).replace(/^[ \t\u00A0]+/, "");
+        const isMarked = m[1] === "*" || tok.props.red || tok.props.underline;
+        options.push({ key: nextKey, toks: [], marked: !!isMarked });
+        expectedNextIdx++;
+        if (afterText) {
+          toks.splice(i + 1, 0, { ...tok, text: afterText });
+        }
+        continue;
+      }
+    }
+    options[options.length - 1].toks.push(tok);
+  }
+  return options;
 }
 
 // Strip the first `n` plain characters from a token array (leaves inline
@@ -1464,13 +1804,17 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
         }
       }
       qBuf.mode = "options";
-      qBuf.options.push({
-        key: optMatch.key,
-        toks: optMatch.remainingTokens,
-        marked: optMatch.isMarked,
-        level: optMatch.level,
-        order: optMatch.order,
-      });
+      const splitted = splitOptionTokens(optMatch.key, optMatch.remainingTokens, qBuf.part === 1);
+      for (let sIdx = 0; sIdx < splitted.length; sIdx++) {
+        const item = splitted[sIdx];
+        qBuf.options.push({
+          key: item.key,
+          toks: item.toks,
+          marked: sIdx === 0 ? optMatch.isMarked : item.marked,
+          level: sIdx === 0 ? optMatch.level : undefined,
+          order: sIdx === 0 ? optMatch.order : undefined,
+        });
+      }
     } else {
       // Paragraph does not start with an option marker
       if (qBuf.mode === "options" && qBuf.options.length > 0) {

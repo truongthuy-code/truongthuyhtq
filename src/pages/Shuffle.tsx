@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Shuffle as ShuffleIcon, FileDown, Eye, Loader2 } from "lucide-react";
 import { parseDocx, stripRich, type ParsedExam } from "@/lib/docxParser";
+import RichText from "@/components/RichText";
 import { generateVariants, estimateMaxVariants } from "@/lib/shuffleEngine";
 import { generateExamCodes } from "@/lib/examCodeGenerator";
 import { exportExams, exportAnswerKey, exportExamsAndKey, type ExamMeta, type ExportOptions } from "@/lib/examExporter";
@@ -114,6 +115,12 @@ export default function Shuffle() {
       setUploadedFile(f);
       setBaseExam(parsed);
       setBaseTitle(f.name.replace(/\.docx$/i, "").replace(/[^\w\-]+/g, "_").slice(0, 40));
+      const total = parsed.partI.length + parsed.partII.length + parsed.partIII.length;
+      if (total === 0) {
+        toast.warning("Không nhận diện được câu hỏi nào trong file. Vui lòng kiểm tra định dạng.");
+      } else {
+        toast.success(`Đã nhận dạng thành công ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
+      }
     } catch (e: any) {
       if (readId !== fileReadSeq.current) return;
       toast.error("Không đọc được file: " + e.message);
@@ -145,6 +152,32 @@ export default function Shuffle() {
   const stats = useMemo(() => {
     if (!baseExam) return null;
     return { p1: baseExam.partI.length, p2: baseExam.partII.length, p3: baseExam.partIII.length };
+  }, [baseExam]);
+
+  const richStats = useMemo(() => {
+    if (!baseExam) return null;
+    const countMath = (s?: string | null) => ((s || "").match(/\u27E6MATH:/g) || []).length;
+    const countImg = (s?: string | null) => ((s || "").match(/\u27E6IMG:/g) || []).length;
+    const countTbl = (s?: string | null) => ((s || "").match(/\u27E6TBL:/g) || []).length;
+    let math = 0, img = 0, tbl = 0;
+    const checkStr = (s?: string | null) => {
+      math += countMath(s);
+      img += countImg(s);
+      tbl += countTbl(s);
+    };
+    baseExam.partI.forEach((q) => {
+      checkStr(q.text);
+      q.options.forEach((o) => checkStr(o.text));
+    });
+    baseExam.partII.forEach((q) => {
+      checkStr(q.text);
+      q.items.forEach((it) => checkStr(it.text));
+    });
+    baseExam.partIII.forEach((q) => {
+      checkStr(q.text);
+      checkStr(q.answer);
+    });
+    return { math, img, tbl };
   }, [baseExam]);
 
   const maxVariants = useMemo(() => (baseExam ? estimateMaxVariants(baseExam, {
@@ -269,9 +302,30 @@ export default function Shuffle() {
               </div>
             )}
             {stats && (
-              <div className="text-xs text-muted-foreground">
-                Phần I: <b>{stats.p1}</b> · Phần II: <b>{stats.p2}</b> · Phần III: <b>{stats.p3}</b>
-                {baseExam && <> · Tối đa <b>{Number.isFinite(maxVariants) ? maxVariants.toLocaleString() : "∞"}</b> hoán vị</>}
+              <div className="space-y-1.5 pt-1 border-t text-xs">
+                <div className="text-muted-foreground">
+                  Phần I: <b>{stats.p1}</b> câu · Phần II: <b>{stats.p2}</b> câu · Phần III: <b>{stats.p3}</b> câu
+                  {baseExam && <> · Tối đa <b>{Number.isFinite(maxVariants) ? maxVariants.toLocaleString() : "∞"}</b> hoán vị</>}
+                </div>
+                {richStats && (richStats.math > 0 || richStats.img > 0 || richStats.tbl > 0) && (
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {richStats.math > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                        ∑ {richStats.math} công thức toán
+                      </span>
+                    )}
+                    {richStats.img > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        🖼 {richStats.img} hình ảnh
+                      </span>
+                    )}
+                    {richStats.tbl > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                        ▦ {richStats.tbl} bảng biểu
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </Card>
@@ -457,28 +511,48 @@ export default function Shuffle() {
                   return (
                     <>
                       {preview.partI.length > 0 && <>
-                        <p className="font-bold mt-3">PHẦN I. Trắc nghiệm nhiều lựa chọn</p>
+                        <p className="font-bold mt-3 text-primary">PHẦN I. Trắc nghiệm nhiều lựa chọn</p>
                         {preview.partI.map((q, i) => (
-                          <div key={q.id} className="mt-2">
-                            <p><b>{meta.questionPrefix} {num(0, i)}.</b> {stripRich(q.text)}</p>
-                            {q.options.map((o) => <p key={o.key} className="pl-4">{o.key}. {stripRich(o.text)}</p>)}
+                          <div key={q.id || i} className="mt-2.5">
+                            <div className="font-medium">
+                              <b>{meta.questionPrefix} {num(0, i)}.</b> <RichText text={q.text} />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 mt-1 pl-4">
+                              {q.options.map((o) => (
+                                <div key={o.key} className="flex items-start gap-1">
+                                  <span className="font-bold shrink-0">{o.key}.</span>
+                                  <RichText text={o.text} />
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         ))}
                       </>}
                       {preview.partII.length > 0 && <>
-                        <p className="font-bold mt-3">PHẦN II. Đúng/Sai</p>
+                        <p className="font-bold mt-4 text-primary">PHẦN II. Đúng/Sai</p>
                         {preview.partII.map((q, i) => (
-                          <div key={q.id} className="mt-2">
-                            <p><b>{meta.questionPrefix} {num(1, i)}.</b> {stripRich(q.text)}</p>
-                            {q.items.map((it) => <p key={it.key} className="pl-4">{it.key}) {stripRich(it.text)}</p>)}
+                          <div key={q.id || i} className="mt-2.5">
+                            <div className="font-medium">
+                              <b>{meta.questionPrefix} {num(1, i)}.</b> <RichText text={q.text} />
+                            </div>
+                            <div className="space-y-1 mt-1 pl-4">
+                              {q.items.map((it) => (
+                                <div key={it.key} className="flex items-start gap-1">
+                                  <span className="font-bold shrink-0">{it.key})</span>
+                                  <RichText text={it.text} />
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         ))}
                       </>}
                       {preview.partIII.length > 0 && <>
-                        <p className="font-bold mt-3">PHẦN III. Trả lời ngắn</p>
+                        <p className="font-bold mt-4 text-primary">PHẦN III. Trả lời ngắn</p>
                         {preview.partIII.map((q, i) => (
-                          <div key={q.id} className="mt-2">
-                            <p><b>{meta.questionPrefix} {num(2, i)}.</b> {stripRich(q.text)}</p>
+                          <div key={q.id || i} className="mt-2.5">
+                            <div className="font-medium">
+                              <b>{meta.questionPrefix} {num(2, i)}.</b> <RichText text={q.text} />
+                            </div>
                           </div>
                         ))}
                       </>}

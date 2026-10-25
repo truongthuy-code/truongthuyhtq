@@ -1674,15 +1674,33 @@ export default function Take() {
 
     // 4. Gọi API server kiểm tra đáp án (sử dụng quyền hệ thống truy vấn Supabase chính xác)
     try {
+      const resolvedExamId =
+        (isUuid(exam?.id) ? exam.id : "") ||
+        (isUuid(currentExamId) ? currentExamId : "") ||
+        exam?.id ||
+        currentExamId ||
+        id;
+      const resolvedExamCode =
+        exam?.code ||
+        (exam?.team_config as any)?.primary_code ||
+        (!isUuid(id) ? id : "");
+
       const response = await fetch("/api/check-question-answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          examId: currentExamId,
-          examCode: exam?.code || (exam?.team_config as any)?.primary_code,
+          examId: resolvedExamId,
+          examCode: resolvedExamCode,
           questionId: targetQ.id,
           answer: ansValue,
-          fallbackQuestion: targetQ,
+          fallbackQuestion: {
+            id: targetQ.id,
+            text: targetQ.text,
+            type: targetQ.type,
+            _part: targetQ._part,
+            options: targetQ.options,
+            items: targetQ.items,
+          },
         }),
       });
 
@@ -1700,15 +1718,18 @@ export default function Take() {
 
     // 5. Dự phòng qua Supabase RPC
     try {
-      const { data, error } = await supabase.rpc("check_question_answer", {
-        p_exam_id: currentExamId,
-        p_question_id: targetQ.id,
-        p_answer: ansValue as any,
-      } as any);
+      const targetRpcExamId = (isUuid(exam?.id) ? exam.id : "") || (isUuid(currentExamId) ? currentExamId : "");
+      if (targetRpcExamId) {
+        const { data, error } = await supabase.rpc("check_question_answer", {
+          p_exam_id: targetRpcExamId,
+          p_question_id: targetQ.id,
+          p_answer: ansValue as any,
+        } as any);
 
-      if (!error && data) {
-        commitFeedback(data);
-        return;
+        if (!error && data) {
+          commitFeedback(data);
+          return;
+        }
       }
     } catch (e) {
       console.warn("RPC check error:", e);
@@ -1716,7 +1737,7 @@ export default function Take() {
 
     setChecking(false);
     setCheckingQId(null);
-    toast.error("Không thể kiểm tra đáp án cho câu hỏi này. Vui lòng thử lại!");
+    toast.error("Không thể hiển thị đáp án cho câu hỏi này. Vui lòng thử lại!");
   };
 
   const checkAnswer = async () => {
@@ -2616,11 +2637,14 @@ export default function Take() {
                     <span className="font-black text-emerald-600">
                       {(() => {
                         const order = optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || [];
-                        const pos = order.indexOf(qFb.answer);
-                        const letter = String.fromCharCode(65 + (pos < 0 ? 0 : pos));
-                        const optObj = currentQ.options?.find(
-                          (o: any) => String(o.key).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
+                        const pos = order.findIndex(
+                          (k: string) => String(k).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
                         );
+                        const letter = String.fromCharCode(65 + (pos < 0 ? 0 : pos));
+                        const optObj =
+                          currentQ.options?.find(
+                            (o: any) => String(o.key).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
+                          ) || (pos >= 0 ? currentQ.options?.[pos] : null);
                         return (
                           <>
                             <b>{letter}.</b> {optObj ? <RichText text={optObj.text} /> : qFb.answer}

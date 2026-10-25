@@ -173,4 +173,106 @@ describe("Shuffle Engine & Exam Generation", () => {
     expect(variant.partIII[0].id).toBe(sampleExam.partIII[0].id);
     expect(variant.partIII[0].text).toBe(sampleExam.partIII[0].text);
   });
+
+  it("bảo toàn nguyên vẹn công thức MathType/OMML khi xáo câu hỏi và xáo phương án", () => {
+    const SENT_OPEN = "\u27E6";
+    const SENT_CLOSE = "\u27E7";
+    const math1 = `${SENT_OPEN}MATH:y=\\frac{x^2+1}{x-1}${SENT_CLOSE}`;
+    const mathOptA = `${SENT_OPEN}MATH:x=1${SENT_CLOSE}`;
+    const mathOptB = `${SENT_OPEN}MATH:x=-1${SENT_CLOSE}`;
+    const mathOptC = `${SENT_OPEN}MATH:x=\\pm\\sqrt{2}${SENT_CLOSE}`;
+    const mathOptD = `${SENT_OPEN}MATH:x\\in\\mathbb{R}${SENT_CLOSE}`;
+
+    const mathExam: ParsedExam = {
+      partI: [
+        {
+          id: "qm1",
+          text: `Cho hàm số ${math1}. Khảo sát tiệm cận:`,
+          options: [
+            { key: "A", text: mathOptA },
+            { key: "B", text: mathOptB },
+            { key: "C", text: mathOptC },
+            { key: "D", text: mathOptD },
+          ],
+          answer: "C",
+        },
+      ],
+      partII: [
+        {
+          id: "qm2",
+          text: `Cho phương trình ${SENT_OPEN}MATH:\\log_2(x-1)=3${SENT_CLOSE}:`,
+          items: [
+            { key: "a", text: `Nghiệm ${SENT_OPEN}MATH:x=9${SENT_CLOSE}`, correct: true },
+            { key: "b", text: `Nghiệm ${SENT_OPEN}MATH:x=7${SENT_CLOSE}`, correct: false },
+            { key: "c", text: `Tập xác định ${SENT_OPEN}MATH:D=(1;+\\infty)${SENT_CLOSE}`, correct: true },
+            { key: "d", text: `Có 2 nghiệm`, correct: false },
+          ],
+        },
+      ],
+      partIII: [
+        {
+          id: "qm3",
+          text: `Tính tích phân ${SENT_OPEN}MATH:I=\\int_0^1 x e^x dx${SENT_CLOSE}`,
+          answer: "1",
+        },
+      ],
+    };
+
+    // Run 10 times with shuffling enabled
+    for (let i = 0; i < 10; i++) {
+      const variants = generateVariants(mathExam, 1, {
+        shuffleQuestions: true,
+        shuffleAnswers: true,
+      });
+      const v = variants[0];
+
+      // Question 1 stem still contains math1
+      expect(v.partI[0].text).toContain(math1);
+
+      // All 4 options still contain their formulas
+      const optTexts = v.partI[0].options.map((o) => o.text);
+      expect(optTexts).toContain(mathOptA);
+      expect(optTexts).toContain(mathOptB);
+      expect(optTexts).toContain(mathOptC);
+      expect(optTexts).toContain(mathOptD);
+
+      // The correct answer option is the one with mathOptC
+      const correctOpt = v.partI[0].options.find((o) => o.key === v.partI[0].answer);
+      expect(correctOpt).toBeDefined();
+      expect(correctOpt!.text).toBe(mathOptC);
+
+      // Part II items retain their formulas and correct boolean
+      const itA = v.partII[0].items.find((it) => it.text.includes("x=9"));
+      expect(itA).toBeDefined();
+      expect(itA!.correct).toBe(true);
+
+      const itB = v.partII[0].items.find((it) => it.text.includes("x=7"));
+      expect(itB).toBeDefined();
+      expect(itB!.correct).toBe(false);
+    }
+  });
+
+  it("xuất file Word đề thi và đáp án chứa công thức toán mà không bị lỗi", async () => {
+    const SENT_OPEN = "\u27E6";
+    const SENT_CLOSE = "\u27E7";
+    const mathExam: ParsedExam = {
+      partI: [
+        {
+          id: "q1",
+          text: `Cho hàm số ${SENT_OPEN}MATH:y=\\frac{x+1}{x-1}${SENT_CLOSE}.`,
+          options: [
+            { key: "A", text: `${SENT_OPEN}MATH:x=1${SENT_CLOSE}` },
+            { key: "B", text: `${SENT_OPEN}MATH:x=2${SENT_CLOSE}` },
+            { key: "C", text: `${SENT_OPEN}MATH:x=3${SENT_CLOSE}` },
+            { key: "D", text: `${SENT_OPEN}MATH:x=4${SENT_CLOSE}` },
+          ],
+          answer: "A",
+        },
+      ],
+      partII: [],
+      partIII: [],
+    };
+    const keyBlob = await buildAnswerKeyBlob([mathExam], ["701"]);
+    expect(keyBlob.size).toBeGreaterThan(0);
+  });
 });

@@ -42,7 +42,7 @@ export type OleMap = Map<string, OleEntry>;
  *  - "MathType 6.0 Equation" / "MathType 7.0 Equation"
  *  - "Equation.3" (Microsoft Equation 3.0) also stores MTEF → handled too
  */
-const MATHTYPE_PROGID = /(^|\W)(mathtype\s*[0-9.]*\s*equation|equation\.dsmt\d*|dsmt\d+|equation\.3|equation)(\W|$)/i;
+const MATHTYPE_PROGID = /(^|\W)(mathtype|equation|dsmt|word\.equation)(\W|$)/i;
 
 export function isMathTypeProgId(progId: string): boolean {
   if (!progId) return false;
@@ -113,18 +113,19 @@ export async function buildOleMathMap(
   for (const rel of oleRels) {
     const path = normalizeTarget(rel.target);
     const progId = progIdByRid.get(rel.id) || "";
-    const mathType = isMathTypeProgId(progId);
+    let mathType = isMathTypeProgId(progId);
     const entry: OleEntry = { rId: rel.id, path, progId, isMathType: mathType, formula: null };
     map.set(rel.id, entry);
     done++;
     onProgress?.(done, oleRels.length);
 
-    if (!mathType) continue;
     const f = zip.file(path);
     if (!f) {
-      failed++;
-      console.warn(`${DEBUG_PREFIX} MathType OLE missing in package\nObject: ${path}\nConversion: failed`);
-      entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+      if (mathType) {
+        failed++;
+        console.warn(`${DEBUG_PREFIX} MathType OLE missing in package\nObject: ${path}\nConversion: failed`);
+        entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+      }
       continue;
     }
     try {
@@ -132,11 +133,16 @@ export async function buildOleMathMap(
       const streams = readCfbStreams(bytes);
       const eqn = streams.get("Equation Native");
       if (!eqn) {
-        failed++;
-        console.warn(`${DEBUG_PREFIX}\nDetected OLE object\nType: ${progId}\nObject: ${path}\nConversion: failed\nFallback: image\nReason: no "Equation Native" stream`);
-        entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+        if (mathType) {
+          failed++;
+          console.warn(`${DEBUG_PREFIX}\nDetected OLE object\nType: ${progId}\nObject: ${path}\nConversion: failed\nFallback: image\nReason: no "Equation Native" stream`);
+          entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+        }
         continue;
       }
+      // Found Equation Native stream -> definitely MathType / Equation 3.0!
+      mathType = true;
+      entry.isMathType = true;
       const res = equationNativeToLatex(eqn);
       const version = progIdVersion(progId, res.application, res.productVersion);
       if (res.latex) {
@@ -148,9 +154,11 @@ export async function buildOleMathMap(
         entry.formula = { type: "formula", source: "MathType", version, latex: null, conversionStatus: "fallback" };
       }
     } catch (e) {
-      failed++;
-      console.warn(`${DEBUG_PREFIX}\nDetected OLE object\nType: ${progId}\nObject: ${path}\nConversion: failed\nFallback: image\nReason: ${e instanceof Error ? e.message : String(e)}`);
-      entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+      if (mathType) {
+        failed++;
+        console.warn(`${DEBUG_PREFIX}\nDetected OLE object\nType: ${progId}\nObject: ${path}\nConversion: failed\nFallback: image\nReason: ${e instanceof Error ? e.message : String(e)}`);
+        entry.formula = { type: "formula", source: "MathType", version: progIdVersion(progId, null, null), latex: null, conversionStatus: "fallback" };
+      }
     }
   }
 
