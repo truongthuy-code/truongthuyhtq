@@ -32,6 +32,23 @@ function tokenizePlain(s: string): Token[] {
   return out;
 }
 
+function sanitizeSafeHtml(html: string): string {
+  return html.replace(/<(\/?[a-zA-Z0-9]+)([^>]*)>/g, (_match, tag, attrs) => {
+    const t = tag.toLowerCase();
+    if (["b", "strong", "i", "em", "u", "s", "strike", "del", "sub", "sup", "mark", "br"].includes(t)) {
+      return `<${tag}>`;
+    }
+    if (t === "span") {
+      const colorMatch = attrs.match(/style=["']color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']/i);
+      if (colorMatch) {
+        return `<span ${colorMatch[0]}>`;
+      }
+      return "<span>";
+    }
+    return "";
+  });
+}
+
 function tokenize(s: string): Token[] {
   const out: Token[] = [];
   let i = 0;
@@ -72,7 +89,34 @@ function tokenize(s: string): Token[] {
     }
     i = close + 1;
   }
-  return out;
+
+  // Merge consecutive or newline-separated code blocks into a single block
+  const merged: Token[] = [];
+  for (let j = 0; j < out.length; j++) {
+    const cur = out[j];
+    const prev = merged[merged.length - 1];
+
+    if (cur.kind === "code") {
+      if (prev && prev.kind === "code") {
+        const lang = prev.lang && prev.lang !== "plaintext" ? prev.lang : cur.lang;
+        prev.lang = lang;
+        prev.content = prev.content + "\n" + cur.content;
+        continue;
+      }
+    } else if (cur.kind === "text" && /^\s*$/.test(cur.value) && cur.value.includes("\n")) {
+      const next = out[j + 1];
+      if (prev && prev.kind === "code" && next && next.kind === "code") {
+        const lang = prev.lang && prev.lang !== "plaintext" ? prev.lang : next.lang;
+        prev.lang = lang;
+        prev.content = prev.content + cur.value + next.content;
+        j++; // skip next
+        continue;
+      }
+    }
+    merged.push(cur);
+  }
+
+  return merged;
 }
 
 export default function RichText({ text, className }: { text: string; className?: string }) {
@@ -84,6 +128,15 @@ export default function RichText({ text, className }: { text: string; className?
       <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
         {tokens.map((t, idx) => {
           if (t.kind === "text") {
+            if (/<(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span)[\s>]/i.test(t.value)) {
+              return (
+                <span
+                  key={idx}
+                  className="whitespace-pre-wrap inline text-[inherit]"
+                  dangerouslySetInnerHTML={{ __html: sanitizeSafeHtml(t.value) }}
+                />
+              );
+            }
             return <span key={idx} className="whitespace-pre-wrap">{t.value}</span>;
           }
           if (t.kind === "math") {

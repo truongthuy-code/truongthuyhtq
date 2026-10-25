@@ -92,6 +92,11 @@ const encTbl = (rows: string[][]) =>
 export function stripRich(s: string): string {
   return s
     .replace(new RegExp(`${SENT_OPEN}[^${SENT_CLOSE}]*${SENT_CLOSE}`, "g"), " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -116,45 +121,131 @@ const COLOR_RED = (hex: string) => {
   return false;
 };
 
-const MONO_FONTS = ["consolas", "courier new", "courier", "menlo", "monaco", "lucida console", "source code pro", "fira code", "jetbrains mono"];
+const MONO_FONTS = [
+  "consolas", "courier new", "courier", "menlo", "monaco", "lucida console",
+  "source code pro", "fira code", "jetbrains mono", "sf mono", "roboto mono",
+  "inconsolata", "dejavu sans mono", "cascadia code", "cascadia mono", "ubuntu mono",
+  "oxygen mono", "liberation mono",
+];
 const isMonoFont = (n: string) => !!n && MONO_FONTS.some((f) => n.toLowerCase().includes(f));
 
 function detectLang(code: string): string {
   const t = code.toLowerCase();
-  if (/<\/?[a-z][a-z0-9]*[\s>]/.test(t)) return "html";
-  if (/\bselect\b.*\bfrom\b|\binsert into\b|\bupdate\b.*\bset\b|\bcreate table\b/i.test(code)) return "sql";
-  if (/\b(def|import|print|class|elif|self|lambda)\b/.test(code)) return "python";
-  if (/\b(function|const|let|var|=>)\b/.test(code)) return "javascript";
+  if (/<\/?(?:html|head|body|div|span|p|a|table|tr|td|script|style|ul|ol|li)[>\s]/i.test(t)) return "html";
+  if (/\b(?:select\b.*\bfrom|insert\s+into|update\b.*\bset|create\s+table|delete\s+from|alter\s+table)\b/i.test(t)) return "sql";
+  if (/#include\s*<|\b(?:int\s+main|std::|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\()/i.test(code)) return "cpp";
+  if (/\b(?:program\s+\w+|begin\b.*\bend[.;]|writeln|readln)\b/i.test(t)) return "pascal";
+  if (/\b(?:def\s+\w+|import\s+\w+|print\s*\(|class\s+\w+|elif\b|self\b|lambda\b|range\s*\(|len\s*\(|__init__)\b/i.test(code)) return "python";
+  if (/\b(?:console\.log|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|=>)\b/i.test(code)) return "javascript";
+  if (/(?:^|\n)\s*(?:if|for|while)\s+.*:\s*(?:\n|$)/i.test(code)) return "python";
   return "plaintext";
 }
 
-type RunProps = { red: boolean; underline: boolean; mono: boolean; bold: boolean };
+type RunProps = {
+  red: boolean;
+  underline: boolean;
+  mono: boolean;
+  bold: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  sub?: boolean;
+  sup?: boolean;
+  color?: string;
+  highlight?: string;
+};
 
 function readRunProps(rPr: Element | undefined): RunProps {
   let red = false, underline = false, mono = false, bold = false;
-  if (!rPr) return { red, underline, mono, bold };
+  let italic = false, strike = false, sub = false, sup = false;
+  let color: string | undefined;
+  let highlight: string | undefined;
+
+  if (!rPr) return { red, underline, mono, bold, italic, strike, sub, sup };
+
+  // Color
   const colorEl = rPr.getElementsByTagNameNS(W_NS, "color")[0];
   if (colorEl) {
     const v = colorEl.getAttributeNS(W_NS, "val") || colorEl.getAttribute("w:val") || "";
-    if (COLOR_RED(v)) red = true;
+    if (COLOR_RED(v)) {
+      red = true;
+    } else if (v && v.toLowerCase() !== "auto") {
+      color = v.startsWith("#") ? v : `#${v}`;
+    }
   }
+
+  // Underline
   const uEl = rPr.getElementsByTagNameNS(W_NS, "u")[0];
   if (uEl) {
     const v = uEl.getAttributeNS(W_NS, "val") || uEl.getAttribute("w:val") || "single";
     if (v && v !== "none") underline = true;
   }
+
+  // Monospace font
   const fontsEl = rPr.getElementsByTagNameNS(W_NS, "rFonts")[0];
   if (fontsEl) {
     const ascii = fontsEl.getAttributeNS(W_NS, "ascii") || fontsEl.getAttribute("w:ascii") || "";
     const hAnsi = fontsEl.getAttributeNS(W_NS, "hAnsi") || fontsEl.getAttribute("w:hAnsi") || "";
     if (isMonoFont(ascii) || isMonoFont(hAnsi)) mono = true;
   }
-  const bEl = rPr.getElementsByTagNameNS(W_NS, "b")[0];
+
+  // Bold
+  const bEl = rPr.getElementsByTagNameNS(W_NS, "b")[0] || rPr.getElementsByTagNameNS(W_NS, "bCs")[0];
   if (bEl) {
     const v = bEl.getAttributeNS(W_NS, "val") || bEl.getAttribute("w:val");
     if (v === null || v === undefined || (v !== "0" && v !== "false")) bold = true;
   }
-  return { red, underline, mono, bold };
+
+  // Italic
+  const iEl = rPr.getElementsByTagNameNS(W_NS, "i")[0] || rPr.getElementsByTagNameNS(W_NS, "iCs")[0];
+  if (iEl) {
+    const v = iEl.getAttributeNS(W_NS, "val") || iEl.getAttribute("w:val");
+    if (v === null || v === undefined || (v !== "0" && v !== "false")) italic = true;
+  }
+
+  // Strike
+  const sEl = rPr.getElementsByTagNameNS(W_NS, "strike")[0] || rPr.getElementsByTagNameNS(W_NS, "dstrike")[0];
+  if (sEl) {
+    const v = sEl.getAttributeNS(W_NS, "val") || sEl.getAttribute("w:val");
+    if (v === null || v === undefined || (v !== "0" && v !== "false")) strike = true;
+  }
+
+  // Subscript / Superscript
+  const vertEl = rPr.getElementsByTagNameNS(W_NS, "vertAlign")[0];
+  if (vertEl) {
+    const v = (vertEl.getAttributeNS(W_NS, "val") || vertEl.getAttribute("w:val") || "").toLowerCase();
+    if (v === "subscript") sub = true;
+    else if (v === "superscript") sup = true;
+  }
+
+  // Highlight
+  const hlEl = rPr.getElementsByTagNameNS(W_NS, "highlight")[0];
+  if (hlEl) {
+    const v = hlEl.getAttributeNS(W_NS, "val") || hlEl.getAttribute("w:val") || "";
+    if (v && v.toLowerCase() !== "none") highlight = v;
+  }
+
+  return { red, underline, mono, bold, italic, strike, sub, sup, color, highlight };
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatTextWithProps(text: string, props: RunProps): string {
+  if (!text) return "";
+  let res = escapeHtml(text);
+  if (props.sub) res = `<sub>${res}</sub>`;
+  if (props.sup) res = `<sup>${res}</sup>`;
+  if (props.bold) res = `<b>${res}</b>`;
+  if (props.italic) res = `<i>${res}</i>`;
+  if (props.underline) res = `<u>${res}</u>`;
+  if (props.strike) res = `<s>${res}</s>`;
+  if (props.highlight) res = `<mark>${res}</mark>`;
+  if (props.color) res = `<span style="color:${props.color}">${res}</span>`;
+  return res;
 }
 
 function runText(r: Element): string {
@@ -202,8 +293,25 @@ function tokensToRich(toks: Tok[]): string {
   };
   for (const t of toks) {
     if (t.kind === "text") {
-      if (t.props.mono) codeBuf += t.text;
-      else { flushCode(); out += t.text; }
+      if (t.props.mono) {
+        codeBuf += t.text;
+      } else {
+        flushCode();
+        const hasStyle =
+          t.props.bold ||
+          t.props.italic ||
+          t.props.underline ||
+          t.props.strike ||
+          t.props.sub ||
+          t.props.sup ||
+          t.props.color ||
+          t.props.highlight;
+        if (hasStyle) {
+          out += formatTextWithProps(t.text, t.props);
+        } else {
+          out += t.text;
+        }
+      }
     } else if (t.kind === "math") {
       flushCode();
       out += encMath(t.latex);
@@ -674,26 +782,233 @@ function parseParagraph(p: Element, images: ImageMap, ole?: OleMap): Para {
   };
 
   walk(p);
+  const indentSpaces = getParagraphIndentSpaces(p);
+  if (indentSpaces > 0 && toks.length > 0) {
+    const firstTextTok = toks.find((t) => t.kind === "text") as TextTok | undefined;
+    if (firstTextTok && !firstTextTok.text.startsWith(" ") && !firstTextTok.text.startsWith("\t")) {
+      firstTextTok.text = " ".repeat(indentSpaces) + firstTextTok.text;
+    }
+  }
   return { toks, plain: tokensToPlain(toks), rich: tokensToRich(toks), hasAnyMark };
 }
 
+function getParagraphIndentSpaces(p: Element): number {
+  const pPr = Array.from(p.childNodes).find((n) => {
+    if (n.nodeType !== 1) return false;
+    const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+    return ln === "pPr";
+  }) as Element | undefined;
+  if (!pPr) return 0;
+
+  const ind = Array.from(pPr.childNodes).find((n) => {
+    if (n.nodeType !== 1) return false;
+    const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+    return ln === "ind";
+  }) as Element | undefined;
+  if (!ind) return 0;
+
+  const leftStr =
+    ind.getAttributeNS(W_NS, "left") ||
+    ind.getAttribute("w:left") ||
+    ind.getAttributeNS(W_NS, "start") ||
+    ind.getAttribute("w:start") ||
+    "0";
+  const firstLineStr =
+    ind.getAttributeNS(W_NS, "firstLine") ||
+    ind.getAttribute("w:firstLine") ||
+    "0";
+  const hangingStr =
+    ind.getAttributeNS(W_NS, "hanging") ||
+    ind.getAttribute("w:hanging") ||
+    "0";
+
+  const left = parseInt(leftStr, 10) || 0;
+  const firstLine = parseInt(firstLineStr, 10) || 0;
+  const hanging = parseInt(hangingStr, 10) || 0;
+  const totalTwips = Math.max(0, left + firstLine - hanging);
+  if (totalTwips <= 0) return 0;
+
+  return Math.max(1, Math.round(totalTwips / 180));
+}
+
+function extractCellBlocks(container: Element): Element[] {
+  const blocks: Element[] = [];
+  for (let i = 0; i < container.childNodes.length; i++) {
+    const c = container.childNodes[i];
+    if (c.nodeType !== 1) continue;
+    const el = c as Element;
+    const ln = el.localName || el.nodeName.replace(/^.*:/, "");
+    if (ln === "p" || ln === "tbl") {
+      blocks.push(el);
+    } else if (ln === "sdt") {
+      const sdtContent = Array.from(el.childNodes).find((n) => {
+        if (n.nodeType !== 1) return false;
+        const cln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+        return cln === "sdtContent";
+      }) as Element | undefined;
+      if (sdtContent) {
+        blocks.push(...extractCellBlocks(sdtContent));
+      }
+    }
+  }
+  return blocks;
+}
+
+function isParaCode(p: Para): boolean {
+  if (p.plain.trim().length === 0) return false;
+  // Monospace font in runs
+  const hasMono = p.toks.some(
+    (t) => t.kind === "text" && t.props.mono && t.text.trim().length > 0
+  );
+  if (hasMono) return true;
+  // Distinct code syntax or indentation
+  const s = p.plain;
+  if (/^[ \t]{2,}/.test(s) && /[=:+\-*/><()[\]{}#]/.test(s)) return true;
+  if (
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|elif\b|while\s+.*:|for\s+.*:\s*$|#include\s*<|SELECT\s+|INSERT\s+INTO|UPDATE\s+|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+      s
+    )
+  )
+    return true;
+  return false;
+}
+
+function isCellCodeBlock(paras: Para[]): boolean {
+  const nonEmpty = paras.filter((p) => p.plain.trim().length > 0);
+  if (nonEmpty.length === 0) return false;
+
+  let totalTextChars = 0;
+  let monoTextChars = 0;
+  for (const p of nonEmpty) {
+    for (const t of p.toks) {
+      if (t.kind === "text") {
+        totalTextChars += t.text.length;
+        if (t.props.mono) monoTextChars += t.text.length;
+      }
+    }
+  }
+  if (totalTextChars > 0 && monoTextChars / totalTextChars >= 0.4) {
+    return true;
+  }
+
+  const lines = nonEmpty.map((p) => p.plain);
+  const codeContent = lines.join("\n");
+  const lang = detectLang(codeContent);
+  if (lang !== "plaintext") {
+    const hasIndent = lines.some((l) => /^[ \t]{2,}/.test(l));
+    const hasCodeKeywords = lines.some((l) =>
+      /^\s*(?:def|class|import|from|return|if|elif|else:|while|for|print\(|SELECT|INSERT|UPDATE|#include|<html|<\/|<div|var|const|let|function|procedure|begin|end[.;])/i.test(
+        l
+      )
+    );
+    if (hasIndent || hasCodeKeywords) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function parseCell(tc: Element, images: ImageMap, ole?: OleMap): string {
+  const blocks = extractCellBlocks(tc);
+  if (blocks.length === 0) return "";
+
+  const parsedItems: ({ kind: "tbl"; rich: string } | { kind: "para"; para: Para })[] = [];
+  for (const block of blocks) {
+    const ln = block.localName || block.nodeName.replace(/^.*:/, "");
+    if (ln === "tbl") {
+      parsedItems.push({ kind: "tbl", rich: parseTable(block, images, ole).rich });
+    } else {
+      parsedItems.push({ kind: "para", para: parseParagraph(block, images, ole) });
+    }
+  }
+
+  // If ALL items are paragraphs and the cell is detected as a code block:
+  const allParas = parsedItems
+    .filter((it): it is { kind: "para"; para: Para } => it.kind === "para")
+    .map((it) => it.para);
+  const hasOnlyParas = allParas.length === parsedItems.length;
+
+  if (hasOnlyParas && isCellCodeBlock(allParas)) {
+    const lines: string[] = [];
+    for (const p of allParas) {
+      let line = "";
+      for (const t of p.toks) {
+        if (t.kind === "text") line += t.text;
+        else if (t.kind === "math") line += t.latex;
+      }
+      lines.push(line.replace(/[\r\n]+$/, ""));
+    }
+    while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+      lines.pop();
+    }
+    const fullCode = lines.join("\n");
+    const lang = detectLang(fullCode);
+    return encCode(lang, fullCode);
+  }
+
+  // General cell content: preserve paragraphs without stripping leading spaces,
+  // preserve blank lines, formulas, images, nested tables, and merge any contiguous code paragraphs.
+  const outParts: string[] = [];
+  let codeGroup: Para[] = [];
+
+  const flushCodeGroup = () => {
+    if (codeGroup.length === 0) return;
+    if (codeGroup.length === 1 && !isParaCode(codeGroup[0])) {
+      outParts.push(codeGroup[0].rich.replace(/[\r\n]+$/, ""));
+    } else {
+      const lines = codeGroup.map((p) => {
+        let line = "";
+        for (const t of p.toks) {
+          if (t.kind === "text") line += t.text;
+          else if (t.kind === "math") line += t.latex;
+        }
+        return line.replace(/[\r\n]+$/, "");
+      });
+      const fullCode = lines.join("\n");
+      const lang = detectLang(fullCode);
+      outParts.push(encCode(lang, fullCode));
+    }
+    codeGroup = [];
+  };
+
+  for (const item of parsedItems) {
+    if (item.kind === "tbl") {
+      flushCodeGroup();
+      outParts.push(item.rich);
+    } else {
+      const p = item.para;
+      if (isParaCode(p)) {
+        codeGroup.push(p);
+      } else {
+        flushCodeGroup();
+        outParts.push(p.rich.replace(/[\r\n]+$/, ""));
+      }
+    }
+  }
+  flushCodeGroup();
+
+  return outParts.join("\n").trimEnd();
+}
 
 function parseTable(tbl: Element, images: ImageMap, ole?: OleMap): Para {
   const rows: string[][] = [];
-  const trs = Array.from(tbl.childNodes).filter(
-    (n) => n.nodeType === 1 && (n as Element).namespaceURI === W_NS && ((n as Element).localName === "tr"),
-  ) as Element[];
+  const trs = Array.from(tbl.childNodes).filter((n) => {
+    if (n.nodeType !== 1) return false;
+    const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+    return ln === "tr";
+  }) as Element[];
+
   for (const tr of trs) {
     const cells: string[] = [];
-    const tcs = Array.from(tr.childNodes).filter(
-      (n) => n.nodeType === 1 && (n as Element).namespaceURI === W_NS && ((n as Element).localName === "tc"),
-    ) as Element[];
+    const tcs = Array.from(tr.childNodes).filter((n) => {
+      if (n.nodeType !== 1) return false;
+      const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+      return ln === "tc";
+    }) as Element[];
+
     for (const tc of tcs) {
-      const ps = Array.from(tc.childNodes).filter(
-        (n) => n.nodeType === 1 && (n as Element).namespaceURI === W_NS && ((n as Element).localName === "p"),
-      ) as Element[];
-      const cellRich = ps.map((p) => parseParagraph(p, images, ole).rich.trim()).filter(Boolean).join("\n");
-      cells.push(cellRich);
+      cells.push(parseCell(tc, images, ole));
     }
     rows.push(cells);
   }
@@ -716,6 +1031,29 @@ function collectProgIds(doc: Document): Map<string, string> {
   return map;
 }
 
+function extractBodyBlocks(container: Element): Element[] {
+  const blocks: Element[] = [];
+  for (let j = 0; j < container.childNodes.length; j++) {
+    const node = container.childNodes[j];
+    if (node.nodeType !== 1) continue;
+    const el = node as Element;
+    const ln = el.localName || el.nodeName.replace(/^.*:/, "");
+    if (ln === "p" || ln === "tbl") {
+      blocks.push(el);
+    } else if (ln === "sdt") {
+      const sdtContent = Array.from(el.childNodes).find((n) => {
+        if (n.nodeType !== 1) return false;
+        const cln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+        return cln === "sdtContent";
+      }) as Element | undefined;
+      if (sdtContent) {
+        blocks.push(...extractBodyBlocks(sdtContent));
+      }
+    }
+  }
+  return blocks;
+}
+
 async function extractParagraphs(file: File): Promise<Para[]> {
   const buf = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(buf);
@@ -725,16 +1063,15 @@ async function extractParagraphs(file: File): Promise<Para[]> {
   const ole = await buildOleMathMap(zip, collectProgIds(doc));
 
   const paras: Para[] = [];
-  const body = doc.getElementsByTagNameNS(W_NS, "body")[0];
+  const body =
+    doc.getElementsByTagNameNS(W_NS, "body")[0] ||
+    doc.getElementsByTagName("w:body")[0];
   if (!body) return paras;
 
-  // Walk only direct children to avoid pulling paragraphs out of tables.
-  for (let j = 0; j < body.childNodes.length; j++) {
-    const node = body.childNodes[j];
-    if (node.nodeType !== 1) continue;
-    const el = node as Element;
-    if (el.namespaceURI !== W_NS) continue;
-    const ln = el.localName;
+  // Walk direct blocks (supporting sdt wrapping)
+  const blocks = extractBodyBlocks(body);
+  for (const el of blocks) {
+    const ln = el.localName || el.nodeName.replace(/^.*:/, "");
     if (ln === "p") paras.push(parseParagraph(el, images, ole));
     else if (ln === "tbl") paras.push(parseTable(el, images, ole));
   }

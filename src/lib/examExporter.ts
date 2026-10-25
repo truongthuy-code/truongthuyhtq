@@ -2,6 +2,7 @@ import {
   Document, Packer, Paragraph, TextRun, PageBreak, Table, TableRow, TableCell,
   WidthType, AlignmentType, BorderStyle, Footer, PageNumber, TabStopType,
   ShadingType, HeightRule, VerticalAlign, Math as DMath, MathRun, ImageRun,
+  UnderlineType,
 } from "docx";
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
@@ -119,6 +120,83 @@ function tokenizeRich(s: string): RichTok[] {
   return out;
 }
 
+function parseHtmlTextRuns(text: string, baseOpts: { bold?: boolean; italics?: boolean } = {}): any[] {
+  if (!text) return [];
+  const tagRe = /<\/?([a-zA-Z0-9]+)(?:\s+style=["']color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["'])?[^>]*>/g;
+  if (!tagRe.test(text)) {
+    const clean = text
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"');
+    return [T(clean, baseOpts)];
+  }
+
+  tagRe.lastIndex = 0;
+  const runs: any[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  let bold = !!baseOpts.bold;
+  let italics = !!baseOpts.italics;
+  let underline = false;
+  let strike = false;
+  let subScript = false;
+  let superScript = false;
+  let color = BLACK;
+  let highlight: string | undefined;
+
+  const pushSegment = (seg: string) => {
+    if (!seg) return;
+    const clean = seg
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"');
+    runs.push(
+      new TextRun({
+        text: clean,
+        bold,
+        italics,
+        strike,
+        subScript,
+        superScript,
+        underline: underline ? { type: UnderlineType.SINGLE } : undefined,
+        color,
+        highlight,
+        font: FONT,
+        size: SIZE,
+      })
+    );
+  };
+
+  while ((m = tagRe.exec(text)) !== null) {
+    if (m.index > last) {
+      pushSegment(text.slice(last, m.index));
+    }
+    const isClose = m[0].startsWith("</");
+    const tag = m[1].toLowerCase();
+    if (tag === "b" || tag === "strong") bold = !isClose;
+    else if (tag === "i" || tag === "em") italics = !isClose;
+    else if (tag === "u") underline = !isClose;
+    else if (tag === "s" || tag === "strike" || tag === "del") strike = !isClose;
+    else if (tag === "sub") subScript = !isClose;
+    else if (tag === "sup") superScript = !isClose;
+    else if (tag === "mark") highlight = isClose ? undefined : "yellow";
+    else if (tag === "span") {
+      if (isClose) color = BLACK;
+      else if (m[2]) {
+        color = m[2].replace("#", "");
+      }
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    pushSegment(text.slice(last));
+  }
+  return runs;
+}
+
 function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean } = {}): any[] {
   const toks = tokenizeRich(s || "");
   const runs: any[] = [];
@@ -130,7 +208,7 @@ function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean 
       let m: RegExpExecArray | null;
       while ((m = re.exec(tok.text)) !== null) {
         if (m.index > last) {
-          runs.push(T(tok.text.slice(last, m.index), baseOpts));
+          runs.push(...parseHtmlTextRuns(tok.text.slice(last, m.index), baseOpts));
         }
         const latex = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim();
         if (latex) {
@@ -139,7 +217,7 @@ function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean 
         last = m.index + m[0].length;
       }
       if (last < tok.text.length) {
-        runs.push(T(tok.text.slice(last), baseOpts));
+        runs.push(...parseHtmlTextRuns(tok.text.slice(last), baseOpts));
       }
     } else if (tok.kind === "math") {
       runs.push(new DMath({ children: [new MathRun(tok.latex)] }));
@@ -157,6 +235,92 @@ function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean 
     }
   }
   return runs;
+}
+
+function renderCellToChildren(cell: string, colW: number): (Paragraph | Table)[] {
+  if (!cell || !cell.trim()) {
+    return [P([])];
+  }
+  const toks = tokenizeRich(cell);
+  const out: (Paragraph | Table)[] = [];
+  let currentRuns: any[] = [];
+
+  const flushRuns = () => {
+    if (currentRuns.length > 0) {
+      out.push(P(currentRuns, { spacingBefore: 40, spacingAfter: 40 }));
+      currentRuns = [];
+    }
+  };
+
+  for (const tok of toks) {
+    if (tok.kind === "tbl") {
+      flushRuns();
+      if (tok.rows && tok.rows.length > 0) {
+        const nCols = Math.max(...tok.rows.map((r) => r.length), 1);
+        const subW = Math.floor(Math.max(colW - 160, 400) / nCols);
+        const border = { style: BorderStyle.SINGLE, size: 2, color: "CCCCCC" };
+        const borders = { top: border, bottom: border, left: border, right: border };
+        const subTable = new Table({
+          width: { size: Math.max(colW - 160, 400), type: WidthType.DXA },
+          columnWidths: Array(nCols).fill(subW),
+          rows: tok.rows.map((r) =>
+            new TableRow({
+              children: r.map((c) =>
+                new TableCell({
+                  borders,
+                  margins: { top: 40, bottom: 40, left: 60, right: 60 },
+                  width: { size: subW, type: WidthType.DXA },
+                  children: renderCellToChildren(c, subW),
+                })
+              ),
+            })
+          ),
+        });
+        out.push(subTable);
+      }
+    } else if (tok.kind === "code") {
+      flushRuns();
+      const codeLines = tok.content.split("\n");
+      for (const line of codeLines) {
+        out.push(
+          P([new TextRun({ text: line, font: "Consolas", size: 19, color: "1E293B" })], {
+            spacingBefore: 20,
+            spacingAfter: 20,
+          })
+        );
+      }
+    } else if (tok.kind === "img") {
+      const parsed = parseDataUrl(tok.src);
+      if (parsed) {
+        flushRuns();
+        out.push(
+          P([new ImageRun({
+            data: parsed.data,
+            transformation: { width: Math.min(240, Math.max(80, Math.floor(colW / 25))), height: 140 },
+            type: parsed.type,
+          })], { alignment: AlignmentType.CENTER, spacingBefore: 60, spacingAfter: 60 })
+        );
+      }
+    } else if (tok.kind === "math") {
+      currentRuns.push(new DMath({ children: [new MathRun(tok.latex)] }));
+    } else if (tok.kind === "text") {
+      const lines = tok.text.split("\n");
+      for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+        if (lIdx > 0) flushRuns();
+        const line = lines[lIdx];
+        if (line) {
+          const runs = parseRichRuns(line);
+          currentRuns.push(...runs);
+        }
+      }
+    }
+  }
+
+  flushRuns();
+  if (out.length === 0) {
+    out.push(P([]));
+  }
+  return out;
 }
 
 function renderRichBlock(prefixRuns: any[], richText: string): (Paragraph | Table)[] {
@@ -189,7 +353,7 @@ function renderRichBlock(prefixRuns: any[], richText: string): (Paragraph | Tabl
                   borders,
                   margins: { top: 60, bottom: 60, left: 80, right: 80 },
                   width: { size: colW, type: WidthType.DXA },
-                  children: [P(parseRichRuns(cell))],
+                  children: renderCellToChildren(cell, colW),
                 })
               ),
             })
