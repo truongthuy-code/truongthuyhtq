@@ -54,7 +54,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, authorization"
   );
 
   if (req.method === "OPTIONS") {
@@ -66,7 +66,33 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { examId, questionId, answer, examCode, fallbackQuestion } = req.body || {};
+    // Robust body parsing: handle pre-parsed object, JSON string, or raw stream on Vercel
+    let body = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch (err: any) {
+        console.warn("[check-question-answer] JSON parse error on req.body string:", err?.message);
+      }
+    }
+    if (!body && typeof req.on === "function") {
+      body = await new Promise((resolve) => {
+        let raw = "";
+        req.on("data", (chunk: any) => {
+          raw += chunk;
+        });
+        req.on("end", () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch {
+            resolve({});
+          }
+        });
+        req.on("error", () => resolve({}));
+      });
+    }
+
+    const { examId, questionId, answer, examCode, fallbackQuestion } = body || {};
     if (!examId && !examCode) {
       return res.status(400).json({ error: "Missing examId or examCode" });
     }
@@ -75,6 +101,7 @@ export default async function handler(req: any, res: any) {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(str || "").trim());
 
     let examData: any = null;
+    let rlsBlockedDetected = false;
 
     // 1. Try finding in sample exams first
     let sample =
@@ -100,22 +127,22 @@ export default async function handler(req: any, res: any) {
     if (sample) {
       examData = sample;
     } else {
-      // 2. Fetch from Supabase exams table using system bridge or service role
-      try {
-        const sb = await getServerSupabase();
-        let targetUuid = isUuid(examId) ? examId : (isUuid(examCode) ? examCode : "");
+      // 2. Resolve target UUID from parameters, code, or schools registry
+      let targetUuid = isUuid(examId) ? examId : (isUuid(examCode) ? examCode : "");
 
-        const rawCodeCandidates = Array.from(
-          new Set(
-            [
-              String(examId || "").trim(),
-              String(examCode || "").trim(),
-            ].filter(Boolean)
-          )
-        );
+      const rawCodeCandidates = Array.from(
+        new Set(
+          [
+            String(examId || "").trim(),
+            String(examCode || "").trim(),
+          ].filter(Boolean)
+        )
+      );
 
-        // If not UUID, look up code in schools registry or team_config
-        if (!targetUuid && rawCodeCandidates.length > 0) {
+      // If not UUID, look up code in schools registry or team_config
+      if (!targetUuid && rawCodeCandidates.length > 0) {
+        try {
+          const lookupSb = createClient(SUPABASE_URL, SUPABASE_KEY);
           const keysToTry: string[] = [];
           for (const c of rawCodeCandidates) {
             keysToTry.push(`assign_code:${c}`);
@@ -130,7 +157,7 @@ export default async function handler(req: any, res: any) {
 
           const uniqueKeys = Array.from(new Set(keysToTry));
           for (const k of uniqueKeys) {
-            const { data: sch } = await sb
+            const { data: sch } = await lookupSb
               .from("schools")
               .select("name")
               .eq("name_key", k)
@@ -145,47 +172,68 @@ export default async function handler(req: any, res: any) {
               } catch {}
             }
           }
+        } catch (e: any) {
+          console.warn("[check-question-answer] Schools registry lookup warning:", e?.message);
         }
+      }
 
-        if (!targetUuid && rawCodeCandidates.length > 0) {
-          for (const c of rawCodeCandidates) {
-            const { data: exRow } = await sb
-              .from("exams")
-              .select("id")
-              .filter("team_config->>primary_code", "eq", c.toUpperCase())
-              .maybeSingle();
-            if (exRow?.id && isUuid(exRow.id)) {
-              targetUuid = exRow.id;
-              break;
-            }
-          }
-        }
-
-        if (targetUuid) {
-          let { data } = await sb
+      // Step 2A: If caller provided an Authorization Bearer header (e.g. teacher testing their own exam), try that client first!
+      const authHeader = req.headers?.authorization || req.headers?.Authorization;
+      if (targetUuid && authHeader) {
+        try {
+          const userSb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+            global: { headers: { Authorization: String(authHeader) } },
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const { data: userExam } = await userSb
             .from("exams")
             .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
             .eq("id", targetUuid)
-            .single();
+            .maybeSingle();
 
-          if (!data) {
-            // Retry re-auth once in case session expired
+          if (userExam) {
+            examData = userExam;
+          }
+        } catch (authErr: any) {
+          console.warn("[check-question-answer] Auth header exam query:", authErr?.message);
+        }
+      }
+
+      // Step 2B: Query via server Supabase client (service role key if set, or system bridge)
+      if (!examData && targetUuid) {
+        try {
+          const sb = await getServerSupabase();
+          let { data, error } = await sb
+            .from("exams")
+            .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
+            .eq("id", targetUuid)
+            .maybeSingle();
+
+          if (!data && !SUPABASE_SERVICE_KEY) {
+            // Retry re-auth once in case bridge session expired
             serverSupabaseClient = null;
             const freshSb = await getServerSupabase();
             const retry = await freshSb
               .from("exams")
               .select("id, questions, instant_feedback, display_mode, open_at, close_at, manual_closed")
               .eq("id", targetUuid)
-              .single();
+              .maybeSingle();
             data = retry.data;
+            error = retry.error;
           }
 
           if (data) {
             examData = data;
+          } else if (error) {
+            console.warn("[check-question-answer] Exam query error from Supabase:", error.message, error.code);
+          } else {
+            // Row returned null because RLS policy blocked it (created_by != bridge user and is_admin is false)
+            rlsBlockedDetected = true;
+            console.warn("[check-question-answer] Supabase query returned 0 rows for targetUuid:", targetUuid, "RLS policy on exams likely prevented access without SUPABASE_SERVICE_ROLE_KEY.");
           }
+        } catch (err: any) {
+          console.warn("[check-question-answer] Error querying exams from Supabase:", err?.message);
         }
-      } catch (err: any) {
-        console.warn("Error fetching exam from Supabase in handler:", err?.message);
       }
     }
 
@@ -203,7 +251,15 @@ export default async function handler(req: any, res: any) {
     }
 
     if (!examData) {
-      return res.status(404).json({ error: "Không tìm thấy đề thi" });
+      if (rlsBlockedDetected && !SUPABASE_SERVICE_KEY) {
+        return res.status(403).json({
+          error: "RLS_PERMISSION_DENIED",
+          message: "Chính sách RLS của Supabase ngăn đọc đề thi này. Hãy thêm SUPABASE_SERVICE_ROLE_KEY vào Environment Variables trên Vercel.",
+          examId,
+          examCode,
+        });
+      }
+      return res.status(404).json({ error: "Không tìm thấy đề thi", examId, examCode });
     }
 
     let qs = examData.questions || {};
@@ -345,7 +401,7 @@ export default async function handler(req: any, res: any) {
     }
 
     if (!matchedQ) {
-      return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề" });
+      return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề", questionId });
     }
 
     // Part I: MC
@@ -431,7 +487,7 @@ export default async function handler(req: any, res: any) {
 
     return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề" });
   } catch (err: any) {
-    console.error("check-question-answer handler error:", err);
+    console.error("[check-question-answer] handler uncaught error:", err);
     return res.status(500).json({ error: "Lỗi hệ thống khi kiểm tra đáp án" });
   }
 }

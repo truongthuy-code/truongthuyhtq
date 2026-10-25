@@ -1673,6 +1673,7 @@ export default function Take() {
     } catch {}
 
     // 4. Gọi API server kiểm tra đáp án (sử dụng quyền hệ thống truy vấn Supabase chính xác)
+    let isRlsDenied = false;
     try {
       const resolvedExamId =
         (isUuid(exam?.id) ? exam.id : "") ||
@@ -1685,9 +1686,23 @@ export default function Take() {
         (exam?.team_config as any)?.primary_code ||
         (!isUuid(id) ? id : "");
 
+      // Lấy access_token nếu người dùng đang đăng nhập (giáo viên hoặc học sinh có tài khoản)
+      let authHeaderVal: string | undefined;
+      try {
+        const sess = (await supabase.auth.getSession()).data?.session;
+        if (sess?.access_token) {
+          authHeaderVal = `Bearer ${sess.access_token}`;
+        }
+      } catch {}
+
+      const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (authHeaderVal) {
+        reqHeaders["Authorization"] = authHeaderVal;
+      }
+
       const response = await fetch("/api/check-question-answer", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reqHeaders,
         body: JSON.stringify({
           examId: resolvedExamId,
           examCode: resolvedExamCode,
@@ -1720,16 +1735,30 @@ export default function Take() {
           hasAnswer: Boolean(resData?.answer || resData?.items),
         });
       } else {
+        let errJson: any = null;
         let errDetail = "";
         try {
-          errDetail = await response.text();
+          if (contentType.includes("application/json")) {
+            errJson = await response.json();
+            if (errJson?.error === "RLS_PERMISSION_DENIED" || response.status === 403) {
+              isRlsDenied = true;
+            }
+          } else {
+            errDetail = await response.text();
+          }
         } catch {}
+
+        if (response.status === 403) {
+          isRlsDenied = true;
+        }
+
         console.warn("[InstantFeedback] API request unsuccessful:", {
           questionId: targetQ.id,
           examId: resolvedExamId,
           status: response.status,
           statusText: response.statusText,
           contentType,
+          error: errJson?.error,
           detail: errDetail ? errDetail.slice(0, 150) : undefined,
           studentAuth: Boolean(student?.account),
         });
@@ -1770,7 +1799,13 @@ export default function Take() {
 
     setChecking(false);
     setCheckingQId(null);
-    toast.error("Không thể hiển thị đáp án cho câu hỏi này. Vui lòng thử lại!");
+    if (isRlsDenied) {
+      toast.error(
+        "Chính sách bảo mật Supabase RLS ngăn đọc đáp án đề thi của giáo viên khác. Vui lòng thêm biến môi trường SUPABASE_SERVICE_ROLE_KEY trên Vercel để khắc phục triệt để!"
+      );
+    } else {
+      toast.error("Không thể hiển thị đáp án cho câu hỏi này. Vui lòng thử lại!");
+    }
   };
 
   const checkAnswer = async () => {
