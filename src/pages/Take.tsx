@@ -1711,9 +1711,34 @@ export default function Take() {
           commitFeedback(resData);
           return;
         }
+        console.warn("[InstantFeedback] API returned non-matching or error payload:", {
+          questionId: targetQ.id,
+          examId: resolvedExamId,
+          examCode: resolvedExamCode,
+          status: response.status,
+          error: resData?.error,
+          hasAnswer: Boolean(resData?.answer || resData?.items),
+        });
+      } else {
+        let errDetail = "";
+        try {
+          errDetail = await response.text();
+        } catch {}
+        console.warn("[InstantFeedback] API request unsuccessful:", {
+          questionId: targetQ.id,
+          examId: resolvedExamId,
+          status: response.status,
+          statusText: response.statusText,
+          contentType,
+          detail: errDetail ? errDetail.slice(0, 150) : undefined,
+          studentAuth: Boolean(student?.account),
+        });
       }
-    } catch (e) {
-      console.warn("API check failed, trying Supabase RPC fallback:", e);
+    } catch (e: any) {
+      console.warn("[InstantFeedback] Network / API fetch failed, trying Supabase RPC fallback:", {
+        questionId: targetQ.id,
+        error: e?.message || e,
+      });
     }
 
     // 5. Dự phòng qua Supabase RPC
@@ -1730,9 +1755,17 @@ export default function Take() {
           commitFeedback(data);
           return;
         }
+        if (error) {
+          console.warn("[InstantFeedback] Supabase RPC failed:", {
+            code: error.code,
+            message: error.message,
+            examId: targetRpcExamId,
+            questionId: targetQ.id,
+          });
+        }
       }
-    } catch (e) {
-      console.warn("RPC check error:", e);
+    } catch (e: any) {
+      console.warn("[InstantFeedback] RPC invocation exception:", e?.message || e);
     }
 
     setChecking(false);

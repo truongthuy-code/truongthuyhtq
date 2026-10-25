@@ -1,9 +1,23 @@
 import { createClient } from "@supabase/supabase-js";
 import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } from "../src/lib/sampleExams";
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://zhixpglctyfffpwamixv.supabase.co";
+// Multi-environment Supabase configuration
+// Supports Vercel production environment variables, local .env, and built-in fallback
+const SUPABASE_URL =
+  process.env.VITE_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  "https://zhixpglctyfffpwamixv.supabase.co";
+
+const SUPABASE_SERVICE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY;
+
 const SUPABASE_KEY =
+  SUPABASE_SERVICE_KEY ||
   process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_KEY ||
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpoaXhwZ2xjdHlmZmZwd2FtaXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjAxODYsImV4cCI6MjA5MzUzNjE4Nn0.cjGa8bgMIVlJ_LrEbW_0qDYBxAC4ykhlgmxd9OFq1e4";
 
 const SYSTEM_BRIDGE = {
@@ -14,9 +28,21 @@ const SYSTEM_BRIDGE = {
 let serverSupabaseClient: any = null;
 
 async function getServerSupabase() {
+  if (SUPABASE_SERVICE_KEY) {
+    if (!serverSupabaseClient) {
+      serverSupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+    }
+    return serverSupabaseClient;
+  }
+
   if (!serverSupabaseClient) {
     serverSupabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY);
-    await serverSupabaseClient.auth.signInWithPassword(SYSTEM_BRIDGE);
+    const { error } = await serverSupabaseClient.auth.signInWithPassword(SYSTEM_BRIDGE);
+    if (error) {
+      console.warn("System bridge login warning:", error.message);
+    }
   }
   return serverSupabaseClient;
 }
@@ -41,8 +67,8 @@ export default async function handler(req: any, res: any) {
 
   try {
     const { examId, questionId, answer, examCode, fallbackQuestion } = req.body || {};
-    if (!examId || !questionId) {
-      return res.status(400).json({ error: "Missing examId or questionId" });
+    if (!examId && !examCode) {
+      return res.status(400).json({ error: "Missing examId or examCode" });
     }
 
     const isUuid = (str: string) =>
@@ -52,12 +78,10 @@ export default async function handler(req: any, res: any) {
 
     // 1. Try finding in sample exams first
     let sample =
-      findSampleExam(examId) ||
-      getSampleExamById(examId) ||
-      getSampleExamByCode(examId) ||
-      (examCode ? findSampleExam(examCode) || getSampleExamByCode(examCode) : null);
+      (examId ? findSampleExam(examId) || getSampleExamById(examId) || getSampleExamByCode(examId) : null) ||
+      (examCode ? findSampleExam(examCode) || getSampleExamById(examCode) || getSampleExamByCode(examCode) : null);
 
-    if (!sample) {
+    if (!sample && questionId) {
       for (const s of SAMPLE_EXAMS) {
         const p1 = s.questions?.partI || [];
         const p2 = s.questions?.partII || [];
@@ -76,33 +100,65 @@ export default async function handler(req: any, res: any) {
     if (sample) {
       examData = sample;
     } else {
-      // 2. Fetch from Supabase exams table using system bridge
+      // 2. Fetch from Supabase exams table using system bridge or service role
       try {
         const sb = await getServerSupabase();
-        let targetUuid = isUuid(examId) ? examId : "";
+        let targetUuid = isUuid(examId) ? examId : (isUuid(examCode) ? examCode : "");
 
-        const codeToTry = !targetUuid ? examId : examCode;
-        if (!targetUuid && codeToTry) {
-          const { data: sch } = await sb
-            .from("schools")
-            .select("name")
-            .eq("name_key", `assign_code:${codeToTry}`)
-            .maybeSingle();
-          if (sch?.name) {
-            try {
-              const parsed = JSON.parse(sch.name);
-              if (parsed?.examId && isUuid(parsed.examId)) targetUuid = parsed.examId;
-            } catch {}
+        const rawCodeCandidates = Array.from(
+          new Set(
+            [
+              String(examId || "").trim(),
+              String(examCode || "").trim(),
+            ].filter(Boolean)
+          )
+        );
+
+        // If not UUID, look up code in schools registry or team_config
+        if (!targetUuid && rawCodeCandidates.length > 0) {
+          const keysToTry: string[] = [];
+          for (const c of rawCodeCandidates) {
+            keysToTry.push(`assign_code:${c}`);
+            keysToTry.push(`assign_code:${c.toUpperCase()}`);
+            keysToTry.push(`assign_code:${c.toLowerCase()}`);
+            const cleanNum = c.replace(/[^0-9]/g, "");
+            if (cleanNum) {
+              keysToTry.push(`assign_code:${cleanNum}`);
+              keysToTry.push(`assign_code:${cleanNum.replace(/^0+/, "")}`);
+            }
+          }
+
+          const uniqueKeys = Array.from(new Set(keysToTry));
+          for (const k of uniqueKeys) {
+            const { data: sch } = await sb
+              .from("schools")
+              .select("name")
+              .eq("name_key", k)
+              .maybeSingle();
+            if (sch?.name) {
+              try {
+                const parsed = JSON.parse(sch.name);
+                if (parsed?.examId && isUuid(parsed.examId)) {
+                  targetUuid = parsed.examId;
+                  break;
+                }
+              } catch {}
+            }
           }
         }
 
-        if (!targetUuid && codeToTry) {
-          const { data: exRow } = await sb
-            .from("exams")
-            .select("id")
-            .filter("team_config->>primary_code", "eq", codeToTry)
-            .maybeSingle();
-          if (exRow?.id && isUuid(exRow.id)) targetUuid = exRow.id;
+        if (!targetUuid && rawCodeCandidates.length > 0) {
+          for (const c of rawCodeCandidates) {
+            const { data: exRow } = await sb
+              .from("exams")
+              .select("id")
+              .filter("team_config->>primary_code", "eq", c.toUpperCase())
+              .maybeSingle();
+            if (exRow?.id && isUuid(exRow.id)) {
+              targetUuid = exRow.id;
+              break;
+            }
+          }
         }
 
         if (targetUuid) {
@@ -113,6 +169,7 @@ export default async function handler(req: any, res: any) {
             .single();
 
           if (!data) {
+            // Retry re-auth once in case session expired
             serverSupabaseClient = null;
             const freshSb = await getServerSupabase();
             const retry = await freshSb
@@ -128,11 +185,11 @@ export default async function handler(req: any, res: any) {
           }
         }
       } catch (err: any) {
-        console.warn("Error fetching exam from Supabase in serverless function:", err?.message);
+        console.warn("Error fetching exam from Supabase in handler:", err?.message);
       }
     }
 
-    // 3. Fallback to client-provided fallbackQuestion
+    // 3. Fallback to client-provided fallbackQuestion if examData is not in DB and question contains answer
     if (!examData && fallbackQuestion && (fallbackQuestion.answer !== undefined || fallbackQuestion.items)) {
       const fbQ = fallbackQuestion;
       examData = {
@@ -168,42 +225,145 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    let p1 = Array.isArray(qs.partI) ? qs.partI : Array.isArray(qs.part1) ? qs.part1 : Array.isArray(qs.PartI) ? qs.PartI : [];
-    let p2 = Array.isArray(qs.partII) ? qs.partII : Array.isArray(qs.part2) ? qs.part2 : Array.isArray(qs.PartII) ? qs.PartII : [];
-    let p3 = Array.isArray(qs.partIII) ? qs.partIII : Array.isArray(qs.part3) ? qs.part3 : Array.isArray(qs.PartIII) ? qs.PartIII : [];
+    let p1: any[] = [];
+    let p2: any[] = [];
+    let p3: any[] = [];
 
     if (Array.isArray(qs)) {
-      p1 = qs.filter((q: any) => q.type === "mc" || q._part === 1);
-      p2 = qs.filter((q: any) => q.type === "tf" || q._part === 2);
-      p3 = qs.filter((q: any) => q.type === "sa" || q._part === 3);
+      p1 = qs.filter((q: any) => q.type === "mc" || q._part === 1 || (Array.isArray(q.options) && q.options.length > 0));
+      p2 = qs.filter((q: any) => q.type === "tf" || q._part === 2 || (Array.isArray(q.items) && q.items.length > 0));
+      p3 = qs.filter((q: any) => q.type === "sa" || q._part === 3 || (!q.options && !q.items));
+    } else {
+      p1 = Array.isArray(qs.partI) ? qs.partI : Array.isArray(qs.part1) ? qs.part1 : Array.isArray(qs.PartI) ? qs.PartI : Array.isArray(qs.part_1) ? qs.part_1 : [];
+      p2 = Array.isArray(qs.partII) ? qs.partII : Array.isArray(qs.part2) ? qs.part2 : Array.isArray(qs.PartII) ? qs.PartII : Array.isArray(qs.part_2) ? qs.part_2 : [];
+      p3 = Array.isArray(qs.partIII) ? qs.partIII : Array.isArray(qs.part3) ? qs.part3 : Array.isArray(qs.PartIII) ? qs.PartIII : Array.isArray(qs.part_3) ? qs.part_3 : [];
     }
 
-    const matchQ = (q: any, i: number, prefix: string) => {
-      if (!q) return false;
-      const qid = String(q.id || "").toLowerCase();
-      const targetId = String(questionId || "").toLowerCase();
-      if (qid && qid === targetId) return true;
-      if (targetId === `${prefix}_q_${i + 1}` || targetId === `q_${i + 1}`) return true;
-      if (qid && qid.replace(new RegExp(`^${prefix}_`), "") === targetId.replace(new RegExp(`^${prefix}_`), "")) return true;
-      return false;
+    // Helper text normalizer for content-based matching
+    const normalizeContent = (s: any) =>
+      String(s || "")
+        .replace(/<[^>]*>/g, "")
+        .replace(/⟦MATH:(.*?)⟧/gs, "$1")
+        .replace(/[\$\\\{\}\(\)\[\]_\^\s\.,:;?!-]/g, "")
+        .toLowerCase();
+
+    const cleanId = (s: any) =>
+      String(s || "")
+        .trim()
+        .toLowerCase()
+        .replace(/^(p[123]_|part[123]_|q_|q)/i, "");
+
+    const targetId = String(questionId || "").trim().toLowerCase();
+    const targetCleanId = cleanId(targetId);
+    const targetTextClean = normalizeContent(fallbackQuestion?.text || "");
+
+    // Strategy to match a question in a given part array
+    const findInPart = (partArr: any[], prefix: string, partNum: number, globalOffset: number) => {
+      // 1. Direct ID match
+      let found = partArr.find((q: any) => {
+        if (!q) return false;
+        const qid = String(q.id || "").trim().toLowerCase();
+        return qid && qid === targetId;
+      });
+      if (found) return found;
+
+      // 2. Normalized ID match (e.g. q15 vs q_15 vs 15)
+      if (targetCleanId) {
+        found = partArr.find((q: any) => {
+          if (!q) return false;
+          const qid = cleanId(q.id);
+          return qid && qid === targetCleanId;
+        });
+        if (found) return found;
+      }
+
+      // 3. Index within part / prefix match
+      found = partArr.find((q: any, i: number) => {
+        if (!q) return false;
+        // e.g. p2_q_1, p2_1
+        if (targetId === `${prefix}_q_${i + 1}` || targetId === `${prefix}_${i + 1}`) return true;
+        // If targetId is q_1 / q1 and fallback specifies this part
+        if (fallbackQuestion?._part === partNum && (targetId === `q_${i + 1}` || targetId === `q${i + 1}`)) return true;
+        // Global question index (e.g. question 15 in whole exam)
+        const globalIdx = globalOffset + i + 1;
+        if (targetId === `q_${globalIdx}` || targetId === `q${globalIdx}` || targetCleanId === String(globalIdx)) return true;
+        return false;
+      });
+      if (found) return found;
+
+      // 4. Content / Stem Text match (bulletproof for shuffled exams or missing IDs)
+      if (targetTextClean && targetTextClean.length >= 8) {
+        found = partArr.find((q: any) => {
+          if (!q) return false;
+          const qTextClean = normalizeContent(q.text);
+          if (!qTextClean) return false;
+          if (qTextClean === targetTextClean) return true;
+          if (qTextClean.length >= 16 && targetTextClean.length >= 16) {
+            if (qTextClean.includes(targetTextClean.slice(0, 25)) || targetTextClean.includes(qTextClean.slice(0, 25))) {
+              return true;
+            }
+          }
+          return false;
+        });
+        if (found) return found;
+      }
+
+      return null;
     };
 
+    // Calculate part offsets for global index matching
+    const globalOffsetP1 = 0;
+    const globalOffsetP2 = p1.length;
+    const globalOffsetP3 = p1.length + p2.length;
+
+    let matchedPart = 0;
+    let matchedQ: any = null;
+
+    // Check preferred part if fallbackQuestion indicates part
+    if (fallbackQuestion?._part === 1 || fallbackQuestion?.type === "mc") {
+      matchedQ = findInPart(p1, "p1", 1, globalOffsetP1);
+      if (matchedQ) matchedPart = 1;
+    } else if (fallbackQuestion?._part === 2 || fallbackQuestion?.type === "tf") {
+      matchedQ = findInPart(p2, "p2", 2, globalOffsetP2);
+      if (matchedQ) matchedPart = 2;
+    } else if (fallbackQuestion?._part === 3 || fallbackQuestion?.type === "sa") {
+      matchedQ = findInPart(p3, "p3", 3, globalOffsetP3);
+      if (matchedQ) matchedPart = 3;
+    }
+
+    if (!matchedQ) {
+      matchedQ = findInPart(p1, "p1", 1, globalOffsetP1);
+      if (matchedQ) matchedPart = 1;
+    }
+    if (!matchedQ) {
+      matchedQ = findInPart(p2, "p2", 2, globalOffsetP2);
+      if (matchedQ) matchedPart = 2;
+    }
+    if (!matchedQ) {
+      matchedQ = findInPart(p3, "p3", 3, globalOffsetP3);
+      if (matchedQ) matchedPart = 3;
+    }
+
+    if (!matchedQ) {
+      return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề" });
+    }
+
     // Part I: MC
-    const q1 = p1.find((q: any, i: number) => matchQ(q, i, "p1"));
-    if (q1) {
-      const isCorrect = String(answer ?? "").trim().toUpperCase() === String(q1.answer ?? "").trim().toUpperCase();
+    if (matchedPart === 1) {
+      const qAns = String(matchedQ.answer ?? "").trim().toUpperCase();
+      const sAns = String(answer ?? "").trim().toUpperCase();
+      const isCorrect = qAns !== "" && sAns === qAns;
       return res.json({
         type: "mc",
         correct: isCorrect,
-        answer: q1.answer,
-        explanation: q1.explanation || "",
+        answer: qAns || matchedQ.answer,
+        explanation: matchedQ.explanation || "",
       });
     }
 
     // Part II: TF
-    const q2 = p2.find((q: any, i: number) => matchQ(q, i, "p2"));
-    if (q2) {
-      const items = Array.isArray(q2.items) ? q2.items : [];
+    if (matchedPart === 2) {
+      const items = Array.isArray(matchedQ.items) ? matchedQ.items : [];
       let okItems = 0;
       const chosen = answer || {};
       const evaluatedItems = items.map((it: any) => {
@@ -211,7 +371,12 @@ export default async function handler(req: any, res: any) {
         if (Array.isArray(chosen)) {
           studentVal = chosen.includes(it.key);
         } else if (typeof chosen === "object" && chosen !== null) {
-          if (typeof chosen[it.key] === "boolean") studentVal = chosen[it.key];
+          const matchedKey = Object.keys(chosen).find(
+            (k) => String(k).trim().toLowerCase() === String(it.key).trim().toLowerCase()
+          );
+          if (matchedKey && typeof chosen[matchedKey] === "boolean") {
+            studentVal = chosen[matchedKey];
+          }
         }
         const correctVal = !!it.correct;
         const isItemOk = studentVal !== null && studentVal === correctVal;
@@ -229,17 +394,25 @@ export default async function handler(req: any, res: any) {
         okItems,
         totalItems: items.length,
         items: evaluatedItems,
-        explanation: q2.explanation || "",
+        explanation: matchedQ.explanation || "",
       });
     }
 
     // Part III: SA
-    const q3 = p3.find((q: any, i: number) => matchQ(q, i, "p3"));
-    if (q3) {
-      const strip = (t: string) => (t || "").replace(/<[^>]*>/g, "").trim().toLowerCase();
-      const correctAns = strip(q3.answer || "");
-      const given = strip(String(answer ?? ""));
+    if (matchedPart === 3) {
+      const stripMath = (t: string) =>
+        String(t || "")
+          .replace(/⟦MATH:(.*?)⟧/gs, "$1")
+          .replace(/\\left|\\right|\\displaystyle/g, "")
+          .replace(/<[^>]*>/g, "")
+          .replace(/[$(){}\[\]]/g, "")
+          .trim()
+          .toLowerCase();
+
+      const correctAns = stripMath(matchedQ.answer || "");
+      const given = stripMath(String(answer ?? ""));
       let isCorrect = given !== "" && given === correctAns;
+
       if (!isCorrect && given !== "" && correctAns !== "") {
         const numGiven = parseFloat(given.replace(",", "."));
         const numAns = parseFloat(correctAns.replace(",", "."));
@@ -247,16 +420,18 @@ export default async function handler(req: any, res: any) {
           isCorrect = true;
         }
       }
+
       return res.json({
         type: "sa",
         correct: isCorrect,
-        answer: q3.answer,
-        explanation: q3.explanation || "",
+        answer: matchedQ.answer,
+        explanation: matchedQ.explanation || "",
       });
     }
 
     return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề" });
-  } catch (error: any) {
-    return res.status(500).json({ error: error?.message || "Internal server error" });
+  } catch (err: any) {
+    console.error("check-question-answer handler error:", err);
+    return res.status(500).json({ error: "Lỗi hệ thống khi kiểm tra đáp án" });
   }
 }
