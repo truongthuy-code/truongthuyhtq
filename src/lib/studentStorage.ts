@@ -4,6 +4,7 @@
  * submission history tracking, and post-close official answer reveal.
  */
 import { clearAuthLocalStorage, clearAuthSessionStorage, clearAuthCookies } from "./authCleanup";
+import { getLocalStoredExams } from "./allExamsStorage";
 
 export interface StudentUser {
   id: string;
@@ -32,7 +33,26 @@ export interface StudentSubmissionRecord {
   durationSeconds: number | null;
   status: "completed" | "in_progress";
   isExamClosed?: boolean;
+  allowReview?: boolean;
+  questions?: any;
 }
+
+/**
+ * Unified permission check:
+ * Allows student to view answers if:
+ * 1. Exam is closed
+ * OR
+ * 2. Student has submitted AND exam has "Xem lại đáp án sau khi nộp bài" enabled
+ */
+export function canStudentReviewSubmission(
+  sub: { isExamClosed?: boolean; examId: string; status?: string; allowReview?: boolean },
+  examAllowReview?: boolean,
+): boolean {
+  if (sub.isExamClosed || isExamOfficiallyClosed(sub.examId)) return true;
+  const allowReview = examAllowReview !== undefined ? examAllowReview : !!sub.allowReview;
+  return sub.status === "completed" && allowReview;
+}
+
 
 export interface PublishedExamAnswerKey {
   examId: string;
@@ -212,8 +232,22 @@ export function getStudentSubmissions(account?: string): StudentSubmissionRecord
   if (!acc) return [];
 
   const all = getAllSubmissions();
+  const localExams = getLocalStoredExams();
+
   return all
     .filter((s) => normalizeAccount(s.studentAccount) === acc)
+    .map((s) => {
+      const isClosed = s.isExamClosed || isExamOfficiallyClosed(s.examId);
+      const ex = localExams.find((e) => e.id === s.examId);
+      const allowReview = s.allowReview !== undefined ? s.allowReview : (ex?.allow_review ?? false);
+      const questions = s.questions || ex?.questions;
+      return {
+        ...s,
+        isExamClosed: isClosed,
+        allowReview,
+        questions,
+      };
+    })
     .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 }
 
@@ -241,6 +275,7 @@ export function saveStudentSubmission(
     studentAccount: acc,
     attemptNumber,
     isExamClosed: sub.isExamClosed || isExamOfficiallyClosed(sub.examId),
+    allowReview: sub.allowReview ?? false,
   };
 
   const existingIdx = all.findIndex((s) => s.id === sub.id);
@@ -253,6 +288,7 @@ export function saveStudentSubmission(
   saveAllSubmissions(all);
   return fullRecord;
 }
+
 
 /** Get a single student submission by ID */
 export function getStudentSubmissionById(id: string): StudentSubmissionRecord | null {

@@ -80,9 +80,9 @@ const SENT_CLOSE = "\u27E7";
 const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
-const encMath = (latex: string) =>
+export const encMath = (latex: string) =>
   `${SENT_OPEN}MATH:${latex.replace(/[\u27E6\u27E7]/g, "")}${SENT_CLOSE}`;
-const encCode = (lang: string, content: string) =>
+export const encCode = (lang: string, content: string) =>
   `${SENT_OPEN}CODE:${lang}:${encodeURIComponent(content)}${SENT_CLOSE}`;
 const encImg = (src: string) =>
   `${SENT_OPEN}IMG:${encodeURIComponent(src)}${SENT_CLOSE}`;
@@ -386,7 +386,12 @@ export function groupCodeTokens(toks: Tok[]): Tok[] {
   };
 
   for (let i = 0; i < paras.length; i++) {
-    if (paraIsCode[i]) {
+    const isBlank = paras[i].length === 0 || paras[i].every((t) => t.kind === "text" && t.text.trim() === "");
+    const nextCodeOffset = paras.slice(i + 1).findIndex((_p, idx) => paraIsCode[i + 1 + idx]);
+    const nextNonBlankOffset = paras.slice(i + 1).findIndex((p) => p.some((t) => t.kind !== "text" || t.text.trim() !== ""));
+    const isBlankInsideCode = isBlank && codeGroup.length > 0 && nextCodeOffset !== -1 && nextCodeOffset === nextNonBlankOffset;
+
+    if (paraIsCode[i] || isBlankInsideCode) {
       codeGroup.push(paras[i]);
     } else {
       flushGroup();
@@ -901,10 +906,14 @@ function parseParagraph(p: Element, images: ImageMap, ole?: OleMap): Para {
 
   walk(p);
   const indentSpaces = getParagraphIndentSpaces(p);
-  if (indentSpaces > 0 && toks.length > 0) {
+  if (indentSpaces > 0) {
     const firstTextTok = toks.find((t) => t.kind === "text") as TextTok | undefined;
-    if (firstTextTok && !firstTextTok.text.startsWith(" ") && !firstTextTok.text.startsWith("\t")) {
-      firstTextTok.text = " ".repeat(indentSpaces) + firstTextTok.text;
+    if (firstTextTok) {
+      if (!firstTextTok.text.startsWith(" ") && !firstTextTok.text.startsWith("\t")) {
+        firstTextTok.text = " ".repeat(indentSpaces) + firstTextTok.text;
+      }
+    } else if (toks.length > 0) {
+      toks.unshift({ kind: "text", text: " ".repeat(indentSpaces), props: { red: false, underline: false, mono: false, bold: false } });
     }
   }
   return { toks, plain: tokensToPlain(toks), rich: tokensToRich(toks), hasAnyMark };
@@ -925,6 +934,24 @@ function getParagraphIndentSpaces(p: Element): number {
   }) as Element | undefined;
   if (!ind) return 0;
 
+  // 1. Check character-based indentation (e.g. leftChars="400" = 4 characters)
+  const leftCharsStr =
+    ind.getAttributeNS(W_NS, "leftChars") ||
+    ind.getAttribute("w:leftChars") ||
+    ind.getAttributeNS(W_NS, "startChars") ||
+    ind.getAttribute("w:startChars") ||
+    "0";
+  const firstLineCharsStr =
+    ind.getAttributeNS(W_NS, "firstLineChars") ||
+    ind.getAttribute("w:firstLineChars") ||
+    "0";
+  const leftChars = parseInt(leftCharsStr, 10) || 0;
+  const firstLineChars = parseInt(firstLineCharsStr, 10) || 0;
+  if (leftChars > 0 || firstLineChars > 0) {
+    return Math.max(1, Math.round((leftChars + firstLineChars) / 100));
+  }
+
+  // 2. Check twips/dxa indentation (720 twips = 0.5 inch = 4 spaces)
   const leftStr =
     ind.getAttributeNS(W_NS, "left") ||
     ind.getAttribute("w:left") ||

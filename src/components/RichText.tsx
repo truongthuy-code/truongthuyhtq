@@ -93,9 +93,91 @@ function sanitizeSafeHtml(html: string): string {
   });
 }
 
+function isCodeLine(s: string): boolean {
+  if (!s || s.trim().length === 0) return false;
+  if (/^[ \t]{2,}/.test(s)) {
+    if (/[:;=+\-*/><()[\]{}#&|!~,"'%\\]/.test(s)) return true;
+    if (/^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b)/i.test(s)) return true;
+  }
+  if (
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function tokenize(s: string): Token[] {
   const out: Token[] = [];
   let i = 0;
+
+  const pushPlainChunk = (txt: string) => {
+    if (!txt) return;
+    if (!txt.includes("\n")) {
+      if (isCodeLine(txt)) {
+        const lang = detectLangSimple(txt);
+        if (
+          lang !== "plaintext" &&
+          /^(?:<!DOCTYPE|<\/?(?:html|head|body|div|p|h[1-6]|table|form)|SELECT\b|CREATE\s+TABLE)/i.test(
+            txt.trim()
+          )
+        ) {
+          out.push({ kind: "code", lang, content: txt });
+          return;
+        }
+      }
+      out.push(...tokenizePlain(txt));
+      return;
+    }
+
+    const lines = txt.split("\n");
+    const isCode = lines.map((l) => isCodeLine(l));
+    let codeGroup: string[] = [];
+    let textGroup: string[] = [];
+
+    const flushCodeGroup = () => {
+      if (codeGroup.length === 0) return;
+      while (codeGroup.length > 0 && codeGroup[codeGroup.length - 1].trim() === "") {
+        codeGroup.pop();
+      }
+      const fullCode = codeGroup.join("\n");
+      const lang = detectLangSimple(fullCode);
+      if (codeGroup.length >= 2 || (lang !== "plaintext" && isCodeLine(fullCode))) {
+        out.push({ kind: "code", lang: lang || "plaintext", content: fullCode });
+      } else {
+        out.push(...tokenizePlain(fullCode));
+      }
+      codeGroup = [];
+    };
+
+    const flushTextGroup = () => {
+      if (textGroup.length === 0) return;
+      out.push(...tokenizePlain(textGroup.join("\n")));
+      textGroup = [];
+    };
+
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx];
+      const isBlank = line.trim() === "";
+      const nextCodeOffset = lines.slice(idx + 1).findIndex((_l, off) => isCode[idx + 1 + off]);
+      const nextNonBlankOffset = lines.slice(idx + 1).findIndex((l) => l.trim() !== "");
+      const isBlankInsideCode =
+        isBlank && codeGroup.length > 0 && nextCodeOffset !== -1 && nextCodeOffset === nextNonBlankOffset;
+
+      if (isCode[idx] || isBlankInsideCode) {
+        flushTextGroup();
+        codeGroup.push(line);
+      } else {
+        flushCodeGroup();
+        textGroup.push(line);
+      }
+    }
+    flushCodeGroup();
+    flushTextGroup();
+  };
+
   const pushText = (txt: string) => {
     if (!txt) return;
     // Hỗ trợ cả markdown code fences ```lang?\n(content)```
@@ -104,7 +186,7 @@ function tokenize(s: string): Token[] {
     let m: RegExpExecArray | null;
     while ((m = codeFenceRe.exec(txt)) !== null) {
       if (m.index > last) {
-        out.push(...tokenizePlain(txt.slice(last, m.index)));
+        pushPlainChunk(txt.slice(last, m.index));
       }
       const rawLang = m[1]?.trim().toLowerCase() || "";
       const content = m[2];
@@ -113,9 +195,10 @@ function tokenize(s: string): Token[] {
       last = m.index + m[0].length;
     }
     if (last < txt.length) {
-      out.push(...tokenizePlain(txt.slice(last)));
+      pushPlainChunk(txt.slice(last));
     }
   };
+
   while (i < s.length) {
     const open = s.indexOf(SENT_OPEN, i);
     if (open === -1) {

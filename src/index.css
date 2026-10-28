@@ -147,6 +147,15 @@
     -moz-tab-size: 4 !important;
     font-family: Consolas, "Courier New", monospace !important;
   }
+  .code-content span,
+  pre.code-content span,
+  .code-content * {
+    white-space: inherit !important;
+    tab-size: inherit !important;
+    -moz-tab-size: inherit !important;
+    font-family: inherit !important;
+  }
+
 
   /* Dark mode support: high contrast light text on dark background */
   .dark .code-content,

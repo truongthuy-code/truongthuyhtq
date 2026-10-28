@@ -1,5 +1,5 @@
 import type { ParsedExam, MCQuestion, TFQuestion, SAQuestion, QuestionLevel } from "./docxParser";
-import { QUESTION_START_RE, QUESTION_PREFIX_RE } from "./docxParser";
+import { QUESTION_START_RE, QUESTION_PREFIX_RE, encCode, detectLang, isParaCodeText } from "./docxParser";
 
 /**
  * Parse plain text (with optional $..$ LaTeX math) into a ParsedExam.
@@ -64,6 +64,72 @@ export function parseTextExam(raw: string): ParsedExam {
 function stripQuestionPrefix(s: string): string {
   return s.replace(QUESTION_PREFIX_RE, "");
 }
+
+/**
+ * Detects contiguous code lines in plain text (e.g. Python, HTML, SQL)
+ * and formats them with encCode(lang, content) so RichText can render
+ * syntax highlighting, full indentation, and monospace font.
+ */
+export function formatTextWithCode(rawText: string): string {
+  if (!rawText || !rawText.includes("\n")) {
+    if (rawText && isParaCodeText(rawText)) {
+      const lang = detectLang(rawText);
+      if (
+        lang !== "plaintext" &&
+        /^(?:<!DOCTYPE|<\/?(?:html|head|body|div|p|h[1-6]|table|form)|SELECT\b|CREATE\s+TABLE)/i.test(
+          rawText.trim()
+        )
+      ) {
+        return encCode(lang, rawText);
+      }
+    }
+    return rawText;
+  }
+
+  // Already contains sentinels
+  if (rawText.includes("\u27E6CODE:")) return rawText;
+
+  const lines = rawText.split("\n");
+  const isCodeLine = lines.map((l) => isParaCodeText(l));
+
+  const outLines: string[] = [];
+  let codeGroup: string[] = [];
+
+  const flushCode = () => {
+    if (codeGroup.length === 0) return;
+    while (codeGroup.length > 0 && codeGroup[codeGroup.length - 1].trim() === "") {
+      codeGroup.pop();
+    }
+    const fullCode = codeGroup.join("\n");
+    const lang = detectLang(fullCode);
+    if (codeGroup.length >= 2 || lang !== "plaintext") {
+      outLines.push(encCode(lang, fullCode));
+    } else {
+      outLines.push(...codeGroup);
+    }
+    codeGroup = [];
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isBlank = line.trim() === "";
+    const nextCodeOffset = lines.slice(i + 1).findIndex((_l, idx) => isCodeLine[i + 1 + idx]);
+    const nextNonBlankOffset = lines.slice(i + 1).findIndex((l) => l.trim() !== "");
+    const isBlankInsideCode =
+      isBlank && codeGroup.length > 0 && nextCodeOffset !== -1 && nextCodeOffset === nextNonBlankOffset;
+
+    if (isCodeLine[i] || isBlankInsideCode) {
+      codeGroup.push(line);
+    } else {
+      flushCode();
+      outLines.push(line);
+    }
+  }
+  flushCode();
+
+  return outLines.join("\n");
+}
+
 
 /** Split a question block into (main lines, explanation string|null). */
 function splitExplanation(block: string, part: 1 | 2 | 3): { main: string; explanation: string | null } {
@@ -136,10 +202,10 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
   return {
     type: "mc",
     id: `q${idx}`,
-    text: stripQuestionPrefix(stem.join("\n")).trim(),
+    text: formatTextWithCode(stripQuestionPrefix(stem.join("\n")).trim()),
     options: opts.map((o) => ({ key: o.key, text: o.text.replace(/^\n+|\s+$/g, "") })),
     answer: (answer || "A") as any,
-    explanation,
+    explanation: explanation ? formatTextWithCode(explanation) : null,
     level,
   };
 }
@@ -168,9 +234,9 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
   return {
     type: "tf",
     id: `q${idx}`,
-    text: stripQuestionPrefix(stem.join("\n")).trim(),
-    items: items.map((i) => ({ key: i.key, text: i.text.replace(/^\n+|\s+$/g, ""), correct: i.correct })),
-    explanation,
+    text: formatTextWithCode(stripQuestionPrefix(stem.join("\n")).trim()),
+    items: items.map((i) => ({ key: i.key, text: formatTextWithCode(i.text.replace(/^\n+|\s+$/g, "")), correct: i.correct })),
+    explanation: explanation ? formatTextWithCode(explanation) : null,
     level,
   };
 }
@@ -189,10 +255,11 @@ function parsePartIIIBlock(block: string, idx: number, level: QuestionLevel | nu
   return {
     type: "sa",
     id: `q${idx}`,
-    text: stripQuestionPrefix(stem.join("\n")).trim(),
+    text: formatTextWithCode(stripQuestionPrefix(stem.join("\n")).trim()),
     answer,
-    explanation,
+    explanation: explanation ? formatTextWithCode(explanation) : null,
     level,
   };
 }
+
 

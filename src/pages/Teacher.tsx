@@ -376,6 +376,7 @@ export default function Teacher() {
         enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
         min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
       } as any,
+      allow_review: allowReview,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,

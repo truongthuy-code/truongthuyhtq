@@ -11,8 +11,12 @@ import {
   getStudentSubmissions,
   getPublishedExamAnswerKey,
   isExamOfficiallyClosed,
+  canStudentReviewSubmission,
 } from "@/lib/studentStorage";
+import { getLocalStoredExams } from "@/lib/allExamsStorage";
+import { findSampleExam } from "@/lib/sampleExams";
 import { findAssignmentOrExamByCode, ExamAssignment } from "@/lib/examAssignments";
+
 import QRScannerModal from "@/components/QRScannerModal";
 import { supabase } from "@/integrations/supabase/client";
 import { getTFValue } from "@/lib/grading";
@@ -179,7 +183,7 @@ export default function StudentDashboard() {
     });
   };
 
-  // Inspect submission & determine if exam is closed
+  // Inspect submission & determine if exam is closed or review allowed
   const openReviewModal = async (sub: StudentSubmissionRecord) => {
     setSelectedSub(sub);
     setReviewLoading(true);
@@ -200,64 +204,87 @@ export default function StudentDashboard() {
       }
 
       // 2. Fetch from Supabase RPC get_submission_for_student
-      const { data, error } = await supabase.rpc("get_submission_for_student", {
-        p_submission_id: sub.id,
-      });
+      let rpcHandled = false;
+      try {
+        const { data, error } = await supabase.rpc("get_submission_for_student", {
+          p_submission_id: sub.id,
+        });
 
-      if (!error && data) {
-        const payload: any = data;
-        const examObj = payload.exam || {};
-        // If Supabase returned full questions, exam is open for review / closed
-        if (examObj.questions) {
-          setReviewExamData({
-            title: examObj.title || sub.examTitle,
-            isClosed: true,
-            questions: examObj.questions,
-            allowReview: true,
-            displayMode: examObj.display_mode || "standard",
-            enableMinCorrect: !!(
-              examObj.enable_min_correct_percentage ??
-              examObj.lock_mode?.enable_min_correct_percentage ??
-              examObj.scoring?.enable_min_correct_percentage ??
-              false
-            ),
-            minCorrectPercentage: Number(
-              examObj.min_correct_percentage_for_review ??
-              examObj.lock_mode?.min_correct_percentage_for_review ??
-              examObj.scoring?.min_correct_percentage_for_review ??
-              0
-            ),
-          });
-          setReviewLoading(false);
-          return;
+        if (!error && data) {
+          const payload: any = data;
+          const examObj = payload.exam || {};
+          const isClosed =
+            examObj.is_closed === true ||
+            examObj.status === "closed" ||
+            examObj.manual_closed === true ||
+            (examObj.close_at && new Date() > new Date(examObj.close_at)) ||
+            isExamOfficiallyClosed(sub.examId);
+          const allowReview = !!examObj.allow_review || !!sub.allowReview;
+
+          if (examObj.questions && (isClosed || allowReview)) {
+            setReviewExamData({
+              title: examObj.title || sub.examTitle,
+              isClosed,
+              questions: examObj.questions,
+              allowReview,
+              displayMode: examObj.display_mode || "standard",
+              enableMinCorrect: !!(
+                examObj.enable_min_correct_percentage ??
+                examObj.lock_mode?.enable_min_correct_percentage ??
+                examObj.scoring?.enable_min_correct_percentage ??
+                false
+              ),
+              minCorrectPercentage: Number(
+                examObj.min_correct_percentage_for_review ??
+                examObj.lock_mode?.min_correct_percentage_for_review ??
+                examObj.scoring?.min_correct_percentage_for_review ??
+                0
+              ),
+            });
+            setReviewLoading(false);
+            rpcHandled = true;
+            return;
+          }
         }
+      } catch (rpcErr) {
+        console.warn("RPC get_submission_for_student:", rpcErr);
       }
 
-      // 3. Fallback: check exam status directly from public RPC get_exam_for_student
-      const { data: exData } = await supabase.rpc("get_exam_for_student", {
-        p_exam_id: sub.examId,
-      });
+      if (rpcHandled) return;
+
+      // 3. Fallback: check exam from local store, sample exams, or submission record
+      const localExams = getLocalStoredExams();
+      const matchedExam = localExams.find((e) => e.id === sub.examId) || (findSampleExam(sub.examId) as any);
       const isClosed =
-        (exData as any)?.status === "closed" ||
-        (exData as any)?.manual_closed === true ||
+        (matchedExam as any)?.status === "closed" ||
+        (matchedExam as any)?.manual_closed === true ||
+        ((matchedExam as any)?.close_at && new Date() > new Date((matchedExam as any).close_at)) ||
         isExamOfficiallyClosed(sub.examId);
+      const allowReview = !!(matchedExam as any)?.allow_review || !!sub.allowReview;
+
+      // Determine questions availability:
+      // If exam is closed OR (student submitted AND allow_review is true), provide questions
+      const questions =
+        (isClosed || allowReview)
+          ? ((matchedExam as any)?.questions || sub.questions || null)
+          : null;
 
       setReviewExamData({
-        title: (exData as any)?.title || sub.examTitle,
+        title: (matchedExam as any)?.title || sub.examTitle,
         isClosed,
-        questions: (exData as any)?.questions || null,
-        allowReview: !!(exData as any)?.allow_review || isClosed,
-        displayMode: (exData as any)?.display_mode || "standard",
+        questions,
+        allowReview,
+        displayMode: (matchedExam as any)?.display_mode || "standard",
         enableMinCorrect: !!(
-          (exData as any)?.enable_min_correct_percentage ??
-          (exData as any)?.lock_mode?.enable_min_correct_percentage ??
-          (exData as any)?.scoring?.enable_min_correct_percentage ??
+          (matchedExam as any)?.enable_min_correct_percentage ??
+          (matchedExam as any)?.lock_mode?.enable_min_correct_percentage ??
+          (matchedExam as any)?.scoring?.enable_min_correct_percentage ??
           false
         ),
         minCorrectPercentage: Number(
-          (exData as any)?.min_correct_percentage_for_review ??
-          (exData as any)?.lock_mode?.min_correct_percentage_for_review ??
-          (exData as any)?.scoring?.min_correct_percentage_for_review ??
+          (matchedExam as any)?.min_correct_percentage_for_review ??
+          (matchedExam as any)?.lock_mode?.min_correct_percentage_for_review ??
+          (matchedExam as any)?.scoring?.min_correct_percentage_for_review ??
           0
         ),
       });
@@ -575,6 +602,9 @@ export default function StudentDashboard() {
             <div className="space-y-3">
               {filteredSubs.map((sub) => {
                 const isClosed = sub.isExamClosed || isExamOfficiallyClosed(sub.examId);
+                const isSubmitted = sub.status === "completed";
+                const allowReview = !!sub.allowReview;
+                const canReview = isClosed || (isSubmitted && allowReview);
                 const subDate = new Date(sub.submittedAt).toLocaleString("vi-VN", {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -613,6 +643,10 @@ export default function StudentDashboard() {
                           <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold border border-emerald-500/20">
                             <Lock className="size-3" /> Đã đóng đề • Đã công bố đáp án & lời giải
                           </span>
+                        ) : canReview ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold border border-emerald-500/20">
+                            <CheckCircle2 className="size-3" /> Đã nộp bài • Xem lại đáp án sau khi nộp
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 font-medium border border-amber-500/20">
                             <Unlock className="size-3" /> Đề đang mở • Chờ GV đóng đề để xem đáp án
@@ -642,12 +676,12 @@ export default function StudentDashboard() {
                           size="sm"
                           onClick={() => openReviewModal(sub)}
                           className={`rounded-xl text-xs font-medium shadow-xs ${
-                            isClosed
+                            canReview
                               ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                               : "bg-gradient-primary text-primary-foreground"
                           }`}
                         >
-                          {isClosed ? "👁️ Xem đáp án & Lời giải" : "Xem bài làm"}
+                          {canReview ? "👁️ Xem đáp án & Lời giải" : "Xem bài làm"}
                         </Button>
                       </div>
                     </div>
@@ -693,14 +727,14 @@ export default function StudentDashboard() {
               {/* Status and answer key availability */}
               {reviewLoading ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">Đang tải đáp án chi tiết...</div>
-              ) : reviewExamData?.isClosed && reviewExamData?.questions ? (
+              ) : (reviewExamData?.isClosed || (reviewExamData?.allowReview && selectedSub.status === "completed")) && reviewExamData?.questions ? (
                 (() => {
                   const isStandard = !reviewExamData?.displayMode || reviewExamData?.displayMode === "standard";
                   const enableMinCorrect = !!reviewExamData?.enableMinCorrect;
                   const threshold = Number(reviewExamData?.minCorrectPercentage || 0);
                   const totalQ = (selectedSub.correctCount ?? 0) + (selectedSub.wrongCount ?? 0);
                   const correctRate = totalQ > 0 ? ((selectedSub.correctCount ?? 0) / totalQ) * 100 : 0;
-                  const isThresholdActive = isStandard && enableMinCorrect;
+                  const isThresholdActive = isStandard && enableMinCorrect && !reviewExamData?.isClosed;
                   const isThresholdFailed = isThresholdActive && correctRate < threshold - 1e-6;
 
                   if (isThresholdFailed) {
@@ -739,7 +773,15 @@ export default function StudentDashboard() {
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
                           <div>
-                            <b>Đề thi đã được giáo viên đóng.</b> Toàn bộ đáp án chính thức và lời giải chi tiết đã được công bố bên dưới.
+                            {reviewExamData.isClosed ? (
+                              <>
+                                <b>Đề thi đã được giáo viên đóng.</b> Toàn bộ đáp án chính thức và lời giải chi tiết đã được công bố bên dưới.
+                              </>
+                            ) : (
+                              <>
+                                <b>Đã nộp bài thi thành công.</b> Giáo viên cho phép xem lại đáp án và lời giải chi tiết sau khi nộp bài.
+                              </>
+                            )}
                           </div>
                         </div>
                         {isThresholdActive && (
@@ -760,10 +802,10 @@ export default function StudentDashboard() {
               ) : (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-300 text-xs space-y-2">
                   <div className="flex items-center gap-2 font-semibold text-sm text-amber-900 dark:text-amber-200">
-                    <AlertCircle className="size-4" /> Đề thi đang mở (Giáo viên chưa đóng đề)
+                    <AlertCircle className="size-4" /> Đề thi chưa đóng và chưa mở quyền xem đáp án
                   </div>
                   <p>
-                    Theo quy định, đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ <b>tự động hiển thị tại đây ngay sau khi Giáo viên bấm "Đóng đề thi"</b>.
+                    Theo quy định của đề thi này, đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ <b>tự động hiển thị tại đây sau khi Giáo viên bấm "Đóng đề thi"</b>.
                   </p>
                   <p className="text-[11px] opacity-80">
                     Điểm số và câu trả lời của bạn đã được ghi nhận an toàn trên hệ thống.

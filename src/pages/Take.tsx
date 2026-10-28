@@ -847,6 +847,8 @@ export default function Take() {
         submittedAt: new Date().toISOString(),
         durationSeconds: durSecs,
         status: "completed",
+        allowReview: !!exam?.allow_review,
+        questions: (!!exam?.allow_review || isExamClosed) ? exam?.questions : undefined,
       });
     } catch (e) {
       console.error("Failed to link student submission:", e);

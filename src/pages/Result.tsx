@@ -106,10 +106,18 @@ export default function Result() {
     exam?.scoring?.min_correct_percentage_for_review ??
     0
   );
+  const isExamClosed =
+    exam?.is_closed === true ||
+    exam?.status === "closed" ||
+    exam?.manual_closed === true ||
+    (exam?.close_at && new Date() > new Date(exam.close_at)) ||
+    (sub?.exam_id && isExamOfficiallyClosed(sub.exam_id));
   const allowReviewAnswers = !!(exam?.allow_review ?? (exam as any)?.allowReviewAnswers ?? false);
-  const isThresholdActive = isStandard && enableMinCorrect;
+  const canReview = isExamClosed || allowReviewAnswers;
+  const isThresholdActive = isStandard && enableMinCorrect && !isExamClosed;
   const isThresholdFailed = allowReviewAnswers && isThresholdActive && correctRate < threshold - 1e-6;
   const answers = sub.answers || {};
+
 
   // Helper number matching for Part III
   const numCorrect = (sa: string, expected: string) => {
