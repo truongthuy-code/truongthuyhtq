@@ -32,9 +32,51 @@ function tokenizePlain(s: string): Token[] {
   return out;
 }
 
+function detectLangSimple(code: string): string {
+  const t = code.toLowerCase();
+  if (
+    /(?:<!doctype\s+html|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|textarea|header|footer|nav|section|article|main|aside|img|link|meta|title)[>\s/])/i.test(
+      t
+    )
+  ) {
+    return "html";
+  }
+  if (
+    /\b(?:select\b[\s\S]*?\bfrom|insert\s+into|update\b[\s\S]*?\bset|create\s+table|delete\s+from|alter\s+table|drop\s+table|where\b[\s\S]*?\b(?:and|or|order\s+by|group\s+by)|order\s+by\b|group\s+by\b)\b/i.test(
+      t
+    ) ||
+    /(?:^|\n)\s*(?:select\b|from\b|where\b|order\s+by\b|group\s+by\b|insert\s+into|update\b|delete\s+from|create\s+table)/i.test(
+      t
+    )
+  ) {
+    return "sql";
+  }
+  if (/#include\s*<|\b(?:int\s+main|std::|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\()/i.test(code)) {
+    return "cpp";
+  }
+  if (/\b(?:program\s+\w+|begin\b[\s\S]*?\bend[.;]|writeln\s*\(|readln\s*\()\b/i.test(t)) {
+    return "pascal";
+  }
+  if (
+    /\b(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+\s+import|print\s*\(|elif\b|self\b|lambda\b|range\s*\(|len\s*\(|__init__|input\s*\(|int\s*\(|float\s*\(|str\s*\(|append\s*\(|pop\s*\(|keys\s*\(|values\s*\(|items\s*\()\b/i.test(
+      code
+    ) ||
+    /(?:^|\n)\s*(?:if|for|while|elif|else|def|class|try|except|finally|with)\b.*:\s*(?:\n|$)/i.test(
+      code
+    ) ||
+    /(?:^|\n)[ \t]{2,}(?:print|return|pass|break|continue|yield)\b/i.test(code)
+  ) {
+    return "python";
+  }
+  if (/\b(?:console\.log|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|=>|document\.getElementById)\b/i.test(code)) {
+    return "javascript";
+  }
+  return "plaintext";
+}
+
 function sanitizeSafeHtml(html: string): string {
   return html.replace(/<(\/?[a-zA-Z0-9]+)([^>]*)>/g, (_match, tag, attrs) => {
-    const t = tag.toLowerCase();
+    const t = tag.toLowerCase().replace(/^\//, "");
     if (["b", "strong", "i", "em", "u", "s", "strike", "del", "sub", "sup", "mark", "br"].includes(t)) {
       return `<${tag}>`;
     }
@@ -43,9 +85,11 @@ function sanitizeSafeHtml(html: string): string {
       if (colorMatch) {
         return `<span ${colorMatch[0]}>`;
       }
-      return "<span>";
+      return tag.startsWith("/") ? "</span>" : "<span>";
     }
-    return "";
+    // Không nuốt mất thẻ lạ (như <div>, <p>, <h1>, <html> trong code HTML).
+    // Escape để hiển thị đúng dưới dạng text mà không bị render thành DOM!
+    return `&lt;${tag}${attrs}&gt;`;
   });
 }
 
@@ -54,7 +98,23 @@ function tokenize(s: string): Token[] {
   let i = 0;
   const pushText = (txt: string) => {
     if (!txt) return;
-    out.push(...tokenizePlain(txt));
+    // Hỗ trợ cả markdown code fences ```lang?\n(content)```
+    const codeFenceRe = /```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = codeFenceRe.exec(txt)) !== null) {
+      if (m.index > last) {
+        out.push(...tokenizePlain(txt.slice(last, m.index)));
+      }
+      const rawLang = m[1]?.trim().toLowerCase() || "";
+      const content = m[2];
+      const lang = rawLang || detectLangSimple(content);
+      out.push({ kind: "code", lang: lang || "plaintext", content });
+      last = m.index + m[0].length;
+    }
+    if (last < txt.length) {
+      out.push(...tokenizePlain(txt.slice(last)));
+    }
   };
   while (i < s.length) {
     const open = s.indexOf(SENT_OPEN, i);
@@ -65,7 +125,7 @@ function tokenize(s: string): Token[] {
     if (open > i) pushText(s.slice(i, open));
     const close = s.indexOf(SENT_CLOSE, open);
     if (close === -1) {
-      out.push({ kind: "text", value: s.slice(open) });
+      pushText(s.slice(open));
       break;
     }
     const payload = s.slice(open + 1, close);
@@ -85,7 +145,7 @@ function tokenize(s: string): Token[] {
         out.push({ kind: "tbl", rows });
       } catch {/* skip */}
     } else {
-      out.push({ kind: "text", value: s.slice(open, close + 1) });
+      pushText(s.slice(open, close + 1));
     }
     i = close + 1;
   }
@@ -195,9 +255,10 @@ export default function RichText({ text, className }: { text: string; className?
           }
           // code
           let html = "";
+          const effectiveLang = t.lang && t.lang !== "plaintext" ? t.lang : detectLangSimple(t.content);
           try {
-            if (t.lang && t.lang !== "plaintext" && hljs.getLanguage(t.lang)) {
-              html = hljs.highlight(t.content, { language: t.lang }).value;
+            if (effectiveLang && effectiveLang !== "plaintext" && hljs.getLanguage(effectiveLang)) {
+              html = hljs.highlight(t.content, { language: effectiveLang }).value;
             } else {
               html = hljs.highlightAuto(t.content).value;
             }
@@ -210,10 +271,25 @@ export default function RichText({ text, className }: { text: string; className?
           return (
             <pre
               key={idx}
-              className="my-2 rounded-md bg-muted p-3 overflow-x-auto text-sm"
+              className="code-content my-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 p-3.5 sm:p-4 overflow-x-auto text-xs sm:text-sm border border-slate-200 dark:border-slate-800 shadow-xs"
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                tabSize: 4,
+                MozTabSize: 4,
+                fontFamily: 'Consolas, "Courier New", monospace',
+              }}
             >
               <code
-                className={`language-${t.lang} hljs`}
+                className={`language-${effectiveLang || t.lang || "plaintext"} hljs`}
+                style={{
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  tabSize: 4,
+                  MozTabSize: 4,
+                  fontFamily: 'Consolas, "Courier New", monospace',
+                  backgroundColor: "transparent",
+                }}
                 dangerouslySetInnerHTML={{ __html: html }}
               />
             </pre>

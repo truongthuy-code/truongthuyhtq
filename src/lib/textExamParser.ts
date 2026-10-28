@@ -123,7 +123,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
       if (cur) opts.push(cur);
       cur = { key: m[2].toUpperCase() as any, text: m[3], marked: m[1] === "*" };
     } else if (inOptions && cur) {
-      cur.text += "\n" + ln.trim();
+      cur.text += "\n" + ln.replace(/\s+$/, "");
     } else {
       stem.push(ln);
     }
@@ -137,7 +137,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
     type: "mc",
     id: `q${idx}`,
     text: stripQuestionPrefix(stem.join("\n")).trim(),
-    options: opts.map((o) => ({ key: o.key, text: o.text.trim() })),
+    options: opts.map((o) => ({ key: o.key, text: o.text.replace(/^\n+|\s+$/g, "") })),
     answer: (answer || "A") as any,
     explanation,
     level,
@@ -159,7 +159,7 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
       if (cur) items.push(cur);
       cur = { key: m[2].toLowerCase() as any, text: m[3], correct: m[1] === "*" };
     } else if (inItems && cur) {
-      cur.text += "\n" + ln.trim();
+      cur.text += "\n" + ln.replace(/\s+$/, "");
     } else {
       stem.push(ln);
     }
@@ -169,7 +169,7 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
     type: "tf",
     id: `q${idx}`,
     text: stripQuestionPrefix(stem.join("\n")).trim(),
-    items: items.map((i) => ({ key: i.key, text: i.text.trim(), correct: i.correct })),
+    items: items.map((i) => ({ key: i.key, text: i.text.replace(/^\n+|\s+$/g, ""), correct: i.correct })),
     explanation,
     level,
   };

@@ -34,6 +34,7 @@ import {
   UserCheck,
   Lock,
   KeyRound,
+  SkipForward,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
@@ -2340,6 +2341,64 @@ export default function Take() {
     const isCurrentMarked = !!bookmarks[currentQ.id];
     const qFb = feedback[currentQ.id];
 
+    // Thuật toán phát hiện độ dài nội dung để co giãn cỡ chữ tự động
+    const isContentLong = (() => {
+      let len = (currentQ.text || "").length;
+      if (currentQ.type === "mc" && currentQ.options) {
+        currentQ.options.forEach((o: any) => {
+          len += (o.text || "").length;
+        });
+      } else if (currentQ.type === "tf" && currentQ.items) {
+        currentQ.items.forEach((it: any) => {
+          len += (it.text || "").length;
+        });
+      }
+      const hasTables = (currentQ.text || "").includes("<table") || (currentQ.text || "").includes("|---");
+      const hasImages = (currentQ.text || "").includes("<img") || (currentQ.text || "").includes("![");
+      const hasCode =
+        (currentQ.text || "").includes("<pre") ||
+        (currentQ.text || "").includes("```") ||
+        (currentQ.text || "").includes("\u27E6CODE:") ||
+        (currentQ.text || "").includes("⟦CODE:");
+      return len > 350 || hasTables || hasCode || (hasImages && len > 120);
+    })();
+
+    const isContentShort = (() => {
+      let len = (currentQ.text || "").length;
+      if (currentQ.type === "mc" && currentQ.options) {
+        currentQ.options.forEach((o: any) => {
+          len += (o.text || "").length;
+        });
+      } else if (currentQ.type === "tf" && currentQ.items) {
+        currentQ.items.forEach((it: any) => {
+          len += (it.text || "").length;
+        });
+      }
+      const hasTables = (currentQ.text || "").includes("<table") || (currentQ.text || "").includes("|---");
+      const hasImages = (currentQ.text || "").includes("<img") || (currentQ.text || "").includes("![");
+      const hasCode =
+        (currentQ.text || "").includes("<pre") ||
+        (currentQ.text || "").includes("```") ||
+        (currentQ.text || "").includes("\u27E6CODE:") ||
+        (currentQ.text || "").includes("⟦CODE:");
+      return len < 150 && !hasTables && !hasImages && !hasCode;
+    })();
+
+    const stemSizeClass = isContentShort
+      ? "text-lg sm:text-xl md:text-2xl"
+      : isContentLong
+      ? "text-sm sm:text-base md:text-lg"
+      : "text-base sm:text-lg md:text-xl";
+
+    const optionTextSize = isContentShort
+      ? "text-base sm:text-lg"
+      : isContentLong
+      ? "text-xs sm:text-sm"
+      : "text-sm sm:text-base";
+
+    const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
+    const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
+
     const handleStandardAnswer = (targetQ: any) => {
       if (!targetQ) return;
       if (checkingQId === targetQ.id) return;
@@ -2356,7 +2415,6 @@ export default function Take() {
         checkQuestion(targetQ);
       } else {
         // 3. Nếu giáo viên KHÔNG BẬT tính năng instant_feedback:
-        // Ghi nhận câu trả lời theo logic hiện tại, tuyệt đối KHÔNG hiển thị đáp án hoặc lời giải
         toast.success(`Đã ghi nhận câu trả lời cho Câu ${questionIndex + 1}!`);
       }
     };
@@ -2364,52 +2422,61 @@ export default function Take() {
     return (
       <Card
         key={currentQ.id}
-        className="w-full rounded-3xl border-2 border-border/80 bg-card/95 shadow-xl p-5 sm:p-8 lg:p-10 flex flex-col justify-between"
+        className={`w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-md ${cardPadding} flex flex-col justify-between`}
       >
         <div className="flex-1 flex flex-col justify-start">
           {/* Header câu hỏi: Số câu, Loại câu & Nút Đánh dấu */}
-          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <div className="px-4 py-1.5 rounded-2xl bg-primary text-primary-foreground font-black text-sm sm:text-base tracking-wider shadow-sm flex items-center gap-1.5">
-                <span>CÂU {questionIndex + 1}</span>
-                <span className="text-primary-foreground/75 font-bold text-xs sm:text-sm">/ {questions.length}</span>
-              </div>
-              <div className="px-3.5 py-1 rounded-xl bg-primary/10 text-primary font-bold text-xs sm:text-sm border border-primary/20">
-                {currentQ._part === 1
-                  ? "PHẦN I • TRẮC NGHIỆM 4 LỰA CHỌN"
-                  : currentQ._part === 2
-                  ? "PHẦN II • TRẮC NGHIỆM ĐÚNG / SAI"
-                  : "PHẦN III • TRẢ LỜI NGẮN"}
-              </div>
+          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-200">
+                Câu {questionIndex + 1}
+              </span>
+              <span className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm font-medium">
+                / {questions.length}
+              </span>
             </div>
 
-            {/* Nút đánh dấu xem lại câu hỏi */}
-            <button
-              type="button"
-              onClick={() => toggleBookmark(currentQ.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs sm:text-sm border transition-all ${
-                isCurrentMarked
-                  ? "border-amber-400 bg-amber-400/20 text-amber-700 dark:text-amber-300 shadow-sm"
-                  : "border-border text-muted-foreground hover:bg-muted"
-              }`}
-              title="Đánh dấu câu hỏi để xem lại"
-            >
-              <Bookmark className={`size-4 ${isCurrentMarked ? "fill-amber-500 text-amber-500" : ""}`} />
-              <span className="hidden sm:inline">{isCurrentMarked ? "Đã đánh dấu" : "Đánh dấu"}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs sm:text-sm border border-slate-200 dark:border-slate-700">
+                {currentQ._part === 1
+                  ? "PHẦN I – Trắc nghiệm"
+                  : currentQ._part === 2
+                  ? "PHẦN II – Đúng/Sai"
+                  : "PHẦN III – Trả lời ngắn"}
+              </div>
+
+              {/* Nút đánh dấu xem lại câu hỏi */}
+              <button
+                type="button"
+                onClick={() => toggleBookmark(currentQ.id)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${
+                  isCurrentMarked
+                    ? "border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 shadow-xs"
+                    : "border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+                title="Đánh dấu câu hỏi để xem lại"
+              >
+                <Bookmark className={`size-3.5 ${isCurrentMarked ? "fill-amber-500 text-amber-500" : ""}`} />
+                <span className="hidden sm:inline">{isCurrentMarked ? "Đã đánh dấu" : "Đánh dấu"}</span>
+              </button>
+            </div>
           </div>
 
-          {/* Nội dung câu hỏi */}
-          <div className="font-bold text-xl sm:text-2xl lg:text-[clamp(22px,2.2vw,32px)] leading-relaxed text-foreground tracking-tight mb-6 sm:mb-8 question-content">
+          {/* Nội dung câu hỏi (Font Times New Roman, trừ code/pre) */}
+          <div
+            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium ${
+              isContentLong ? "mb-3" : "mb-4 sm:mb-5"
+            } ${stemSizeClass}`}
+          >
             <RichText text={currentQ.text} />
           </div>
 
-          {/* Phần I: Trắc nghiệm 4 lựa chọn A, B, C, D */}
+          {/* PHẦN I: Trắc nghiệm 4 lựa chọn (Hiển thị cột dọc, ○ A. [Nội dung]) */}
           {currentQ.type === "mc" && (
             <RadioGroup
               value={answers[currentQ.id] || ""}
               onValueChange={(val) => onMcSelect(currentQ.id, val)}
-              className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5 w-full"
+              className={`${itemSpacing} w-full`}
             >
               {(optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || []).map(
                 (key: string, optIndex: number) => {
@@ -2419,7 +2486,7 @@ export default function Take() {
                     ) || currentQ.options?.[optIndex];
                   if (!opt) return null;
                   const optKey = opt.key || key;
-                  const theme = OPTION_THEMES[optIndex % OPTION_THEMES.length];
+                  const optLetter = String.fromCharCode(65 + optIndex);
                   const isChosen = answers[currentQ.id] === optKey;
                   const isCorrectOpt =
                     !!qFb && String(qFb.answer || "").trim().toUpperCase() === String(optKey).trim().toUpperCase();
@@ -2427,20 +2494,20 @@ export default function Take() {
                   return (
                     <label
                       key={optKey}
-                      className={`group flex items-center gap-4 sm:gap-5 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] select-none shadow-sm transition-all duration-200 ${
+                      className={`group flex items-start sm:items-center gap-3 sm:gap-3.5 p-3 sm:p-3.5 rounded-xl border transition-all duration-150 select-none ${
                         qFb
-                          ? "cursor-not-allowed pointer-events-none"
+                          ? "cursor-not-allowed"
                           : "cursor-pointer"
                       } ${
                         qFb
                           ? isCorrectOpt
-                            ? "border-emerald-500 bg-emerald-500/15 ring-4 ring-emerald-500/30"
+                            ? "border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/40 ring-1 ring-emerald-500"
                             : isChosen
-                            ? "border-rose-500 bg-rose-500/15 ring-4 ring-rose-500/30"
-                            : "border-border/60 opacity-60"
+                            ? "border-rose-500 bg-rose-50/80 dark:bg-rose-950/40 ring-1 ring-rose-500"
+                            : "border-slate-200 dark:border-slate-800 opacity-60 bg-white dark:bg-slate-900"
                           : isChosen
-                          ? `${theme.activeRing} shadow-md scale-[1.015]`
-                          : `${theme.cardBorder} ${theme.cardBg} hover:shadow-md`
+                          ? "border-teal-500 bg-teal-50/70 dark:bg-teal-950/40 ring-1 ring-teal-500 text-teal-950 dark:text-teal-100 shadow-xs"
+                          : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:border-slate-300 dark:hover:border-slate-700 text-slate-800 dark:text-slate-200"
                       }`}
                     >
                       <RadioGroupItem
@@ -2449,32 +2516,40 @@ export default function Take() {
                         className="sr-only"
                         disabled={!!qFb}
                       />
+                      {/* Vòng tròn radio */}
                       <div
-                        className={`size-12 sm:size-14 lg:size-16 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl flex items-center justify-center shrink-0 border-2 transition-transform ${
+                        className={`size-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 transition-colors ${
                           qFb
                             ? isCorrectOpt
-                              ? "bg-emerald-500 text-white border-emerald-600 scale-105"
+                              ? "border-emerald-600 bg-emerald-600 text-white"
                               : isChosen
-                              ? "bg-rose-500 text-white border-rose-600"
-                              : "bg-muted text-muted-foreground border-border"
+                              ? "border-rose-600 bg-rose-600 text-white"
+                              : "border-slate-300 dark:border-slate-600"
                             : isChosen
-                            ? `${theme.badgeBg} border-white/50 scale-105 ring-2 ring-primary/40`
-                            : `${theme.badgeBg} border-transparent group-hover:scale-105`
+                            ? "border-teal-600 bg-teal-600 text-white"
+                            : "border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 group-hover:border-teal-400"
                         }`}
                       >
-                        {theme.letter}
+                        {((!qFb && isChosen) || (qFb && (isChosen || isCorrectOpt))) && (
+                          <div className="size-2 rounded-full bg-white" />
+                        )}
                       </div>
-                      <span className="flex-1 text-[clamp(17px,1.8vw,26px)] font-semibold leading-snug text-foreground">
+
+                      {/* Chữ cái A/B/C/D + Nội dung phương án (Font Times New Roman) */}
+                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize}`}>
+                        <span className="font-bold mr-1.5">{optLetter}.</span>
                         <RichText text={opt.text} />
-                      </span>
+                      </div>
+
+                      {/* Phản hồi tức thì */}
                       {isCorrectOpt && (
-                        <span className="shrink-0 px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-black text-xs sm:text-sm whitespace-nowrap shadow-sm">
-                          ✅ ĐÚNG
+                        <span className="shrink-0 px-2.5 py-0.5 rounded-md bg-emerald-500 text-white font-bold text-xs whitespace-nowrap shadow-xs">
+                          ✓ Đúng
                         </span>
                       )}
                       {qFb && isChosen && !isCorrectOpt && (
-                        <span className="shrink-0 px-3 py-1.5 rounded-xl bg-rose-500 text-white font-black text-xs sm:text-sm whitespace-nowrap shadow-sm">
-                          ❌ BẠN CHỌN
+                        <span className="shrink-0 px-2.5 py-0.5 rounded-md bg-rose-500 text-white font-bold text-xs whitespace-nowrap shadow-xs">
+                          ✗ Bạn chọn
                         </span>
                       )}
                     </label>
@@ -2484,11 +2559,12 @@ export default function Take() {
             </RadioGroup>
           )}
 
-          {/* Phần II: Trắc nghiệm Đúng / Sai */}
+          {/* PHẦN II: Trắc nghiệm Đúng / Sai (Nút Đúng/Sai bên TRÁI, nhận định bên PHẢI) */}
           {currentQ.type === "tf" && (
-            <div className="space-y-4 w-full">
-              <div className="text-sm sm:text-base font-bold text-muted-foreground mb-1">
-                Chọn <b className="text-emerald-600">Đúng</b> hoặc <b className="text-rose-600">Sai</b> cho từng ý:
+            <div className={`${itemSpacing} w-full`}>
+              <div className="text-xs sm:text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+                Chọn <b className="text-teal-600 dark:text-teal-400">Đúng</b> hoặc{" "}
+                <b className="text-rose-600 dark:text-rose-400">Sai</b> cho từng ý:
               </div>
               {(optionOrders[currentQ.id] || currentQ.items?.map((it: any) => it.key) || []).map(
                 (key: string, itemIdx: number) => {
@@ -2508,61 +2584,63 @@ export default function Take() {
                   return (
                     <div
                       key={itemKey}
-                      className={`rounded-2xl sm:rounded-3xl border-2 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm ${
+                      className={`rounded-xl border p-3 sm:p-3.5 flex items-start sm:items-center gap-3 transition-all ${
                         itOk === true
-                          ? "border-emerald-500 bg-emerald-500/10"
+                          ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/30"
                           : itOk === false
-                          ? "border-rose-500 bg-rose-500/10"
-                          : "border-border/90 bg-card hover:bg-muted/20"
+                          ? "border-rose-500 bg-rose-50/70 dark:bg-rose-950/30"
+                          : val !== null && val !== undefined
+                          ? "border-teal-400/80 bg-teal-50/40 dark:bg-teal-950/20"
+                          : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
                       }`}
                     >
-                      <div className="flex items-start gap-3.5 flex-1">
-                        <div className="size-10 sm:size-11 rounded-xl bg-muted border-2 border-border font-black text-lg sm:text-xl flex items-center justify-center shrink-0">
-                          {label})
-                        </div>
-                        <div className="text-[clamp(17px,1.8vw,26px)] font-semibold leading-snug flex-1">
-                          <RichText text={it.text} />
-                          {fbIt && (
-                            <span
-                              className={`block mt-2 text-sm sm:text-base font-black ${
-                                itOk ? "text-emerald-600" : "text-rose-600"
-                              }`}
-                            >
-                              {itOk ? "✅ Chính xác" : `❌ Chưa đúng — Đáp án: ${fbIt.correct ? "Đúng" : "Sai"}`}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
+                      {/* BÊN TRÁI: 2 nút Đúng và Sai */}
+                      <div className="flex items-center gap-1.5 shrink-0 pt-0.5 sm:pt-0">
                         <button
                           type="button"
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, true)}
-                          className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
+                          className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold border transition-all ${
                             qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
                           } ${
                             val === true
-                              ? "border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25 scale-105"
-                              : "border-border bg-card hover:bg-muted text-foreground"
+                              ? "border-teal-600 bg-teal-600 text-white shadow-xs"
+                              : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
                           }`}
                         >
-                          ĐÚNG
+                          Đúng
                         </button>
                         <button
                           type="button"
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, false)}
-                          className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
+                          className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold border transition-all ${
                             qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
                           } ${
                             val === false
-                              ? "border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-105"
-                              : "border-border bg-card hover:bg-muted text-foreground"
+                              ? "border-rose-600 bg-rose-600 text-white shadow-xs"
+                              : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
                           }`}
                         >
-                          SAI
+                          Sai
                         </button>
+                      </div>
+
+                      {/* BÊN PHẢI: Ký hiệu ý a), b)... và nội dung nhận định (Font Times New Roman) */}
+                      <div
+                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize}`}
+                      >
+                        <span className="font-bold mr-1.5">{label})</span>
+                        <RichText text={it.text} />
+                        {fbIt && (
+                          <span
+                            className={`block mt-1 text-xs font-bold ${
+                              itOk ? "text-emerald-600" : "text-rose-600"
+                            }`}
+                          >
+                            {itOk ? "✓ Chính xác" : `✗ Chưa đúng — Đáp án: ${fbIt.correct ? "Đúng" : "Sai"}`}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -2571,10 +2649,10 @@ export default function Take() {
             </div>
           )}
 
-          {/* Phần III: Trả lời ngắn */}
+          {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
-            <div className="mt-3 w-full max-w-3xl">
-              <Label className="text-base sm:text-xl font-black text-foreground block mb-2">
+            <div className="mt-3 w-full max-w-2xl">
+              <Label className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2587,13 +2665,13 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-14 sm:h-18 text-xl sm:text-3xl font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
-                placeholder={instantFb ? "Nhập câu trả lời hoặc số liệu..." : "Nhập câu trả lời hoặc số liệu..."}
+                className="h-11 sm:h-12 text-base sm:text-lg font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                placeholder="Nhập câu trả lời hoặc số liệu..."
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
                 <span>
                   {answers[currentQ.id] ? (
-                    <span className="text-emerald-600 font-bold">✓ Đã lưu câu trả lời</span>
+                    <span className="text-teal-600 font-bold">✓ Đã lưu câu trả lời</span>
                   ) : (
                     "Chưa nhập câu trả lời"
                   )}
@@ -2601,7 +2679,7 @@ export default function Take() {
                 <span>Chấm điểm tự động</span>
               </div>
               {qFb && (
-                <div className="mt-4 text-base sm:text-lg font-bold rounded-2xl bg-muted/60 p-4 border">
+                <div className="mt-3 text-sm sm:text-base font-times-new-roman rounded-xl bg-slate-50 dark:bg-slate-800/80 p-3 border">
                   {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <b className="text-emerald-600">
                     <RichText text={String(qFb.answer ?? "")} />
@@ -2611,219 +2689,199 @@ export default function Take() {
             </div>
           )}
 
-          {/* KHU VỰC NÚT "TRẢ LỜI" VÀ PHẢN HỒI (CHẾ ĐỘ TIÊU CHUẨN) */}
-          <div className="mt-6 pt-5 border-t border-border">
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 p-4 sm:p-5 rounded-3xl border border-dashed border-primary/30">
-              <div className="text-xs sm:text-sm text-muted-foreground flex items-center gap-2 font-medium">
-                <Sparkles className="size-4 text-primary shrink-0" />
-                <span>
-                  {qFb
-                    ? "Câu hỏi đã được trả lời."
-                    : instantFb
-                    ? isAnswered(currentQ)
-                      ? "Bấm \"Trả lời\" để xem kết quả đúng/sai, đáp án đúng và lời giải chi tiết."
-                      : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\"."
-                    : isAnswered(currentQ)
-                    ? "Đã chọn đáp án. Bấm \"Trả lời\" để ghi nhận câu này."
-                    : "Chọn hoặc nhập câu trả lời, sau đó bấm \"Trả lời\"."}
-                </span>
-              </div>
-
-              {qFb ? (
-                <Button
-                  type="button"
-                  disabled
-                  className="rounded-2xl font-black bg-muted text-muted-foreground border-2 border-border cursor-not-allowed flex items-center gap-2 px-6 py-3 h-12 text-sm sm:text-base opacity-95 select-none"
+          {/* HỘP HIỂN THỊ ĐÁP ÁN ĐÚNG & LỜI GIẢI (CHỈ KHI instantFb VÀ ĐÃ BẤM TRẢ LỜI -> CÓ qFb) */}
+          {instantFb && qFb && (
+            <div
+              className={`mt-4 rounded-2xl border p-4 sm:p-5 shadow-xs transition-all animate-fade-in ${
+                qFb.correct
+                  ? "border-emerald-500/70 bg-emerald-50/60 dark:bg-emerald-950/30"
+                  : "border-rose-500/70 bg-rose-50/60 dark:bg-rose-950/30"
+              }`}
+            >
+              {/* 1. Trạng thái Đúng / Sai */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-sm sm:text-base shadow-xs ${
+                    qFb.correct ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"
+                  }`}
                 >
-                  <CheckCircle2 className="size-5 text-emerald-600" />
-                  <span>ĐÃ TRẢ LỜI</span>
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  onClick={() => handleStandardAnswer(currentQ)}
-                  disabled={checkingQId === currentQ.id}
-                  className="rounded-2xl font-black bg-gradient-to-r from-primary to-sky-600 hover:from-primary/95 hover:to-sky-600/95 text-white shadow-md hover:shadow-lg transition-all flex items-center gap-2 px-6 py-3 h-12 text-sm sm:text-base active:scale-95"
-                >
-                  {checkingQId === currentQ.id ? (
+                  {qFb.correct ? (
                     <>
-                      <Loader2 className="size-5 animate-spin" />
-                      <span>Đang kiểm tra...</span>
+                      <CheckCircle2 className="size-4" />
+                      <span>✓ Đúng</span>
                     </>
                   ) : (
                     <>
-                      <CheckCircle2 className="size-5" />
-                      <span>TRẢ LỜI</span>
+                      <span className="font-black leading-none">✗</span>
+                      <span>Chưa chính xác</span>
                     </>
-                  )}
-                </Button>
-              )}
-            </div>
-
-            {/* HỘP HIỂN THỊ ĐÁP ÁN ĐÚNG & LỜI GIẢI (CHỈ KHI instantFb VÀ ĐÃ BẤM TRẢ LỜI -> CÓ qFb) */}
-            {instantFb && qFb && (
-              <div
-                className={`mt-5 rounded-3xl border-2 p-5 sm:p-7 shadow-sm transition-all animate-fade-in ${
-                  qFb.correct
-                    ? "border-emerald-500/80 bg-emerald-500/10"
-                    : "border-rose-500/80 bg-rose-500/10"
-                }`}
-              >
-                {/* 1. Trạng thái Đúng / Sai */}
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div
-                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-black text-base sm:text-xl shadow-xs ${
-                      qFb.correct
-                        ? "bg-emerald-500 text-white"
-                        : "bg-rose-500 text-white"
-                    }`}
-                  >
-                    {qFb.correct ? (
-                      <>
-                        <CheckCircle2 className="size-5 sm:size-6" />
-                        <span>✓ Đúng</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-xl font-black leading-none">✗</span>
-                        <span>Chưa chính xác</span>
-                      </>
-                    )}
-                  </div>
-
-                  {qFb.type === "tf" && (
-                    <span className="text-xs sm:text-sm font-bold text-foreground bg-card px-3.5 py-1.5 rounded-xl border">
-                      Đúng {qFb.okItems}/{qFb.totalItems} ý
-                    </span>
                   )}
                 </div>
 
-                {/* 2. Hiển thị Đáp án đúng */}
-                {qFb.type === "mc" && (
-                  <div className="mt-4 p-4 rounded-2xl bg-card border text-sm sm:text-base">
-                    <span className="font-bold text-muted-foreground">Đáp án đúng: </span>
-                    <span className="font-black text-emerald-600">
-                      {(() => {
-                        const order = optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || [];
-                        const pos = order.findIndex(
-                          (k: string) => String(k).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
-                        );
-                        const letter = String.fromCharCode(65 + (pos < 0 ? 0 : pos));
-                        const optObj =
-                          currentQ.options?.find(
-                            (o: any) => String(o.key).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
-                          ) || (pos >= 0 ? currentQ.options?.[pos] : null);
-                        return (
-                          <>
-                            <b>{letter}.</b> {optObj ? <RichText text={optObj.text} /> : qFb.answer}
-                          </>
-                        );
-                      })()}
-                    </span>
-                  </div>
-                )}
-
-                {qFb.type === "sa" && (
-                  <div className="mt-4 p-4 rounded-2xl bg-card border text-sm sm:text-base">
-                    <span className="font-bold text-muted-foreground">Đáp án đúng: </span>
-                    <span className="font-black text-emerald-600">
-                      <RichText text={String(qFb.answer ?? "")} />
-                    </span>
-                  </div>
-                )}
-
-                {qFb.type === "tf" && qFb.items && (
-                  <div className="mt-4 p-4 rounded-2xl bg-card border space-y-2">
-                    <div className="font-bold text-xs sm:text-sm text-muted-foreground mb-1">
-                      Đáp án chi tiết từng ý:
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {qFb.items.map((it: any, iIdx: number) => {
-                        const lbl = String.fromCharCode(97 + iIdx);
-                        const isItCorrect = it.student !== null && it.student === it.correct;
-                        return (
-                          <div
-                            key={it.key || iIdx}
-                            className={`p-2.5 rounded-xl border text-xs sm:text-sm flex items-center justify-between ${
-                              isItCorrect
-                                ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-800 dark:text-emerald-300"
-                                : "bg-rose-500/10 border-rose-500/40 text-rose-800 dark:text-rose-300"
-                            }`}
-                          >
-                            <span className="font-black">Ý {lbl})</span>
-                            <span className="font-bold">
-                              Đáp án: <b>{it.correct ? "Đúng" : "Sai"}</b>
-                            </span>
-                            <span>{isItCorrect ? "✅ Chính xác" : "❌ Chưa đúng"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. Hiển thị phần "Lời giải" / "Giải thích" nếu đề có nội dung giải thích */}
-                {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
-                  <div className="mt-4 rounded-2xl bg-card p-4 sm:p-5 border-2 border-primary/20 shadow-xs">
-                    <div className="font-black text-primary text-sm sm:text-base mb-1.5 flex items-center gap-2">
-                      <Sparkles className="size-4.5" />
-                      <span>Lời giải chi tiết:</span>
-                    </div>
-                    <div className="whitespace-pre-wrap leading-relaxed font-medium text-foreground text-xs sm:text-sm">
-                      <RichText text={qFb.explanation} />
-                    </div>
-                  </div>
+                {qFb.type === "tf" && (
+                  <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 px-3 py-1 rounded-lg border">
+                    Đúng {qFb.okItems}/{qFb.totalItems} ý
+                  </span>
                 )}
               </div>
-            )}
-          </div>
+
+              {/* 2. Hiển thị Đáp án đúng */}
+              {qFb.type === "mc" && (
+                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border text-xs sm:text-sm font-times-new-roman">
+                  <span className="font-semibold text-slate-500">Đáp án đúng: </span>
+                  <span className="font-bold text-emerald-600">
+                    {(() => {
+                      const order = optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || [];
+                      const pos = order.findIndex(
+                        (k: string) => String(k).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
+                      );
+                      const letter = String.fromCharCode(65 + (pos < 0 ? 0 : pos));
+                      const optObj =
+                        currentQ.options?.find(
+                          (o: any) => String(o.key).trim().toUpperCase() === String(qFb.answer).trim().toUpperCase()
+                        ) || (pos >= 0 ? currentQ.options?.[pos] : null);
+                      return (
+                        <>
+                          <b>{letter}.</b> {optObj ? <RichText text={optObj.text} /> : qFb.answer}
+                        </>
+                      );
+                    })()}
+                  </span>
+                </div>
+              )}
+
+              {qFb.type === "sa" && (
+                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border text-xs sm:text-sm font-times-new-roman">
+                  <span className="font-semibold text-slate-500">Đáp án đúng: </span>
+                  <span className="font-bold text-emerald-600">
+                    <RichText text={String(qFb.answer ?? "")} />
+                  </span>
+                </div>
+              )}
+
+              {qFb.type === "tf" && qFb.items && (
+                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border space-y-2">
+                  <div className="font-semibold text-xs text-slate-500 mb-1">
+                    Đáp án chi tiết từng ý:
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {qFb.items.map((it: any, iIdx: number) => {
+                      const lbl = String.fromCharCode(97 + iIdx);
+                      const isItCorrect = it.student !== null && it.student === it.correct;
+                      return (
+                        <div
+                          key={it.key || iIdx}
+                          className={`p-2 rounded-lg border text-xs flex items-center justify-between font-times-new-roman ${
+                            isItCorrect
+                              ? "bg-emerald-50/80 border-emerald-300 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+                              : "bg-rose-50/80 border-rose-300 text-rose-800 dark:bg-rose-950/30 dark:text-rose-300"
+                          }`}
+                        >
+                          <span className="font-bold">Ý {lbl})</span>
+                          <span>
+                            Đáp án: <b>{it.correct ? "Đúng" : "Sai"}</b>
+                          </span>
+                          <span>{isItCorrect ? "✓ Đúng" : "✗ Sai"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Lời giải chi tiết */}
+              {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
+                <div className="mt-3 rounded-xl bg-white dark:bg-slate-900 p-3 sm:p-4 border font-times-new-roman">
+                  <div className="font-bold text-teal-700 dark:text-teal-400 text-xs sm:text-sm mb-1 flex items-center gap-1.5">
+                    <Sparkles className="size-4" />
+                    <span>Lời giải chi tiết:</span>
+                  </div>
+                  <div className="whitespace-pre-wrap leading-relaxed font-normal text-slate-800 dark:text-slate-200 text-xs sm:text-sm">
+                    <RichText text={qFb.explanation} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* NÚT ĐIỀU HƯỚNG CÂU TRƯỚC / CÂU SAU (YÊU CẦU 3) */}
-        <div className="flex items-center justify-between gap-3 mt-8 pt-5 border-t border-border">
+        {/* NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Bỏ qua + Trả lời | Câu sau › */}
+        <div className="flex items-center justify-between gap-2.5 mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
           {/* Nút Câu trước: disabled khi ở Câu 1 (idx === 0) */}
           <Button
             type="button"
             variant="outline"
             disabled={questionIndex === 0}
             onClick={() => setIdx((prev) => Math.max(0, prev - 1))}
-            className="rounded-2xl font-bold h-12 sm:h-14 px-4 sm:px-7 text-sm sm:text-base border-2 hover:bg-muted disabled:opacity-40 flex items-center gap-2"
+            className="rounded-xl font-semibold h-10 sm:h-11 px-3 sm:px-5 text-xs sm:text-sm border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1.5"
           >
-            <ChevronLeft className="size-5" />
-            <span>← Câu trước</span>
+            <ChevronLeft className="size-4" />
+            <span>‹ Câu trước</span>
           </Button>
 
-          {/* Giữa: Trạng thái của câu hiện tại */}
-          <div className="text-xs sm:text-sm font-bold text-muted-foreground hidden sm:flex items-center gap-2">
-            {isAnswered(currentQ) ? (
-              <span className="px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
-                <CheckCircle2 className="size-4 text-emerald-600" /> Đã chọn đáp án
-              </span>
+          {/* Giữa: Nút Bỏ qua và Nút Trả lời */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIdx((prev) => Math.min(questions.length - 1, prev + 1))}
+              disabled={questionIndex >= questions.length - 1}
+              className="rounded-xl font-semibold h-10 sm:h-11 px-3 sm:px-4 text-xs sm:text-sm border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
+              title="Bỏ qua câu này để làm câu tiếp theo"
+            >
+              <SkipForward className="size-3.5 text-slate-500" />
+              <span>Bỏ qua</span>
+            </Button>
+
+            {/* Nút Trả lời (cho phép ghi nhận đáp án hoặc hiển thị phản hồi tức thì nếu instantFb) */}
+            {qFb ? (
+              <Button
+                type="button"
+                disabled
+                className="rounded-xl font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed flex items-center gap-1.5 px-3.5 sm:px-4 h-10 sm:h-11 text-xs sm:text-sm select-none"
+              >
+                <CheckCircle2 className="size-4 text-emerald-600" />
+                <span>Đã trả lời</span>
+              </Button>
             ) : (
-              <span className="px-3 py-1.5 rounded-xl bg-muted text-muted-foreground border">
-                ⚪ Chưa chọn đáp án
-              </span>
+              <Button
+                type="button"
+                onClick={() => handleStandardAnswer(currentQ)}
+                disabled={checkingQId === currentQ.id}
+                className="rounded-xl font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 px-3.5 sm:px-5 h-10 sm:h-11 text-xs sm:text-sm active:scale-95"
+              >
+                {checkingQId === currentQ.id ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    <span>Kiểm tra...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="size-4" />
+                    <span>Trả lời</span>
+                  </>
+                )}
+              </Button>
             )}
           </div>
 
-          {/* Nút Câu sau: khi ở câu cuối chuyển thành nút Nộp bài */}
+          {/* Nút Câu sau: ở câu cuối chuyển thành nút Nộp bài */}
           {questionIndex >= questions.length - 1 ? (
             <Button
               type="button"
               onClick={() => setConfirmOpen(true)}
-              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-2xl font-black h-12 sm:h-14 px-5 sm:px-8 text-sm sm:text-base shadow-lg shadow-destructive/25 flex items-center gap-2 transition-transform active:scale-95"
+              className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold h-10 sm:h-11 px-4 sm:px-6 text-xs sm:text-sm shadow-sm flex items-center gap-1.5 transition-transform active:scale-95"
             >
-              <Send className="size-4" />
               <span>Nộp bài</span>
+              <Send className="size-3.5" />
             </Button>
           ) : (
             <Button
               type="button"
               onClick={() => setIdx((prev) => Math.min(questions.length - 1, prev + 1))}
-              className="bg-gradient-to-r from-primary to-sky-600 hover:from-primary/95 hover:to-sky-600/95 text-white rounded-2xl font-black h-12 sm:h-14 px-5 sm:px-8 text-sm sm:text-base shadow-lg shadow-primary/25 flex items-center gap-2 transition-transform active:scale-95"
+              className="bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold h-10 sm:h-11 px-4 sm:px-6 text-xs sm:text-sm shadow-sm flex items-center gap-1.5 transition-transform active:scale-95"
             >
-              <span>Câu sau →</span>
-              <ChevronRight className="size-5" />
+              <span>Câu sau ›</span>
             </Button>
           )}
         </div>
@@ -2831,35 +2889,35 @@ export default function Take() {
     );
   };
 
-  // KHU VỰC BÊN PHẢI: DANH SÁCH CÂU + CHÚ THÍCH + NÚT NỘP BÀI (YÊU CẦU 1, 4, 5, 6)
+  // KHU VỰC BÊN PHẢI: DANH SÁCH CÂU + CHÚ THÍCH + NÚT NỘP BÀI (5 CỘT TRÊN MÁY TÍNH)
   const renderStandardQuestionListCard = () => {
     return (
-      <Card className="rounded-3xl border-2 border-border/80 bg-card/95 shadow-xl p-5 sm:p-6 space-y-5">
+      <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-md p-4 sm:p-5 space-y-4">
         {/* Header danh sách câu */}
-        <div className="flex items-center justify-between pb-3 border-b border-border/70">
-          <div className="flex items-center gap-2.5">
-            <div className="size-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold">
-              <LayoutGrid className="size-4.5" />
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <div className="size-7 rounded-lg bg-teal-50 dark:bg-teal-950/60 text-teal-600 flex items-center justify-center font-bold">
+              <LayoutGrid className="size-4" />
             </div>
             <div>
-              <h3 className="font-black text-base sm:text-lg text-foreground tracking-tight">
+              <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
                 DANH SÁCH CÂU
               </h3>
-              <p className="text-xs text-muted-foreground font-semibold">
-                Tổng cộng {questions.length} câu hỏi
+              <p className="text-[11px] text-slate-500 font-medium">
+                Tổng số {questions.length} câu
               </p>
             </div>
           </div>
           <div className="text-right">
-            <span className="text-xs font-bold text-muted-foreground block">Đã làm</span>
-            <span className="font-black text-sm text-emerald-600">
+            <span className="text-[11px] font-medium text-slate-500 block">Đã làm</span>
+            <span className="font-bold text-xs sm:text-sm text-teal-600">
               {answeredCount}/{questions.length}
             </span>
           </div>
         </div>
 
-        {/* Lưới các số câu: click vào bất kỳ câu nào để chuyển đến câu đó (Yêu cầu 2, 4) */}
-        <div className="grid grid-cols-5 gap-2 max-h-[50vh] overflow-y-auto p-1 pr-1.5 scrollbar-thin">
+        {/* Lưới các số câu: 5 cột trên máy tính, click để chuyển câu */}
+        <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-h-[50vh] overflow-y-auto p-0.5 pr-1 scrollbar-thin">
           {questions.map((item, i) => {
             const isCurrent = i === idx;
             const isDone = isAnswered(item);
@@ -2870,12 +2928,12 @@ export default function Take() {
                 key={item.id}
                 type="button"
                 onClick={() => setIdx(i)}
-                className={`relative h-11 rounded-xl text-sm font-black transition-all duration-150 flex items-center justify-center select-none ${
+                className={`relative h-10 rounded-lg text-xs sm:text-sm font-bold transition-all duration-150 flex items-center justify-center select-none ${
                   isCurrent
-                    ? "border-2 border-emerald-500 bg-emerald-600 text-white shadow-md ring-4 ring-emerald-500/35 scale-105 z-10"
+                    ? "bg-teal-600 text-white font-bold ring-2 ring-teal-400 shadow-sm z-10"
                     : isDone
-                    ? "border-2 border-emerald-500/80 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 hover:bg-emerald-100"
-                    : "border-2 border-border/80 bg-card text-muted-foreground hover:bg-muted hover:border-foreground/30"
+                    ? "bg-teal-50 border border-teal-300 text-teal-800 dark:bg-teal-950/40 dark:border-teal-700 dark:text-teal-300 hover:bg-teal-100/80"
+                    : "bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200/80 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
                 }`}
                 title={`Câu ${i + 1}${isCurrent ? " (Đang làm)" : isDone ? " (Đã làm)" : " (Chưa làm)"}${
                   isMarked ? " - Đã đánh dấu" : ""
@@ -2883,7 +2941,7 @@ export default function Take() {
               >
                 <span>{i + 1}</span>
                 {isMarked && (
-                  <span className="absolute -top-1.5 -right-1 text-amber-500 font-bold text-xs" title="Đã đánh dấu">
+                  <span className="absolute -top-1 -right-0.5 text-amber-500 font-bold text-[10px]" title="Đã đánh dấu">
                     ⭐
                   </span>
                 )}
@@ -2892,42 +2950,45 @@ export default function Take() {
           })}
         </div>
 
-        {/* Chú thích màu sắc (Yêu cầu 1, 5) */}
-        <div className="space-y-2 pt-3 border-t border-border/70 text-xs font-bold">
-          <div className="flex items-center justify-between text-muted-foreground">
+        {/* Chú thích màu sắc */}
+        <div className="space-y-1.5 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs font-medium">
+          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
             <div className="flex items-center gap-2">
-              <span className="size-3.5 rounded-md bg-emerald-600 border border-emerald-400 ring-2 ring-emerald-400/30 shrink-0" />
-              <span className="text-foreground">🟢 Đang làm</span>
+              <span className="size-3 rounded-sm bg-teal-600 ring-1 ring-teal-400 shrink-0" />
+              <span className="text-slate-800 dark:text-slate-200 font-semibold">🟩 Đang làm</span>
             </div>
-            <span className="text-[11px] text-muted-foreground font-semibold">Câu {idx + 1}</span>
+            <span className="text-[11px] text-slate-500">Câu {idx + 1}</span>
           </div>
 
-          <div className="flex items-center justify-between text-muted-foreground">
+          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
             <div className="flex items-center gap-2">
-              <span className="size-3.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border-2 border-emerald-500 shrink-0" />
-              <span>🟩 Đã làm</span>
+              <span className="size-3 rounded-sm bg-teal-50 border border-teal-300 dark:bg-teal-950/60 dark:border-teal-700 shrink-0" />
+              <span>🟢 Đã làm</span>
             </div>
-            <span className="text-[11px] text-emerald-600 font-bold">{answeredCount} câu</span>
+            <span className="text-[11px] text-teal-600 font-bold">{answeredCount} câu</span>
           </div>
 
-          <div className="flex items-center justify-between text-muted-foreground">
+          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
             <div className="flex items-center gap-2">
-              <span className="size-3.5 rounded-md bg-card border-2 border-border shrink-0" />
-              <span>⚪ Chưa làm</span>
+              <span className="size-3 rounded-sm bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 shrink-0" />
+              <span>⬜ Chưa làm</span>
             </div>
-            <span className="text-[11px] text-muted-foreground font-semibold">{unansweredCount} câu</span>
+            <span className="text-[11px] text-slate-500 font-medium">{unansweredCount} câu</span>
           </div>
         </div>
 
-        {/* Nút Nộp bài (Yêu cầu 1, 6) */}
+        {/* Nút Nộp bài lớn, nổi bật */}
         <div className="pt-2">
           <Button
             type="button"
             onClick={() => setConfirmOpen(true)}
-            className="w-full h-14 bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black text-base rounded-2xl shadow-xl shadow-destructive/25 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.99]"
+            className="w-full h-13 sm:h-14 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-bold rounded-xl shadow-lg shadow-red-500/20 flex flex-col items-center justify-center transition-all hover:scale-[1.01] active:scale-[0.99]"
           >
-            <Send className="size-5" />
-            <span>NỘP BÀI</span>
+            <div className="flex items-center gap-1.5 text-sm sm:text-base font-black">
+              <Send className="size-4" />
+              <span>NỘP BÀI</span>
+            </div>
+            <span className="text-[11px] font-normal text-white/85">Nộp toàn bộ bài thi</span>
           </Button>
         </div>
       </Card>

@@ -129,15 +129,69 @@ const MONO_FONTS = [
 ];
 const isMonoFont = (n: string) => !!n && MONO_FONTS.some((f) => n.toLowerCase().includes(f));
 
-function detectLang(code: string): string {
+export function isParaCodeText(s: string): boolean {
+  if (!s || s.trim().length === 0) return false;
+  // Indented line with code punctuation or code keywords
+  if (/^[ \t]{2,}/.test(s)) {
+    if (/[:;=+\-*/><()[\]{}#&|!~,"'%\\]/.test(s)) return true;
+    if (/^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b)/i.test(s)) return true;
+  }
+  // Control structure / statement start without indentation
+  if (
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function detectLang(code: string): string {
   const t = code.toLowerCase();
-  if (/<\/?(?:html|head|body|div|span|p|a|table|tr|td|script|style|ul|ol|li)[>\s]/i.test(t)) return "html";
-  if (/\b(?:select\b.*\bfrom|insert\s+into|update\b.*\bset|create\s+table|delete\s+from|alter\s+table)\b/i.test(t)) return "sql";
-  if (/#include\s*<|\b(?:int\s+main|std::|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\()/i.test(code)) return "cpp";
-  if (/\b(?:program\s+\w+|begin\b.*\bend[.;]|writeln|readln)\b/i.test(t)) return "pascal";
-  if (/\b(?:def\s+\w+|import\s+\w+|print\s*\(|class\s+\w+|elif\b|self\b|lambda\b|range\s*\(|len\s*\(|__init__)\b/i.test(code)) return "python";
-  if (/\b(?:console\.log|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|=>)\b/i.test(code)) return "javascript";
-  if (/(?:^|\n)\s*(?:if|for|while)\s+.*:\s*(?:\n|$)/i.test(code)) return "python";
+  // 1. HTML / XML: Check for HTML tags or DOCTYPE
+  if (
+    /(?:<!doctype\s+html|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|textarea|header|footer|nav|section|article|main|aside|img|link|meta|title)[>\s/])/i.test(
+      t
+    )
+  ) {
+    return "html";
+  }
+  // 2. SQL: Check for SQL queries across lines using [\s\S]
+  if (
+    /\b(?:select\b[\s\S]*?\bfrom|insert\s+into|update\b[\s\S]*?\bset|create\s+table|delete\s+from|alter\s+table|drop\s+table|where\b[\s\S]*?\b(?:and|or|order\s+by|group\s+by)|order\s+by\b|group\s+by\b)\b/i.test(
+      t
+    ) ||
+    /(?:^|\n)\s*(?:select\b|from\b|where\b|order\s+by\b|group\s+by\b|insert\s+into|update\b|delete\s+from|create\s+table)/i.test(
+      t
+    )
+  ) {
+    return "sql";
+  }
+  // 3. C / C++
+  if (/#include\s*<|\b(?:int\s+main|std::|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\()/i.test(code)) {
+    return "cpp";
+  }
+  // 4. Pascal
+  if (/\b(?:program\s+\w+|begin\b[\s\S]*?\bend[.;]|writeln\s*\(|readln\s*\()\b/i.test(t)) {
+    return "pascal";
+  }
+  // 5. Python
+  if (
+    /\b(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+\s+import|print\s*\(|elif\b|self\b|lambda\b|range\s*\(|len\s*\(|__init__|input\s*\(|int\s*\(|float\s*\(|str\s*\(|append\s*\(|pop\s*\(|keys\s*\(|values\s*\(|items\s*\()\b/i.test(
+      code
+    ) ||
+    /(?:^|\n)\s*(?:if|for|while|elif|else|def|class|try|except|finally|with)\b.*:\s*(?:\n|$)/i.test(
+      code
+    ) ||
+    /(?:^|\n)[ \t]{2,}(?:print|return|pass|break|continue|yield)\b/i.test(code)
+  ) {
+    return "python";
+  }
+  // 6. JavaScript / TypeScript
+  if (/\b(?:console\.log|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|=>|document\.getElementById)\b/i.test(code)) {
+    return "javascript";
+  }
   return "plaintext";
 }
 
@@ -282,7 +336,71 @@ type Para = {
   hasAnyMark: boolean;
 };
 
+export function groupCodeTokens(toks: Tok[]): Tok[] {
+  // Split tokens by pbrk into paragraph chunks
+  const paras: Tok[][] = [];
+  let current: Tok[] = [];
+  for (const t of toks) {
+    if (t.kind === "pbrk") {
+      paras.push(current);
+      current = [];
+    } else {
+      current.push(t);
+    }
+  }
+  paras.push(current);
+
+  const paraIsCode = paras.map((p) => {
+    if (p.some((t) => t.kind === "code" || (t.kind === "text" && t.props.mono && t.text.trim().length > 0))) {
+      return true;
+    }
+    let plain = "";
+    for (const t of p) {
+      if (t.kind === "text") plain += t.text;
+      else if (t.kind === "math") plain += t.latex;
+    }
+    return isParaCodeText(plain);
+  });
+
+  const out: Tok[] = [];
+  let codeGroup: Tok[][] = [];
+
+  const flushGroup = () => {
+    if (codeGroup.length === 0) return;
+    const lines = codeGroup.map((p) => {
+      let l = "";
+      for (const t of p) {
+        if (t.kind === "text") l += t.text;
+        else if (t.kind === "math") l += t.latex;
+        else if (t.kind === "code") l += t.content;
+      }
+      return l.replace(/[\r\n]+$/, "");
+    });
+    while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+      lines.pop();
+    }
+    const fullCode = lines.join("\n");
+    const lang = detectLang(fullCode);
+    out.push({ kind: "code", lang, content: fullCode });
+    codeGroup = [];
+  };
+
+  for (let i = 0; i < paras.length; i++) {
+    if (paraIsCode[i]) {
+      codeGroup.push(paras[i]);
+    } else {
+      flushGroup();
+      if (out.length > 0 && paras[i].length > 0) out.push({ kind: "pbrk" });
+      out.push(...paras[i]);
+    }
+  }
+  flushGroup();
+
+  return out;
+}
+
 function tokensToRich(toks: Tok[]): string {
+  const grouped = groupCodeTokens(toks);
   // Group consecutive mono text into a single code block.
   let out = "";
   let codeBuf = "";
@@ -291,7 +409,7 @@ function tokensToRich(toks: Tok[]): string {
     out += encCode(detectLang(codeBuf), codeBuf);
     codeBuf = "";
   };
-  for (const t of toks) {
+  for (const t of grouped) {
     if (t.kind === "text") {
       if (t.props.mono) {
         codeBuf += t.text;
@@ -861,16 +979,7 @@ function isParaCode(p: Para): boolean {
     (t) => t.kind === "text" && t.props.mono && t.text.trim().length > 0
   );
   if (hasMono) return true;
-  // Distinct code syntax or indentation
-  const s = p.plain;
-  if (/^[ \t]{2,}/.test(s) && /[=:+\-*/><()[\]{}#]/.test(s)) return true;
-  if (
-    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|elif\b|while\s+.*:|for\s+.*:\s*$|#include\s*<|SELECT\s+|INSERT\s+INTO|UPDATE\s+|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
-      s
-    )
-  )
-    return true;
-  return false;
+  return isParaCodeText(p.plain);
 }
 
 function isCellCodeBlock(paras: Para[]): boolean {
@@ -895,15 +1004,12 @@ function isCellCodeBlock(paras: Para[]): boolean {
   const codeContent = lines.join("\n");
   const lang = detectLang(codeContent);
   if (lang !== "plaintext") {
-    const hasIndent = lines.some((l) => /^[ \t]{2,}/.test(l));
-    const hasCodeKeywords = lines.some((l) =>
-      /^\s*(?:def|class|import|from|return|if|elif|else:|while|for|print\(|SELECT|INSERT|UPDATE|#include|<html|<\/|<div|var|const|let|function|procedure|begin|end[.;])/i.test(
-        l
-      )
-    );
-    if (hasIndent || hasCodeKeywords) {
-      return true;
-    }
+    return true;
+  }
+
+  const codeParasCount = nonEmpty.filter((p) => isParaCode(p)).length;
+  if (codeParasCount >= Math.ceil(nonEmpty.length * 0.5)) {
+    return true;
   }
 
   return false;
@@ -1811,7 +1917,7 @@ export function parseExplSection(
 
     if (currentExplQNum !== null) {
       if (currentExplToks.length) {
-        currentExplToks.push({ kind: "text", text: "\n", props: { red: false, underline: false, mono: false, bold: false } });
+        currentExplToks.push({ ...PBRK });
       }
       currentExplToks.push(...cleanedToks);
     }
@@ -2118,7 +2224,7 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
     }
 
     if (qBuf.mode === "expl") {
-      qBuf.explToks.push({ kind: "text", text: "\n", props: { red: false, underline: false, mono: false, bold: false } });
+      if (qBuf.explToks.length) qBuf.explToks.push({ ...PBRK });
       qBuf.explToks.push(...toks);
       continue;
     }
