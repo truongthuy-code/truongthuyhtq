@@ -7,7 +7,7 @@ import QuizBackground from "@/components/QuizBackground";
 import { Check, X, ShieldAlert, BookOpen, Lock } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import { getTFValue } from "@/lib/grading";
-import { getPublishedExamAnswerKey, getAllSubmissions } from "@/lib/studentStorage";
+import { getPublishedExamAnswerKey, getAllSubmissions, isExamOfficiallyClosed } from "@/lib/studentStorage";
 import { findSampleExam } from "@/lib/sampleExams";
 import confetti from "canvas-confetti";
 
@@ -654,8 +654,8 @@ export default function Result() {
   };
 
   // 7. ĐIỀU KIỆN HIỂN THỊ ĐÁP ÁN VÀ LỜI GIẢI (Phối hợp thiết lập):
-  // 1. Nếu giáo viên tắt xem lại đáp án hoặc không có câu hỏi: không cho xem (kể cả đạt 100%)
-  if (!allowReviewAnswers || !exam?.questions) {
+  // 1. Nếu không được phép xem lại hoặc không có câu hỏi: chỉ hiển thị bảng điểm tổng quát
+  if (!canReview || !exam?.questions) {
     return renderSimpleResult();
   }
 

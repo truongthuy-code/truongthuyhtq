@@ -487,7 +487,7 @@ export default function EditExam() {
               <div className="flex items-center gap-2">
                 <Label htmlFor="allow-review" className="text-sm font-bold text-foreground cursor-pointer flex items-center gap-1.5">
                   <span>👁️</span>
-                  <span>Xem lại đáp án sau khi nộp bài</span>
+                  <span>Cho học sinh xem đáp án ngay sau khi nộp bài</span>
                 </Label>
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${allowReview ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30" : "bg-muted text-muted-foreground border"}`}>
                   {allowReview ? "BẬT" : "TẮT"}
@@ -495,8 +495,8 @@ export default function EditExam() {
               </div>
               <div className="text-xs text-muted-foreground leading-relaxed">
                 {allowReview
-                  ? "Học sinh sẽ được xem lại toàn bộ câu hỏi, đáp án đã chọn, đáp án đúng và giải thích chi tiết sau khi nộp bài."
-                  : "Học sinh chỉ xem được điểm tổng kết và số câu đúng/sai. Toàn bộ nội dung câu hỏi và đáp án sẽ được bảo mật."}
+                  ? "Khi bật, học sinh đã nộp bài có thể xem đáp án chính thức trong tài khoản mà không cần chờ giáo viên đóng đề."
+                  : "Khi tắt, học sinh chỉ xem được đáp án chính thức sau khi giáo viên đóng đề theo cơ chế hiện tại."}
               </div>
             </div>
             <Switch id="allow-review" checked={allowReview} onCheckedChange={setAllowReview} />
