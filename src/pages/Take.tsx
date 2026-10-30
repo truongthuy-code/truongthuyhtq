@@ -34,7 +34,6 @@ import {
   UserCheck,
   Lock,
   KeyRound,
-  SkipForward,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
@@ -2807,7 +2806,7 @@ export default function Take() {
           )}
         </div>
 
-        {/* NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Bỏ qua + Trả lời | Câu sau › */}
+        {/* NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Trả lời | Câu sau › */}
         <div className="flex items-center justify-between gap-2.5 mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
           {/* Nút Câu trước: disabled khi ở Câu 1 (idx === 0) */}
           <Button
@@ -2821,21 +2820,8 @@ export default function Take() {
             <span>‹ Câu trước</span>
           </Button>
 
-          {/* Giữa: Nút Bỏ qua và Nút Trả lời */}
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIdx((prev) => Math.min(questions.length - 1, prev + 1))}
-              disabled={questionIndex >= questions.length - 1}
-              className="rounded-xl font-semibold h-10 sm:h-11 px-3 sm:px-4 text-xs sm:text-sm border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
-              title="Bỏ qua câu này để làm câu tiếp theo"
-            >
-              <SkipForward className="size-3.5 text-slate-500" />
-              <span>Bỏ qua</span>
-            </Button>
-
-            {/* Nút Trả lời (cho phép ghi nhận đáp án hoặc hiển thị phản hồi tức thì nếu instantFb) */}
+          {/* Giữa: Nút Trả lời (cho phép ghi nhận đáp án hoặc hiển thị phản hồi tức thì nếu instantFb) */}
+          <div className="flex items-center justify-center">
             {qFb ? (
               <Button
                 type="button"
