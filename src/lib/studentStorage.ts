@@ -206,24 +206,89 @@ export function logoutStudent() {
   clearAuthCookies();
 }
 
+let memorySubmissionsCache: StudentSubmissionRecord[] | null = null;
+let hasSubmissionsQuotaFallback = false;
+
+if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.prototype.clear === "function") {
+  try {
+    const origClear = Storage.prototype.clear;
+    Storage.prototype.clear = function () {
+      memorySubmissionsCache = null;
+      hasSubmissionsQuotaFallback = false;
+      return origClear.apply(this);
+    };
+  } catch {}
+}
+
 /** Get all submissions across all students */
 export function getAllSubmissions(): StudentSubmissionRecord[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SUBMISSIONS);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
+    if (!raw) {
+      if (hasSubmissionsQuotaFallback && memorySubmissionsCache && memorySubmissionsCache.length > 0) {
+        return memorySubmissionsCache;
+      }
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      if (memorySubmissionsCache && memorySubmissionsCache.length > 0) {
+        const memMap = new Map(memorySubmissionsCache.map((s) => [s.id, s]));
+        return parsed.map((s) => {
+          const mem = memMap.get(s.id);
+          if (mem && mem.questions && !s.questions) {
+            return { ...s, questions: mem.questions };
+          }
+          return s;
+        });
+      }
+      return parsed;
+    }
+    if (hasSubmissionsQuotaFallback && memorySubmissionsCache && memorySubmissionsCache.length > 0) {
+      return memorySubmissionsCache;
+    }
     return [];
+  } catch {
+    return memorySubmissionsCache || [];
   }
 }
 
-/** Save submissions list */
+/** Save submissions list with progressive quota safety */
 function saveAllSubmissions(subs: StudentSubmissionRecord[]) {
+  memorySubmissionsCache = subs;
   try {
     localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(subs));
-    window.dispatchEvent(new Event("student_submissions_change"));
-  } catch (e) {
-    console.error("Failed to save student submissions:", e);
+    hasSubmissionsQuotaFallback = false;
+  } catch {
+    // Progressive reduction for submissions to prevent QuotaExceededError
+    try {
+      // Strip questions from older submissions (questions can be loaded from exam)
+      const pruned = subs.slice(0, 50).map((s, idx) => {
+        if (idx < 2) return s;
+        const { questions, ...rest } = s;
+        return rest as StudentSubmissionRecord;
+      });
+      localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(pruned));
+      hasSubmissionsQuotaFallback = false;
+    } catch {
+      try {
+        const minimal = subs.slice(0, 25).map((s) => {
+          const { questions, ...rest } = s;
+          return rest as StudentSubmissionRecord;
+        });
+        localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(minimal));
+        hasSubmissionsQuotaFallback = false;
+      } catch {
+        hasSubmissionsQuotaFallback = true;
+        console.warn("Storage quota full; submissions safely preserved in active session memory.");
+      }
+    }
   }
+
+  try {
+    window.dispatchEvent(new Event("student_submissions_change"));
+  } catch {}
 }
 
 /** Get submissions for a specific student */

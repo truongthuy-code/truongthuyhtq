@@ -277,23 +277,67 @@ export function getExamPrimaryCode(exam: any): string {
 /**
  * Get local assignments cache
  */
+let memoryAssignmentsCache: ExamAssignment[] | null = null;
+let hasAssignmentsQuotaFallback = false;
+
+if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.prototype.clear === "function") {
+  try {
+    const origClear = Storage.prototype.clear;
+    Storage.prototype.clear = function () {
+      memoryAssignmentsCache = null;
+      hasAssignmentsQuotaFallback = false;
+      return origClear.apply(this);
+    };
+  } catch {}
+}
+
+/**
+ * Get all locally cached assignments
+ */
 export function getLocalAssignments(): ExamAssignment[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
+    if (!raw) {
+      if (hasAssignmentsQuotaFallback && memoryAssignmentsCache && memoryAssignmentsCache.length > 0) {
+        return memoryAssignmentsCache;
+      }
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    if (hasAssignmentsQuotaFallback && memoryAssignmentsCache && memoryAssignmentsCache.length > 0) {
+      return memoryAssignmentsCache;
+    }
     return [];
+  } catch {
+    return memoryAssignmentsCache || [];
   }
 }
 
 /**
- * Save to local assignments cache
+ * Save to local assignments cache with quota protection
  */
 export function saveLocalAssignments(list: ExamAssignment[]) {
+  memoryAssignmentsCache = list;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-  } catch (e) {
-    console.error("Failed to save local assignments:", e);
+    hasAssignmentsQuotaFallback = false;
+  } catch {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, 40)));
+      hasAssignmentsQuotaFallback = false;
+    } catch {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, 15)));
+        hasAssignmentsQuotaFallback = false;
+      } catch {
+        hasAssignmentsQuotaFallback = true;
+        console.warn("Storage quota full; assignments safely preserved in active session memory.");
+      }
+    }
   }
 }
 

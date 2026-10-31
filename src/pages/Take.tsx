@@ -980,7 +980,7 @@ export default function Take() {
   // Hộp thoại xác nhận nộp bài chuyên nghiệp, rõ ràng, riêng biệt
   const submitDialog = (
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent className="rounded-3xl border-2 shadow-2xl max-w-lg p-6 sm:p-8">
+      <AlertDialogContent className={`rounded-3xl border-2 shadow-2xl max-w-lg p-6 sm:p-8 ${isQuiz ? "font-times-new-roman" : ""}`}>
         <AlertDialogHeader className="text-center sm:text-left">
           <div className="size-14 rounded-2xl bg-destructive/10 text-destructive flex items-center justify-center mx-auto sm:mx-0 mb-3">
             <Send className="size-7" />
@@ -1335,9 +1335,9 @@ export default function Take() {
       (exam.questions?.partIII?.length || 0);
 
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
+      <div className={`min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20 ${isQuiz ? "font-times-new-roman" : ""}`}>
         <QuizBackground />
-        <Card className="p-6 sm:p-10 max-w-xl w-full relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up">
+        <Card className={`p-6 sm:p-10 max-w-xl w-full relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up ${isQuiz ? "font-times-new-roman" : ""}`}>
           {/* Header logo / Subtitle */}
           <div className="flex items-center gap-2 text-primary font-black text-xs sm:text-sm uppercase tracking-wider mb-2">
             <Sparkles className="size-4" />
@@ -1826,21 +1826,18 @@ export default function Take() {
     }
   };
 
-  // Font size responsive calculation based on question text length
-  const qLen = (q?.text || "").length;
-  const qFontSizeClass =
-    qLen < 110
-      ? "text-[clamp(28px,3.2vw,44px)]"
-      : qLen < 250
-      ? "text-[clamp(24px,2.6vw,38px)]"
-      : "text-[clamp(20px,2vw,32px)]";
+  // Quy định cỡ chữ trong Chế độ từng câu hỏi tối ưu cho trình chiếu TV/máy chiếu (1920x1080):
+  // - Câu hỏi: ~40-44px (ưu tiên 42px, responsive clamp(30px, 2.25vw, 42px))
+  // - Phương án: ~28-34px (ưu tiên 32px, responsive clamp(22px, 1.65vw, 32px))
+  const qFontSizeClass = "text-[clamp(30px,2.25vw,42px)] quiz-question-tv quiz-question-text-80";
+  const optFontSizeClass = "text-[clamp(22px,1.65vw,32px)] quiz-option-tv quiz-option-text-70";
 
   // Question navigation drawer / modal component
   const questionNavDrawer = (
     <div
       className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity ${
         navDrawerOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-      }`}
+      } ${isQuiz ? "font-times-new-roman" : ""}`}
       onClick={() => setNavDrawerOpen(false)}
     >
       <div
@@ -1990,11 +1987,11 @@ export default function Take() {
   // MÀN HÌNH HOÀN THÀNH TẤT CẢ CÂU (Finished state in single question mode)
   if (finished) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
+      <div className={`min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20 ${isQuiz ? "font-times-new-roman" : ""}`}>
         <QuizBackground />
         {lockOverlay}
         {submitDialog}
-        <Card className="p-8 sm:p-12 max-w-xl w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up">
+        <Card className={`p-8 sm:p-12 max-w-xl w-full text-center relative z-10 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up ${isQuiz ? "font-times-new-roman" : ""}`}>
           <div className="size-24 rounded-3xl bg-emerald-100 dark:bg-emerald-950/50 text-emerald-500 mx-auto mb-5 grid place-items-center shadow-xl shadow-emerald-500/20">
             <CheckCircle2 className="size-14 animate-bounce" />
           </div>
@@ -2032,16 +2029,42 @@ export default function Take() {
     const isCurrentMarked = !!bookmarks[currentQ.id];
     const qFb = feedback[currentQ.id];
 
+    // Thuật toán phát hiện độ dài câu hỏi và phương án để tự động co giãn kích thước tối ưu trên TV
+    const qLength = (currentQ.text || "").length;
+    let optTotalLen = 0;
+    if (currentQ.type === "mc" && currentQ.options) {
+      currentQ.options.forEach((o: any) => { optTotalLen += (o.text || "").length; });
+    } else if (currentQ.type === "tf" && currentQ.items) {
+      currentQ.items.forEach((it: any) => { optTotalLen += (it.text || "").length; });
+    }
+    const hasMediaOrCode =
+      (currentQ.text || "").includes("<img") ||
+      (currentQ.text || "").includes("<table") ||
+      (currentQ.text || "").includes("|---") ||
+      (currentQ.text || "").includes("```") ||
+      (currentQ.text || "").includes("\u27E6CODE:") ||
+      (currentQ.text || "").includes("⟦CODE:");
+
+    // Phân loại độ dài để tự động điều chỉnh:
+    // - Câu hỏi rất dài (>500 ký tự) hoặc có bảng/code lớn: 34px câu hỏi, 26px phương án
+    // - Câu hỏi dài (250-500 ký tự) hoặc có media: 38px câu hỏi, 29px phương án
+    // - Câu hỏi ngắn & trung bình: chuẩn 42px câu hỏi, 32px phương án (chuẩn TV tối ưu)
+    const isVeryLongQ = qLength > 500 || optTotalLen > 320 || (hasMediaOrCode && qLength > 300);
+    const isLongQ = qLength > 250 || optTotalLen > 180 || hasMediaOrCode;
+
+    const dynamicQFontSize = isVeryLongQ ? "34px" : isLongQ ? "38px" : "42px";
+    const dynamicOptFontSize = isVeryLongQ ? "26px" : isLongQ ? "29px" : "32px";
+
     return (
       <Card
         key={currentQ.id}
-        className={`w-full rounded-3xl border-2 border-border/80 bg-card/95 shadow-xl transition-all ${
-          isSingleView ? "p-5 sm:p-8 lg:p-10 flex-1 flex flex-col justify-between" : "p-6 sm:p-8 mb-6"
+        className={`w-full rounded-3xl border-2 border-border/80 bg-card/95 shadow-xl transition-all font-times-new-roman overflow-x-hidden ${
+          isSingleView ? "p-4 sm:p-6 lg:p-7 flex-1 flex flex-col justify-between" : "p-6 sm:p-8 mb-6"
         }`}
       >
         <div className="flex-1 flex flex-col justify-start">
           {/* Header câu hỏi: Số câu, Loại câu & Nút Đánh dấu */}
-          <div className="flex items-center justify-between gap-3 mb-4 pb-2 border-b border-border/60">
+          <div className="flex items-center justify-between gap-3 mb-3.5 pb-2 border-b border-border/60">
             <div className="flex items-center gap-2.5 flex-wrap">
               <div className="px-4 py-1.5 rounded-2xl bg-primary text-primary-foreground font-black text-sm sm:text-base tracking-wider shadow-sm flex items-center gap-1.5">
                 <span>CÂU {questionIndex + 1}</span>
@@ -2079,21 +2102,22 @@ export default function Take() {
             )}
           </div>
 
-          {/* 3. NỘI DUNG CÂU HỎI: Cỡ chữ lớn, rõ ràng, bảng kế thừa font size */}
+          {/* 3. NỘI DUNG CÂU HỎI: Cỡ chữ 42px (chuẩn TV) / tự động co giãn khi câu hỏi dài */}
           <div
             className={`font-bold ${
               isSingleView ? qFontSizeClass : "text-xl sm:text-2xl"
-            } leading-relaxed text-foreground tracking-tight mb-6 sm:mb-8 question-content`}
+            } ${isVeryLongQ || isLongQ ? "quiz-q-compact" : ""} leading-relaxed text-foreground tracking-tight mb-4 sm:mb-6 question-content font-times-new-roman quiz-sync-font-size break-words`}
+            style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
           >
             <RichText text={currentQ.text} />
           </div>
 
-          {/* 4. PHƯƠNG ÁN TRẢ LỜI CHO PHẦN I (TRẮC NGHIỆM 4 LỰA CHỌN A, B, C, D) */}
+          {/* 4. PHƯƠNG ÁN TRẢ LỜI CHO PHẦN I (TRẮC NGHIỆM 4 LỰA CHỌN A, B, C, D) - BỐ CỤC 2 CỘT × 2 HÀNG */}
           {currentQ.type === "mc" && (
             <RadioGroup
               value={answers[currentQ.id] || ""}
               onValueChange={(val) => onMcSelect(currentQ.id, val)}
-              className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5 w-full"
+              className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4 lg:gap-5 w-full"
             >
               {(optionOrders[currentQ.id] || currentQ.options?.map((o: any) => o.key) || []).map(
                 (key: string, optIndex: number) => {
@@ -2108,7 +2132,7 @@ export default function Take() {
                   return (
                     <label
                       key={optKey}
-                      className={`group flex items-center gap-4 sm:gap-5 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] cursor-pointer transition-all duration-200 select-none shadow-sm ${
+                      className={`group flex items-center gap-3.5 sm:gap-4 p-3.5 sm:p-4 lg:p-5 rounded-2xl sm:rounded-3xl border-2 sm:border-[2.5px] cursor-pointer transition-all duration-200 select-none shadow-sm min-h-[72px] sm:min-h-[82px] ${
                         qFb
                           ? isCorrectOpt
                             ? "border-emerald-500 bg-emerald-500/15 ring-4 ring-emerald-500/30"
@@ -2124,7 +2148,7 @@ export default function Take() {
 
                       {/* Huy hiệu A, B, C, D rực rỡ, trực quan phong cách Quizizz */}
                       <div
-                        className={`size-12 sm:size-14 lg:size-16 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl flex items-center justify-center shrink-0 border-2 transition-transform ${
+                        className={`size-11 sm:size-12 lg:size-14 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl flex items-center justify-center shrink-0 border-2 transition-transform ${
                           qFb
                             ? isCorrectOpt
                               ? "bg-emerald-500 text-white border-emerald-600 scale-105"
@@ -2139,8 +2163,13 @@ export default function Take() {
                         {theme.letter}
                       </div>
 
-                      {/* Nội dung phương án */}
-                      <span className="flex-1 text-[clamp(18px,1.9vw,28px)] font-semibold leading-snug text-foreground">
+                      {/* Nội dung phương án: Cỡ chữ ~32px (chuẩn TV) */}
+                      <span
+                        className={`flex-1 ${
+                          isSingleView ? optFontSizeClass : "text-[clamp(18px,1.9vw,28px)]"
+                        } ${isVeryLongQ || isLongQ ? "quiz-opt-compact" : ""} font-semibold leading-snug text-foreground font-times-new-roman quiz-sync-font-size break-words min-w-0`}
+                        style={isSingleView ? { fontSize: dynamicOptFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
+                      >
                         <RichText text={opt.text} />
                       </span>
 
@@ -2165,87 +2194,102 @@ export default function Take() {
           {/* 6. CÂU HỎI ĐÚNG / SAI (PHẦN II) */}
           {currentQ.type === "tf" && (
             <div className="space-y-4 w-full">
-              <div className="text-sm sm:text-base font-bold text-muted-foreground mb-1">
+              <div
+                className={`${isSingleView ? qFontSizeClass : "text-sm sm:text-base"} font-bold text-muted-foreground mb-3 font-times-new-roman quiz-sync-font-size break-words`}
+                style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
+              >
                 Chọn <b className="text-emerald-600">Đúng</b> hoặc <b className="text-rose-600">Sai</b> cho từng ý:
               </div>
-              {(optionOrders[currentQ.id] || currentQ.items?.map((it: any) => it.key) || []).map(
-                (key: string, itemIdx: number) => {
-                  const it = currentQ.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(key).trim().toLowerCase()) ||
-                             currentQ.items?.[itemIdx];
-                  if (!it) return null;
-                  const itemKey = it.key || key;
-                  const val = getTFValue(answers[currentQ.id], itemKey);
-                  const label = String.fromCharCode(97 + itemIdx);
-                  const fbIt = qFb?.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(itemKey).trim().toLowerCase());
-                  const itOk = fbIt ? fbIt.student !== null && fbIt.student === fbIt.correct : null;
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5 sm:gap-4 w-full">
+                {(optionOrders[currentQ.id] || currentQ.items?.map((it: any) => it.key) || []).map(
+                  (key: string, itemIdx: number) => {
+                    const it = currentQ.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(key).trim().toLowerCase()) ||
+                               currentQ.items?.[itemIdx];
+                    if (!it) return null;
+                    const itemKey = it.key || key;
+                    const val = getTFValue(answers[currentQ.id], itemKey);
+                    const label = String.fromCharCode(97 + itemIdx);
+                    const fbIt = qFb?.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(itemKey).trim().toLowerCase());
+                    const itOk = fbIt ? fbIt.student !== null && fbIt.student === fbIt.correct : null;
 
-                  return (
-                    <div
-                      key={itemKey}
-                      className={`rounded-2xl sm:rounded-3xl border-2 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm ${
-                        itOk === true
-                          ? "border-emerald-500 bg-emerald-500/10"
-                          : itOk === false
-                          ? "border-rose-500 bg-rose-500/10"
-                          : "border-border/90 bg-card hover:bg-muted/20"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3.5 flex-1">
-                        <div className="size-10 sm:size-11 rounded-xl bg-muted border-2 border-border font-black text-lg sm:text-xl flex items-center justify-center shrink-0">
-                          {label})
+                    return (
+                      <div
+                        key={itemKey}
+                        className={`rounded-2xl sm:rounded-3xl border-2 p-3.5 sm:p-4.5 flex flex-col justify-between gap-3 transition-all shadow-sm ${
+                          itOk === true
+                            ? "border-emerald-500 bg-emerald-500/10"
+                            : itOk === false
+                            ? "border-rose-500 bg-rose-500/10"
+                            : "border-border/90 bg-card hover:bg-muted/20"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3 flex-1">
+                          <div className="size-9 sm:size-10 rounded-xl bg-muted border-2 border-border font-black text-base sm:text-lg flex items-center justify-center shrink-0">
+                            {label})
+                          </div>
+                          <div
+                            className={`flex-1 ${
+                              isSingleView ? optFontSizeClass : "text-[clamp(17px,1.8vw,26px)]"
+                            } ${isVeryLongQ || isLongQ ? "quiz-opt-compact" : ""} font-semibold leading-snug font-times-new-roman quiz-sync-font-size break-words min-w-0`}
+                            style={isSingleView ? { fontSize: dynamicOptFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
+                          >
+                            <RichText text={it.text} />
+                            {fbIt && (
+                              <span
+                                className={`block mt-2 text-sm sm:text-base font-black ${
+                                  itOk ? "text-emerald-600" : "text-rose-600"
+                                }`}
+                              >
+                                {itOk ? "✅ Chính xác" : `❌ Chưa đúng — Đáp án: ${fbIt.correct ? "Đúng" : "Sai"}`}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[clamp(17px,1.8vw,26px)] font-semibold leading-snug flex-1">
-                          <RichText text={it.text} />
-                          {fbIt && (
-                            <span
-                              className={`block mt-2 text-sm sm:text-base font-black ${
-                                itOk ? "text-emerald-600" : "text-rose-600"
-                              }`}
-                            >
-                              {itOk ? "✅ Chính xác" : `❌ Chưa đúng — Đáp án: ${fbIt.correct ? "Đúng" : "Sai"}`}
-                            </span>
-                          )}
+
+                        {/* Hai nút [ ĐÚNG ] và [ SAI ] rõ ràng, trực quan, dễ bấm */}
+                        <div className="flex items-center gap-2.5 shrink-0 self-end">
+                          <button
+                            type="button"
+                            disabled={!!qFb}
+                            onClick={() => setTF(currentQ, itemKey, true)}
+                            className={`px-5 sm:px-7 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl text-sm sm:text-base lg:text-lg font-black border-2 transition-all ${
+                              val === true
+                                ? "border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25 scale-105"
+                                : "border-border bg-card hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            ĐÚNG
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!!qFb}
+                            onClick={() => setTF(currentQ, itemKey, false)}
+                            className={`px-5 sm:px-7 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl text-sm sm:text-base lg:text-lg font-black border-2 transition-all ${
+                              val === false
+                                ? "border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-105"
+                                : "border-border bg-card hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            SAI
+                          </button>
                         </div>
                       </div>
-
-                      {/* Hai nút [ ĐÚNG ] và [ SAI ] rõ ràng, trực quan, dễ bấm */}
-                      <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
-                        <button
-                          type="button"
-                          disabled={!!qFb}
-                          onClick={() => setTF(currentQ, itemKey, true)}
-                          className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
-                            val === true
-                              ? "border-emerald-500 bg-emerald-500 text-white shadow-lg shadow-emerald-500/25 scale-105"
-                              : "border-border bg-card hover:bg-muted text-foreground"
-                          }`}
-                        >
-                          ĐÚNG
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!!qFb}
-                          onClick={() => setTF(currentQ, itemKey, false)}
-                          className={`px-6 sm:px-8 py-2.5 sm:py-3.5 rounded-xl sm:rounded-2xl text-base sm:text-xl font-black border-2 transition-all ${
-                            val === false
-                              ? "border-rose-500 bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-105"
-                              : "border-border bg-card hover:bg-muted text-foreground"
-                          }`}
-                        >
-                          SAI
-                        </button>
-                      </div>
-                    </div>
-                  );
-                }
-              )}
+                    );
+                  }
+                )}
+              </div>
             </div>
           )}
 
           {/* 7. CÂU HỎI TRẢ LỜI NGẮN (PHẦN III) */}
           {currentQ.type === "sa" && (
-            <div className="mt-3 w-full max-w-3xl">
-              <Label className="text-base sm:text-xl font-black text-foreground block mb-2">
+            <div className="mt-3 w-full max-w-4xl">
+              <Label
+                className={`block mb-2 font-black text-foreground font-times-new-roman ${
+                  isSingleView ? qFontSizeClass : "text-base sm:text-xl"
+                } quiz-sync-font-size`}
+                style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
+              >
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2258,11 +2302,14 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-14 sm:h-18 text-xl sm:text-3xl font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground"
+                className={`w-full ${
+                  isSingleView ? `min-h-[76px] sm:min-h-[88px] py-3 leading-normal ${optFontSizeClass}` : "h-14 sm:h-18 text-xl sm:text-3xl"
+                } font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground font-times-new-roman break-words`}
+                style={isSingleView ? { fontSize: dynamicOptFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
                 placeholder={instantFb ? "Nhập câu trả lời hoặc số liệu... (Nhấn Enter để kiểm tra)" : "Nhập câu trả lời hoặc số liệu..."}
                 autoFocus={isSingleView}
               />
-              <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
+              <div className={`mt-2 ${isSingleView ? optFontSizeClass : "text-xs"} text-muted-foreground flex items-center justify-between font-times-new-roman quiz-sync-font-size break-words`}>
                 <span>
                   {answers[currentQ.id] ? (
                     <span className="text-emerald-600 font-bold">✓ Đã lưu câu trả lời</span>
@@ -2273,7 +2320,7 @@ export default function Take() {
                 <span>Chấm điểm tự động theo số liệu</span>
               </div>
               {qFb && (
-                <div className="mt-4 text-lg sm:text-xl font-bold rounded-2xl bg-muted/60 p-4 border">
+                <div className={`mt-4 ${isSingleView ? optFontSizeClass : "text-lg sm:text-xl"} font-bold rounded-2xl bg-muted/60 p-4 border font-times-new-roman quiz-sync-font-size break-words`}>
                   {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <b className="text-emerald-600">
                     <RichText text={qFb.answer} />
@@ -2300,7 +2347,7 @@ export default function Take() {
                 )}
               </div>
               {qFb.type === "mc" && (
-                <div className="mt-2 text-base sm:text-lg font-bold text-foreground">
+                <div className={`mt-2 ${isSingleView ? optFontSizeClass : "text-base sm:text-lg"} font-bold text-foreground font-times-new-roman quiz-sync-font-size break-words`}>
                   {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <span className="text-emerald-600">
                     <b>
@@ -2316,9 +2363,9 @@ export default function Take() {
                 </div>
               )}
               {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
-                <div className="mt-4 rounded-xl bg-card p-4 text-sm sm:text-base border">
-                  <div className="font-black text-primary mb-1 flex items-center gap-1.5">
-                    <Sparkles className="size-4" /> Lời giải:
+                <div className={`mt-4 rounded-xl bg-card p-4 sm:p-6 ${isSingleView ? optFontSizeClass : "text-sm sm:text-base"} border font-times-new-roman quiz-sync-font-size break-words`}>
+                  <div className="font-black text-primary mb-2 flex items-center gap-1.5">
+                    <Sparkles className="size-5 shrink-0" /> Lời giải:
                   </div>
                   <div className="whitespace-pre-wrap leading-relaxed font-medium">
                     <RichText text={qFb.explanation} />
@@ -2988,14 +3035,14 @@ export default function Take() {
   // =========================================================================
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-primary/20 relative">
+    <div className={`min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-primary/20 relative ${isQuiz ? "font-times-new-roman" : ""}`}>
       <QuizBackground />
       {lockOverlay}
       {submitDialog}
       {questionNavDrawer}
 
       {/* 2. THANH TRÊN CÙNG (HEADER) GỌN GÀNG, HIỆN ĐẠI */}
-      <header className="border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm">
+      <header className={`border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm ${isQuiz ? "font-times-new-roman" : ""}`}>
         <div className="w-full max-w-[96vw] 2xl:max-w-[94vw] mx-auto py-2.5 px-3 sm:px-6 flex flex-wrap items-center justify-between gap-3">
           {/* Bên trái: Logo/Tên hệ thống & Tên đề thi */}
           <div className="flex items-center gap-3 min-w-0">
@@ -3085,11 +3132,11 @@ export default function Take() {
       {/* 3. KHU VỰC NỘI DUNG CHÍNH */}
       {isQuiz ? (
         // ===== CHẾ ĐỘ QUIZIZZ (MỘT CHIỀU / KHÔNG QUAY LẠI) =====
-        <main className="flex-1 w-full max-w-[96vw] 2xl:max-w-[94vw] mx-auto px-2 sm:px-4 py-3 sm:py-5 flex flex-col justify-between relative z-10">
+        <main className="flex-1 w-full max-w-[96vw] 2xl:max-w-[94vw] mx-auto px-2 sm:px-4 py-3 sm:py-5 flex flex-col justify-between relative z-10 font-times-new-roman">
           {renderQuestionCard(q, idx, true)}
 
           {/* THANH ĐIỀU HƯỚNG CHẾ ĐỘ QUIZIZZ (CHẾ ĐỘ TỪNG CÂU HỎI) */}
-          <div className="mt-4 sm:mt-6 w-full flex items-center justify-between gap-2 sm:gap-4 bg-card/90 backdrop-blur p-2.5 sm:p-4 rounded-3xl border shadow-lg max-w-full overflow-hidden">
+          <div className="sticky bottom-2 z-20 mt-4 sm:mt-6 w-full flex items-center justify-between gap-2 sm:gap-4 bg-card/95 backdrop-blur-md p-2.5 sm:p-4 rounded-3xl border shadow-lg max-w-full overflow-hidden font-times-new-roman">
             {/* VỊ TRÍ 1 (BÊN TRÁI): NÚT CÂU TRƯỚC HOẶC THÔNG BÁO CHẾ ĐỘ MỘT CHIỀU */}
             {allowQuizBack ? (
               <Button

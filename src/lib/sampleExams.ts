@@ -174,7 +174,7 @@ export const SAMPLE_EXAMS: SampleExamData[] = [
     teacher_name: "Trương Thị Bích Thủy",
     school_name: "THPT Phan Bội Châu - TP Đà Nẵng",
     duration_minutes: 45,
-    display_mode: "standard",
+    display_mode: "quizizz",
     instant_feedback: true,
     status: "open",
     manual_closed: false,

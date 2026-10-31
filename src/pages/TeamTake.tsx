@@ -279,9 +279,9 @@ export default function TeamTake() {
     ].filter((v, i, a) => v && a.indexOf(v) === i);
 
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4 relative selection:bg-primary/20">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4 relative selection:bg-primary/20 font-times-new-roman">
         <QuizBackground />
-        <Card className="p-8 sm:p-10 w-full max-w-md space-y-4 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up">
+        <Card className="p-8 sm:p-10 w-full max-w-md space-y-4 rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up font-times-new-roman">
           <div className="text-center">
             <div className="size-16 rounded-3xl bg-primary/10 text-primary flex items-center justify-center mx-auto mb-3 shadow-md">
               <Users className="size-8" />
@@ -377,10 +377,10 @@ export default function TeamTake() {
   // ===== Màn hình kết thúc nhóm =====
   if (finished || ended) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 relative selection:bg-primary/20">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 relative selection:bg-primary/20 font-times-new-roman">
         <QuizBackground />
-        <div className="container max-w-3xl py-8 space-y-6 relative z-10">
-          <Card className="p-8 sm:p-10 text-center rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up">
+        <div className="container max-w-3xl py-8 space-y-6 relative z-10 font-times-new-roman">
+          <Card className="p-8 sm:p-10 text-center rounded-3xl border-2 shadow-2xl bg-card/95 backdrop-blur animate-slide-up font-times-new-roman">
             <div className="size-20 rounded-3xl bg-emerald-100 text-emerald-600 mx-auto mb-4 grid place-items-center shadow-lg">
               <CheckCircle2 className="size-12" />
             </div>
@@ -414,12 +414,12 @@ export default function TeamTake() {
   const pct = questions.length ? Math.round((answeredCount / questions.length) * 100) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-primary/20 relative">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-primary/20 relative font-times-new-roman">
       <QuizBackground />
 
       {/* Confirmation dialog when clicking finish team exam */}
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent className="rounded-3xl border-2 shadow-2xl">
+        <AlertDialogContent className="rounded-3xl border-2 shadow-2xl font-times-new-roman">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-2xl font-black">Xác nhận kết thúc bài làm nhóm?</AlertDialogTitle>
             <AlertDialogDescription className="text-base text-foreground/80 mt-2">
@@ -437,7 +437,7 @@ export default function TeamTake() {
       </AlertDialog>
 
       {/* 2. Thanh trên cùng phong cách Quizizz cho thi đấu nhóm */}
-      <header className="border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm">
+      <header className="border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm font-times-new-roman">
         <div className="w-full max-w-5xl mx-auto py-2.5 px-4 flex flex-wrap items-center justify-between gap-3">
           {/* Tên nhóm & Thành viên */}
           <div className="flex items-center gap-3 min-w-0">
@@ -487,9 +487,9 @@ export default function TeamTake() {
       </header>
 
       {/* 3. Khu vực câu hỏi thi đấu nhóm */}
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 py-5 space-y-4 relative z-10">
+      <main className="flex-1 w-full max-w-4xl mx-auto px-4 py-5 space-y-4 relative z-10 font-times-new-roman">
         {q && (
-          <Card className="p-6 sm:p-8 rounded-3xl border-2 shadow-xl bg-card/95 backdrop-blur">
+          <Card className="p-6 sm:p-8 rounded-3xl border-2 shadow-xl bg-card/95 backdrop-blur font-times-new-roman">
             <div className="flex items-center justify-between mb-4 pb-3 border-b flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="px-3.5 py-1 rounded-xl bg-primary text-primary-foreground font-black text-sm">
@@ -514,7 +514,7 @@ export default function TeamTake() {
               )}
             </div>
 
-            <div className="font-bold text-xl sm:text-2xl leading-relaxed text-foreground mb-6 question-content">
+            <div className="font-bold text-xl sm:text-2xl leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size">
               <RichText text={q.text} />
             </div>
 
@@ -542,7 +542,7 @@ export default function TeamTake() {
                       >
                         {theme.letter}
                       </div>
-                      <span className="flex-1 font-semibold text-base sm:text-lg text-foreground">
+                      <span className="flex-1 font-semibold text-xl sm:text-2xl leading-relaxed text-foreground team-sync-font-size">
                         <RichText text={opt.text} />
                       </span>
                     </button>
@@ -567,7 +567,7 @@ export default function TeamTake() {
                         <span className="size-8 rounded-lg bg-muted border font-black text-sm flex items-center justify-center shrink-0">
                           {label})
                         </span>
-                        <span className="font-semibold text-base flex-1">
+                        <span className="font-semibold text-xl sm:text-2xl leading-relaxed flex-1 team-sync-font-size">
                           <RichText text={it.text} />
                         </span>
                       </div>
@@ -606,12 +606,12 @@ export default function TeamTake() {
             {/* Trả lời ngắn */}
             {q.type === "sa" && (
               <div className="mt-4">
-                <Label className="font-bold text-base block mb-2">Đáp án của nhóm:</Label>
+                <Label className="font-bold text-xl sm:text-2xl block mb-2 font-times-new-roman team-sync-font-size">Đáp án của nhóm:</Label>
                 <Input
                   value={qAns ? String(qAns.answer ?? "") : draft[q.id] || ""}
                   disabled={!!qAns}
                   onChange={(e) => setDraft({ ...draft, [q.id]: e.target.value })}
-                  className="h-14 text-xl font-black rounded-2xl px-5 border-2"
+                  className="h-14 sm:h-16 text-xl sm:text-2xl font-black rounded-2xl px-5 border-2 font-times-new-roman"
                   placeholder="Nhập câu trả lời hoặc số liệu của nhóm..."
                 />
               </div>

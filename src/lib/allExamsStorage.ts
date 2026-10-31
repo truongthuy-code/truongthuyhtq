@@ -2,7 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { SAMPLE_EXAMS, SampleExamData } from "@/lib/sampleExams";
 import { getLocalAssignments, ExamAssignment } from "@/lib/examAssignments";
-import { getAllTeachers, TeacherUser } from "@/lib/teacherStorage";
+import { getAllTeachers, TeacherUser, isUuid } from "@/lib/teacherStorage";
 
 export interface SystemExam {
   id: string;
@@ -33,15 +33,193 @@ export interface SystemExam {
 
 const STORAGE_KEY = "qc_all_exams_registry_v1";
 
+// In-memory cache to guarantee zero-quota limits in active session
+let memoryExamsCache: SystemExam[] | null = null;
+let hasExamsQuotaFallback = false;
+
+function isStorageAvailable(): boolean {
+  try {
+    return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Strips oversized embedded base64 image strings from questions/options.
+ * Replacing base64 strings (> 250 chars) with a lightweight token keeps
+ * question structure and text intact while saving up to 99% localStorage quota.
+ */
+function stripHeavyBase64(val: any): any {
+  if (!val) return val;
+  if (typeof val === "string") {
+    if (val.startsWith("data:image/") && val.length > 250) {
+      return "[image_cached]";
+    }
+    return val;
+  }
+  if (Array.isArray(val)) {
+    return val.map(stripHeavyBase64);
+  }
+  if (typeof val === "object") {
+    const copy: any = {};
+    for (const k of Object.keys(val)) {
+      copy[k] = stripHeavyBase64(val[k]);
+    }
+    return copy;
+  }
+  return val;
+}
+
+/**
+ * Progressive quota-safe persistence.
+ * Never throws QuotaExceededError or outputs console.error.
+ * Systematically reduces payload size until it comfortably fits in localStorage.
+ */
+function safeSetExamsStorage(exams: SystemExam[]): void {
+  if (!isStorageAvailable()) {
+    memoryExamsCache = exams;
+    hasExamsQuotaFallback = true;
+    return;
+  }
+
+  // Always update complete in-memory cache first
+  memoryExamsCache = exams;
+
+  // Attempt 1: Try storing directly (works when total size < quota)
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(exams));
+    hasExamsQuotaFallback = false;
+    return;
+  } catch {
+    // QuotaExceededError or write failure -> proceed to progressive reduction
+  }
+
+  // Attempt 2: Strip large base64 image strings from questions
+  try {
+    const stripped = exams.map((ex) => {
+      if (!ex.questions) return ex;
+      return { ...ex, questions: stripHeavyBase64(ex.questions) };
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
+    hasExamsQuotaFallback = false;
+    return;
+  } catch {}
+
+  // Attempt 3: Keep stripped questions for the 3 most recent exams, metadata only for the rest
+  try {
+    const recentWithQuestions = exams.map((ex, index) => {
+      if (index < 3 && ex.questions) {
+        return { ...ex, questions: stripHeavyBase64(ex.questions) };
+      }
+      const { questions, ...metaOnly } = ex;
+      return metaOnly as SystemExam;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(recentWithQuestions));
+    hasExamsQuotaFallback = false;
+    return;
+  } catch {}
+
+  // Attempt 4: Keep questions only for the 1 most recent exam, metadata for next 19 (max 20)
+  try {
+    const top20 = exams.slice(0, 20).map((ex, index) => {
+      if (index === 0 && ex.questions) {
+        return { ...ex, questions: stripHeavyBase64(ex.questions) };
+      }
+      const { questions, ...metaOnly } = ex;
+      return metaOnly as SystemExam;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(top20));
+    hasExamsQuotaFallback = false;
+    return;
+  } catch {}
+
+  // Attempt 5: Store metadata only for top 20 exams (no question bodies in localStorage)
+  try {
+    const metaOnly = exams.slice(0, 20).map((ex) => {
+      const { questions, original_file_url, ...meta } = ex;
+      return meta as SystemExam;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(metaOnly));
+    hasExamsQuotaFallback = false;
+    return;
+  } catch {}
+
+  // Attempt 6: Emergency fallback - purge obsolete non-critical items and save top 10 metadata
+  try {
+    const cleanupKeys = ["qc_published_answers_v1", "exam_assignments_v1"];
+    cleanupKeys.forEach((k) => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+    const minimal = exams.slice(0, 10).map((ex) => {
+      const { questions, original_file_url, scoring, ...meta } = ex;
+      return meta as SystemExam;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
+    hasExamsQuotaFallback = false;
+  } catch {
+    // Graceful degradation: in-memory cache continues serving the app without crashing
+    hasExamsQuotaFallback = true;
+    console.warn("Storage quota full; exams safely preserved in active session memory.");
+  }
+}
+
+if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.prototype.clear === "function") {
+  try {
+    const origClear = Storage.prototype.clear;
+    Storage.prototype.clear = function () {
+      memoryExamsCache = null;
+      hasExamsQuotaFallback = false;
+      return origClear.apply(this);
+    };
+  } catch {}
+}
+
 /**
  * Read all locally persisted exams
  */
 export function getLocalStoredExams(): SystemExam[] {
+  if (!isStorageAvailable()) {
+    return memoryExamsCache || [];
+  }
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
+    if (!raw) {
+      if (hasExamsQuotaFallback && memoryExamsCache && memoryExamsCache.length > 0) {
+        return memoryExamsCache;
+      }
+      return [];
+    }
+
+    const fromStorage = JSON.parse(raw);
+    if (Array.isArray(fromStorage) && fromStorage.length > 0) {
+      // Self-healing: if localStorage string is bloated (> 300KB), optimize in background
+      if (raw.length > 300000) {
+        setTimeout(() => safeSetExamsStorage(fromStorage), 100);
+      }
+
+      // If we have an in-memory cache, hydrate missing questions if localStorage has metadata-only
+      if (memoryExamsCache && memoryExamsCache.length > 0) {
+        const memMap = new Map(memoryExamsCache.map((e) => [e.id, e]));
+        return fromStorage.map((storedEx) => {
+          const mem = memMap.get(storedEx.id);
+          if (mem && mem.questions && !storedEx.questions) {
+            return { ...storedEx, questions: mem.questions };
+          }
+          return storedEx;
+        });
+      }
+      return fromStorage;
+    }
+
+    if (hasExamsQuotaFallback && memoryExamsCache && memoryExamsCache.length > 0) {
+      return memoryExamsCache;
+    }
+
     return [];
+  } catch {
+    return memoryExamsCache || [];
   }
 }
 
@@ -49,12 +227,10 @@ export function getLocalStoredExams(): SystemExam[] {
  * Persist all locally stored exams
  */
 export function setLocalStoredExams(exams: SystemExam[]) {
+  safeSetExamsStorage(exams);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(exams));
     window.dispatchEvent(new Event("all_exams_changed"));
-  } catch (e) {
-    console.error("Failed to persist system exams locally:", e);
-  }
+  } catch {}
 }
 
 /**
@@ -291,7 +467,7 @@ export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam
 
   // Cache back to local registry so offline works too
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(combined));
+    setLocalStoredExams(combined);
   } catch {}
 
   return combined;

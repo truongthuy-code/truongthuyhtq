@@ -196,17 +196,43 @@
     color: #4ade80 !important;
   }
 
+  /* =========================================================================
+     THIẾT LẬP FONT TIMES NEW ROMAN CHO CHẾ ĐỘ TỪNG CÂU HỎI & CHẾ ĐỘ ĐỘI NHÓM
+     ========================================================================= */
   .font-times-new-roman {
     font-family: "Times New Roman", Times, serif !important;
   }
+  .font-times-new-roman *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-family: "Times New Roman", Times, serif !important;
+  }
+  .font-times-new-roman button,
+  .font-times-new-roman input,
+  .font-times-new-roman textarea,
+  .font-times-new-roman select {
+    font-family: "Times New Roman", Times, serif !important;
+  }
+
+  /* BẢO TOÀN TUYỆT ĐỐI FONT MONOSPACE CHO CODE / MÃ NGUỒN */
   .font-times-new-roman pre,
   .font-times-new-roman code,
   .font-times-new-roman .hljs,
-  .font-times-new-roman .code-content {
+  .font-times-new-roman .code-content,
+  .font-times-new-roman pre *,
+  .font-times-new-roman code *,
+  .font-times-new-roman .hljs *,
+  .font-times-new-roman .code-content * {
     font-family: Consolas, "Courier New", monospace !important;
     white-space: pre-wrap !important;
     tab-size: 4 !important;
     -moz-tab-size: 4 !important;
+  }
+
+  /* ĐỒNG BỘ CỠ CHỮ KẾ THỪA CHO CHẾ ĐỘ ĐỘI NHÓM & TỪNG CÂU (KHÔNG ĐÈ 80PX/70PX) */
+  .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70),
+  .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70) *:not(.quiz-question-text-80):not(.quiz-question-text-80 *):not(.quiz-option-text-70):not(.quiz-option-text-70 *):not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .team-sync-font-size,
+  .team-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+    font-size: inherit !important;
   }
 }
 
@@ -253,4 +279,161 @@
     animation: trophyBounce 1.8s ease-in-out infinite;
   }
 }
+
+/* =========================================================================
+   CỠ CHỮ TỐI ƯU TRÌNH CHIẾU TRÊN TV / MÁY CHIẾU (1920x1080) TRONG CHẾ ĐỘ TỪNG CÂU HỎI:
+   - Nội dung câu hỏi = 40-44px (chuẩn ưu tiên 42px, clamp(30px, 2.25vw, 42px))
+   - Các phương án trả lời = 28-34px (chuẩn ưu tiên 32px, clamp(22px, 1.65vw, 32px))
+   - Font: Times New Roman ("Times New Roman", Times, Georgia, serif)
+   - Bố cục phương án: 2 cột × 2 hàng (2x2 grid)
+   - Áp dụng triệt để cho toàn bộ thẻ HTML, RichText, Word import: p, span, div, strong, b, em, i, u, s, font, li, ul, ol, td, th, table
+   - Bảo toàn tuyệt đối code monospace (pre, code, .code-content, .hljs), KaTeX (.katex), SVG (svg), ảnh
+   ========================================================================= */
+:root {
+  --quiz-q-font-size: clamp(30px, 2.25vw, 42px);
+  --quiz-opt-font-size: clamp(22px, 1.65vw, 32px);
+}
+
+.quiz-question-tv,
+.quiz-question-text-80,
+.quiz-question-tv p,
+.quiz-question-tv span,
+.quiz-question-tv div,
+.quiz-question-tv strong,
+.quiz-question-tv b,
+.quiz-question-tv em,
+.quiz-question-tv i,
+.quiz-question-tv u,
+.quiz-question-tv s,
+.quiz-question-tv font,
+.quiz-question-tv li,
+.quiz-question-tv ul,
+.quiz-question-tv ol,
+.quiz-question-tv td,
+.quiz-question-tv th,
+.quiz-question-tv table,
+.quiz-question-tv label,
+.quiz-question-tv .rich-text-root,
+.quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+.quiz-question-text-80 p,
+.quiz-question-text-80 span,
+.quiz-question-text-80 div,
+.quiz-question-text-80 strong,
+.quiz-question-text-80 b,
+.quiz-question-text-80 em,
+.quiz-question-text-80 i,
+.quiz-question-text-80 u,
+.quiz-question-text-80 s,
+.quiz-question-text-80 font,
+.quiz-question-text-80 li,
+.quiz-question-text-80 ul,
+.quiz-question-text-80 ol,
+.quiz-question-text-80 td,
+.quiz-question-text-80 th,
+.quiz-question-text-80 table,
+.quiz-question-text-80 label,
+.quiz-question-text-80 .rich-text-root,
+.quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  font-size: var(--quiz-q-font-size, 42px) !important;
+  line-height: 1.4 !important;
+  font-family: "Times New Roman", Times, Georgia, serif !important;
+}
+
+.quiz-option-tv,
+.quiz-option-text-70,
+.quiz-option-tv p,
+.quiz-option-tv span,
+.quiz-option-tv div,
+.quiz-option-tv strong,
+.quiz-option-tv b,
+.quiz-option-tv em,
+.quiz-option-tv i,
+.quiz-option-tv u,
+.quiz-option-tv s,
+.quiz-option-tv font,
+.quiz-option-tv li,
+.quiz-option-tv ul,
+.quiz-option-tv ol,
+.quiz-option-tv td,
+.quiz-option-tv th,
+.quiz-option-tv table,
+.quiz-option-tv label,
+.quiz-option-tv input,
+.quiz-option-tv .rich-text-root,
+.quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+.quiz-option-text-70 p,
+.quiz-option-text-70 span,
+.quiz-option-text-70 div,
+.quiz-option-text-70 strong,
+.quiz-option-text-70 b,
+.quiz-option-text-70 em,
+.quiz-option-text-70 i,
+.quiz-option-text-70 u,
+.quiz-option-text-70 s,
+.quiz-option-text-70 font,
+.quiz-option-text-70 li,
+.quiz-option-text-70 ul,
+.quiz-option-text-70 ol,
+.quiz-option-text-70 td,
+.quiz-option-text-70 th,
+.quiz-option-text-70 table,
+.quiz-option-text-70 label,
+.quiz-option-text-70 input,
+.quiz-option-text-70 .rich-text-root,
+.quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  font-size: var(--quiz-opt-font-size, 32px) !important;
+  line-height: 1.35 !important;
+  font-family: "Times New Roman", Times, Georgia, serif !important;
+}
+
+/* Lớp co giãn tự động khi câu hỏi rất dài */
+.quiz-q-compact,
+.quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+  font-size: clamp(26px, 1.8vw, 34px) !important;
+}
+
+.quiz-opt-compact,
+.quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+  font-size: clamp(20px, 1.4vw, 26px) !important;
+}
+
+/* Bảo toàn tuyệt đối code monospace trong Chế độ từng câu hỏi */
+.quiz-question-tv pre,
+.quiz-question-tv code,
+.quiz-question-tv .code-content,
+.quiz-question-tv .hljs,
+.quiz-question-tv pre *,
+.quiz-question-tv code *,
+.quiz-question-tv .code-content *,
+.quiz-question-tv .hljs *,
+.quiz-question-text-80 pre,
+.quiz-question-text-80 code,
+.quiz-question-text-80 .code-content,
+.quiz-question-text-80 .hljs,
+.quiz-question-text-80 pre *,
+.quiz-question-text-80 code *,
+.quiz-question-text-80 .code-content *,
+.quiz-question-text-80 .hljs *,
+.quiz-option-tv pre,
+.quiz-option-tv code,
+.quiz-option-tv .code-content,
+.quiz-option-tv .hljs,
+.quiz-option-tv pre *,
+.quiz-option-tv code *,
+.quiz-option-tv .code-content *,
+.quiz-option-tv .hljs *,
+.quiz-option-text-70 pre,
+.quiz-option-text-70 code,
+.quiz-option-text-70 .code-content,
+.quiz-option-text-70 .hljs,
+.quiz-option-text-70 pre *,
+.quiz-option-text-70 code *,
+.quiz-option-text-70 .code-content *,
+.quiz-option-text-70 .hljs * {
+  font-family: Consolas, "Courier New", monospace !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+
 
