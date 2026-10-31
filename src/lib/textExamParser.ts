@@ -175,7 +175,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
   const lines = main.split("\n");
   const stem: string[] = [];
   const opts: { key: "A" | "B" | "C" | "D"; text: string; marked: boolean }[] = [];
-  let answer: "A" | "B" | "C" | "D" | "" = "";
+  let answer: "A" | "B" | "C" | "D" | null = null;
   let inOptions = false;
   let cur: typeof opts[number] | null = null;
   const optRe = /^\s*(\*?)\s*(?:\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]\s*)?([A-Da-d])\s*[.)]\s*(.*)$/;
@@ -204,7 +204,7 @@ function parsePartIBlock(block: string, idx: number, level: QuestionLevel | null
     id: `q${idx}`,
     text: formatTextWithCode(stripQuestionPrefix(stem.join("\n")).trim()),
     options: opts.map((o) => ({ key: o.key, text: o.text.replace(/^\n+|\s+$/g, "") })),
-    answer: (answer || "A") as any,
+    answer: answer ? (answer as "A" | "B" | "C" | "D") : null,
     explanation: explanation ? formatTextWithCode(explanation) : null,
     level,
   };
@@ -214,7 +214,7 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
   const { main, explanation } = splitExplanation(block, 2);
   const lines = main.split("\n");
   const stem: string[] = [];
-  const items: { key: "a" | "b" | "c" | "d"; text: string; correct: boolean }[] = [];
+  const items: { key: "a" | "b" | "c" | "d"; text: string; correct: boolean | null }[] = [];
   let inItems = false;
   let cur: typeof items[number] | null = null;
   const re = /^\s*(\*?)\s*(?:\[\s*\d+\s*,\s*(?:NB|TH|VD|VDC)\s*\]\s*)?([A-Da-d])\s*[.)]\s*(.*)$/;
@@ -223,7 +223,16 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
     if (m) {
       inItems = true;
       if (cur) items.push(cur);
-      cur = { key: m[2].toLowerCase() as any, text: m[3], correct: m[1] === "*" };
+      let itemCorrect: boolean | null = null;
+      if (m[1] === "*") {
+        itemCorrect = true;
+      } else {
+        const tfInlineMatch = m[3].match(/(?:^|[(\[\s:\-])(Đúng|Sai|True|False)(?:[)\]\s.]*$)/i);
+        if (tfInlineMatch) {
+          itemCorrect = /^(?:Đúng|True)$/i.test(tfInlineMatch[1]);
+        }
+      }
+      cur = { key: m[2].toLowerCase() as any, text: m[3], correct: itemCorrect };
     } else if (inItems && cur) {
       cur.text += "\n" + ln.replace(/\s+$/, "");
     } else {
@@ -231,6 +240,12 @@ function parsePartIIBlock(block: string, idx: number, level: QuestionLevel | nul
     }
   }
   if (cur) items.push(cur);
+  const hasStar = items.some((it) => it.correct === true);
+  for (const it of items) {
+    if (it.correct === null && hasStar) {
+      it.correct = false;
+    }
+  }
   return {
     type: "tf",
     id: `q${idx}`,

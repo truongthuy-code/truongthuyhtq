@@ -22,7 +22,7 @@ export type MCQuestion = {
   id: string;
   text: string;
   options: { key: "A" | "B" | "C" | "D"; text: string }[];
-  answer: "A" | "B" | "C" | "D";
+  answer: "A" | "B" | "C" | "D" | null;
   explanation?: string | null;
   level?: QuestionLevel | null;
 };
@@ -34,7 +34,7 @@ export type TFQuestion = {
   items: {
     key: "a" | "b" | "c" | "d";
     text: string;
-    correct: boolean;
+    correct: boolean | null;
     level?: QuestionLevel | null;
     order?: number;
   }[];
@@ -50,6 +50,46 @@ export type SAQuestion = {
   explanation?: string | null;
   level?: QuestionLevel | null;
 };
+
+export function isQuestionMissingAnswer(q: MCQuestion | TFQuestion | SAQuestion): boolean {
+  if (q.type === "mc") {
+    return !q.answer || !["A", "B", "C", "D"].includes(q.answer);
+  }
+  if (q.type === "tf") {
+    return !q.items || q.items.length === 0 || q.items.some((it) => it.correct === null || it.correct === undefined);
+  }
+  if (q.type === "sa") {
+    return !q.answer || !q.answer.trim();
+  }
+  return false;
+}
+
+export type MissingAnswerIssue = {
+  part: "I" | "II" | "III";
+  idx: number;
+  id: string;
+  label: string;
+};
+
+export function getMissingAnswerQuestions(exam: ParsedExam): MissingAnswerIssue[] {
+  const missing: MissingAnswerIssue[] = [];
+  (exam.partI || []).forEach((q, i) => {
+    if (isQuestionMissingAnswer(q)) {
+      missing.push({ part: "I", idx: i, id: q.id, label: `Câu ${i + 1} – Phần I` });
+    }
+  });
+  (exam.partII || []).forEach((q, i) => {
+    if (isQuestionMissingAnswer(q)) {
+      missing.push({ part: "II", idx: i, id: q.id, label: `Câu ${i + 1} – Phần II` });
+    }
+  });
+  (exam.partIII || []).forEach((q, i) => {
+    if (isQuestionMissingAnswer(q)) {
+      missing.push({ part: "III", idx: i, id: q.id, label: `Câu ${i + 1} – Phần III` });
+    }
+  });
+  return missing;
+}
 
 
 export type ParsedQuestion = MCQuestion | TFQuestion | SAQuestion;
@@ -2086,7 +2126,7 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
         id: `q${idx}`,
         text: stemRich,
         options: formattedOpts,
-        answer: (answer || "A") as "A" | "B" | "C" | "D",
+        answer: (answer ? (answer as "A" | "B" | "C" | "D") : null),
         explanation,
         level,
       });
@@ -2094,7 +2134,7 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
       type ExtractedItem = {
         key: "a" | "b" | "c" | "d";
         text: string;
-        correct: boolean;
+        correct: boolean | null;
         level?: QuestionLevel | null;
         order?: number;
       };
@@ -2113,10 +2153,22 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
           textRich = textRich.slice(leadingMatch[0].length).trim();
         }
 
+        let itemCorrect: boolean | null = null;
+        const tfMatch = textRich.match(/(?:^|[(\[\s:\-])(Đúng|Sai|True|False)(?:[)\]\s.]*$)/i);
+        if (tfMatch) {
+          itemCorrect = /^(?:Đúng|True)$/i.test(tfMatch[1]);
+        } else if (o.marked) {
+          itemCorrect = true;
+        } else if (options.some((opt) => opt.marked)) {
+          itemCorrect = false;
+        } else {
+          itemCorrect = null;
+        }
+
         rawItems.push({
           key: o.key.toLowerCase() as "a" | "b" | "c" | "d",
           text: textRich,
-          correct: o.marked,
+          correct: itemCorrect,
           level: itemLevel,
           order: itemOrder,
         });

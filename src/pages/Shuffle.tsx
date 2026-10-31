@@ -8,14 +8,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { Shuffle as ShuffleIcon, FileDown, Eye, Loader2 } from "lucide-react";
-import { parseDocx, stripRich, type ParsedExam } from "@/lib/docxParser";
+import { Shuffle as ShuffleIcon, FileDown, Eye, Loader2, AlertTriangle } from "lucide-react";
+import { parseDocx, stripRich, getMissingAnswerQuestions, type ParsedExam } from "@/lib/docxParser";
 import RichText from "@/components/RichText";
 import { generateVariants, estimateMaxVariants } from "@/lib/shuffleEngine";
 import { generateExamCodes } from "@/lib/examCodeGenerator";
 import { exportExams, exportAnswerKey, exportExamsAndKey, type ExamMeta, type ExportOptions } from "@/lib/examExporter";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
+import MissingAnswersAlertModal, { MissingItem } from "@/components/MissingAnswersAlertModal";
 
 export default function Shuffle() {
   const { user, isAdmin } = useAuth();
@@ -26,6 +27,8 @@ export default function Shuffle() {
   const [baseExam, setBaseExam] = useState<ParsedExam | null>(null);
   const [baseTitle, setBaseTitle] = useState<string>("De_kiem_tra");
   const [loadingBase, setLoadingBase] = useState(false);
+  const [missingModalOpen, setMissingModalOpen] = useState(false);
+  const [modalMissingList, setModalMissingList] = useState<MissingItem[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileReadSeq = useRef(0);
 
@@ -119,7 +122,14 @@ export default function Shuffle() {
       if (total === 0) {
         toast.warning("Không nhận diện được câu hỏi nào trong file. Vui lòng kiểm tra định dạng.");
       } else {
-        toast.success(`Đã nhận dạng thành công ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
+        const missing = getMissingAnswerQuestions(parsed);
+        if (missing.length > 0) {
+          // Cảnh báo dạng hộp thoại ở giữa màn hình, không tự động biến mất, bắt buộc bấm OK
+          setModalMissingList(missing);
+          setMissingModalOpen(true);
+        } else {
+          toast.success(`Đã nhận dạng thành công ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
+        }
       }
     } catch (e: any) {
       if (readId !== fileReadSeq.current) return;
@@ -193,8 +203,13 @@ export default function Shuffle() {
     return r.ok ? r.codes : [];
   }, [codePrefix, codeLen, numVariants, codesInput]);
 
+  const missingQuestions = useMemo(() => (baseExam ? getMissingAnswerQuestions(baseExam) : []), [baseExam]);
+
   const validate = (): string | null => {
     if (!baseExam) return "Chưa chọn đề gốc";
+    if (missingQuestions.length > 0) {
+      return `⚠️ Không thể tiếp tục: Đề vẫn còn ${missingQuestions.length} câu hỏi chưa có đáp án (${missingQuestions.map((m) => m.label).slice(0, 3).join(", ")}${missingQuestions.length > 3 ? "..." : ""}). Vui lòng bổ sung đáp án trước khi xáo đề.`;
+    }
     if (numVariants < 1) return "Số lượng mã đề phải ≥ 1";
     if (!stats || (stats.p1 + stats.p2 + stats.p3) === 0) return "Đề không có câu hỏi";
     const r = generateExamCodes({ prefix: codePrefix, codeLength: codeLen, quantity: numVariants, manualCodes: codesInput });
@@ -329,6 +344,29 @@ export default function Shuffle() {
               </div>
             )}
           </Card>
+
+          {baseExam && missingQuestions.length > 0 && (
+            <Card className="p-4 rounded-2xl border-amber-500/60 bg-amber-500/10 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-sm text-amber-800 dark:text-amber-300">
+                <AlertTriangle className="size-4 shrink-0 text-amber-600" />
+                <span>⚠️ CẢNH BÁO: ĐỀ NGUỒN CÒN CÂU HỎI CHƯA CÓ ĐÁP ÁN</span>
+              </div>
+              <p className="text-xs leading-relaxed">
+                Hệ thống phát hiện <strong>{missingQuestions.length} câu chưa xác định được đáp án đúng</strong>.
+                Không thể xáo đề khi còn câu hỏi thiếu đáp án. Vui lòng bổ sung đáp án trong phần tạo đề:
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {missingQuestions.map((iss) => (
+                  <span
+                    key={iss.id}
+                    className="px-2 py-0.5 rounded bg-white/80 dark:bg-slate-900 text-amber-900 dark:text-amber-200 border border-amber-400/40 text-[11px] font-semibold"
+                  >
+                    {iss.label}
+                  </span>
+                ))}
+              </div>
+            </Card>
+          )}
 
           <Card className="p-4 rounded-2xl space-y-3">
             <h3 className="font-semibold">2. Thông tin đề</h3>
@@ -564,6 +602,12 @@ export default function Shuffle() {
           </div>
         </Card>
       </div>
+
+      <MissingAnswersAlertModal
+        isOpen={missingModalOpen}
+        onConfirm={() => setMissingModalOpen(false)}
+        missingQuestions={modalMissingList}
+      />
     </div>
   );
 }

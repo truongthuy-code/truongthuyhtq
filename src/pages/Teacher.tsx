@@ -9,12 +9,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { parseDocx, ParsedExam, hasRichContent } from "@/lib/docxParser";
+import { parseDocx, ParsedExam, hasRichContent, getMissingAnswerQuestions } from "@/lib/docxParser";
 import { parseTextExam } from "@/lib/textExamParser";
 import { parsePdfExam } from "@/lib/pdfParser";
 import { DEFAULT_SCORING, ScoringConfig } from "@/lib/grading";
 import { supabase } from "@/integrations/supabase/client";
-import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard } from "lucide-react";
+import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import RichText from "@/components/RichText";
 import LockModeSettings from "@/components/LockModeSettings";
@@ -34,6 +34,7 @@ import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuth
 import { saveUnifiedExam } from "@/lib/allExamsStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
 import { sha256, encryptExamPassword } from "@/lib/examSecurity";
+import MissingAnswersAlertModal, { MissingItem } from "@/components/MissingAnswersAlertModal";
 
 type Issue = { part: "I" | "II" | "III"; idx: number; id: string; reason: string };
 
@@ -45,7 +46,7 @@ function validateExam(exam: ParsedExam): Issue[] {
     } else {
       const empty = q.options.filter((o) => !hasRichContent(o.text)).map((o) => o.key);
       if (empty.length) issues.push({ part: "I", idx: i, id: q.id, reason: `Phương án ${empty.join(", ")} không có nội dung` });
-      else if (!q.answer) issues.push({ part: "I", idx: i, id: q.id, reason: "Chưa đánh dấu đáp án (đỏ/gạch chân)" });
+      else if (!q.answer) issues.push({ part: "I", idx: i, id: q.id, reason: "Chưa xác định đáp án đúng" });
     }
   });
   exam.partII.forEach((q, i) => {
@@ -54,11 +55,16 @@ function validateExam(exam: ParsedExam): Issue[] {
     } else {
       const empty = q.items.filter((it) => !hasRichContent(it.text)).map((it) => it.key);
       if (empty.length) issues.push({ part: "II", idx: i, id: q.id, reason: `Ý ${empty.join(", ")} không có nội dung` });
-      else if (!q.items.some((it) => it.correct)) issues.push({ part: "II", idx: i, id: q.id, reason: "Không có ý nào được đánh dấu đúng" });
+      else {
+        const missing = q.items.filter((it) => it.correct === null || it.correct === undefined);
+        if (missing.length > 0) {
+          issues.push({ part: "II", idx: i, id: q.id, reason: `Ý ${missing.map((it) => it.key).join(", ")} chưa xác định Đúng/Sai` });
+        }
+      }
     }
   });
   exam.partIII.forEach((q, i) => {
-    if (!q.answer || !q.answer.trim()) issues.push({ part: "III", idx: i, id: q.id, reason: "Thiếu dòng \"Đáp án: ...\"" });
+    if (!q.answer || !q.answer.trim()) issues.push({ part: "III", idx: i, id: q.id, reason: "Chưa có đáp án ngắn" });
   });
   return issues;
 }
@@ -90,8 +96,48 @@ export default function Teacher() {
   const [saving, setSaving] = useState(false);
 
   const issues = useMemo(() => (exam ? validateExam(exam) : []), [exam]);
+  const missingQuestions = useMemo(() => (exam ? getMissingAnswerQuestions(exam) : []), [exam]);
   const issueKey = (part: "I" | "II" | "III", idx: number) => `${part}-${idx}`;
   const issueSet = useMemo(() => new Set(issues.map((i) => issueKey(i.part, i.idx))), [issues]);
+
+  const handleUpdateMCAnswer = (qId: string, ans: "A" | "B" | "C" | "D") => {
+    setExam((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        partI: prev.partI.map((q) => (q.id === qId ? { ...q, answer: ans } : q)),
+      };
+    });
+    toast.success(`Đã cập nhật đáp án cho câu hỏi: ${ans}`);
+  };
+
+  const handleUpdateTFItem = (qId: string, itemKey: "a" | "b" | "c" | "d", correct: boolean) => {
+    setExam((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        partII: prev.partII.map((q) => {
+          if (q.id !== qId) return q;
+          return {
+            ...q,
+            items: q.items.map((it) => (it.key === itemKey ? { ...it, correct } : it)),
+          };
+        }),
+      };
+    });
+    toast.success(`Đã cập nhật ý ${itemKey.toUpperCase()}: ${correct ? "Đúng" : "Sai"}`);
+  };
+
+  const handleUpdateSAAnswer = (qId: string, ans: string) => {
+    setExam((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        partIII: prev.partIII.map((q) => (q.id === qId ? { ...q, answer: ans } : q)),
+      };
+    });
+  };
+
   const imageStats = useMemo(() => {
     const count = (s?: string | null) => ((s || "").match(/\u27E6IMG:/g) || []).length;
     let inQuestions = 0;
@@ -112,18 +158,28 @@ export default function Teacher() {
     return { inQuestions, inOptions, total: inQuestions + inOptions };
   }, [exam]);
 
-
-
   const [manualText, setManualText] = useState("");
   const [ocring, setOcring] = useState(false);
+  const [missingModalOpen, setMissingModalOpen] = useState(false);
+  const [modalMissingList, setModalMissingList] = useState<MissingItem[]>([]);
 
   const applyParsed = (parsed: ParsedExam, name: string, file: File | null) => {
     setExam(parsed);
     setOriginalFile(file);
     setTitle(name);
     const total = parsed.partI.length + parsed.partII.length + parsed.partIII.length;
-    if (total === 0) toast.warning("Không phát hiện câu hỏi nào. Kiểm tra định dạng.");
-    else toast.success(`Đã tách ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
+    if (total === 0) {
+      toast.warning("Không phát hiện câu hỏi nào. Kiểm tra định dạng.");
+    } else {
+      const missing = getMissingAnswerQuestions(parsed);
+      if (missing.length > 0) {
+        // Cảnh báo dạng hộp thoại ở giữa màn hình, không tự động biến mất, bắt buộc bấm OK
+        setModalMissingList(missing);
+        setMissingModalOpen(true);
+      } else {
+        toast.success(`Đã tách ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
+      }
+    }
   };
 
   const onDocxFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,6 +256,22 @@ export default function Teacher() {
     if (!exam || !title) return;
     const currentUser = user;
     if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
+
+    const missing = getMissingAnswerQuestions(exam);
+    if (missing.length > 0) {
+      toast.error(
+        `⚠️ Không thể tiếp tục: Đề vẫn còn ${missing.length} câu hỏi chưa có đáp án. Vui lòng bổ sung đáp án cho tất cả các câu trước khi tạo hoặc giao đề.`
+      );
+      const firstMissingId = missing[0]?.id;
+      const el = document.getElementById(`q-preview-${firstMissingId}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+
+    if (issues.length > 0) {
+      toast.error(`⚠️ Không thể tiếp tục: Đề còn ${issues.length} lỗi định dạng cần xử lý trước khi tạo bài thi.`);
+      return;
+    }
 
     if (passwordConfig.requirePassword && !passwordConfig.password.trim()) {
       toast.error("Vui lòng nhập mật khẩu bài thi trước khi lưu!");
@@ -767,17 +839,75 @@ export default function Teacher() {
 
 
 
-            <Button onClick={onCreate} disabled={saving || !title} className="w-full bg-gradient-primary">
+            {missingQuestions.length > 0 && (
+              <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-4 text-xs text-amber-900 dark:text-amber-200 space-y-2">
+                <div className="flex items-center gap-2 font-bold text-sm text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="size-4 shrink-0 text-amber-600" />
+                  <span>Đề còn {missingQuestions.length} câu chưa có đáp án</span>
+                </div>
+                <p className="text-muted-foreground leading-relaxed">
+                  Vui lòng chọn hoặc nhập đáp án cho tất cả các câu hỏi bên dưới trước khi tạo link bài thi.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const el = document.getElementById(`q-preview-${missingQuestions[0]?.id}`);
+                    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                  className="border-amber-500/40 hover:bg-amber-500/20 text-amber-900 dark:text-amber-100 font-semibold text-xs"
+                >
+                  Xem các câu thiếu đáp án
+                </Button>
+              </div>
+            )}
+
+            <Button
+              onClick={onCreate}
+              disabled={saving || !title || missingQuestions.length > 0}
+              className="w-full bg-gradient-primary disabled:opacity-50"
+            >
               {saving ? <Loader2 className="size-4 animate-spin mr-2" /> : null}
-              Tạo link bài thi
+              {missingQuestions.length > 0 ? "Vui lòng bổ sung đáp án trước khi tạo link" : "Tạo link bài thi"}
             </Button>
+          </Card>
+        )}
+
+        {exam && missingQuestions.length > 0 && (
+          <Card className="p-5 border-amber-500/60 bg-amber-500/10 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
+            <div className="flex items-center gap-2 font-bold text-base text-amber-800 dark:text-amber-300 mb-1">
+              <AlertTriangle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>⚠️ CẢNH BÁO: ĐỀ NGUỒN CÒN CÂU HỎI CHƯA CÓ ĐÁP ÁN</span>
+            </div>
+            <p className="text-sm leading-relaxed">
+              Hệ thống phát hiện <strong>{missingQuestions.length} câu chưa xác định được đáp án đúng</strong>.
+              Vui lòng kiểm tra và chọn đáp án cho các câu sau:
+            </p>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {missingQuestions.map((iss) => (
+                <Button
+                  key={iss.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const el = document.getElementById(`q-preview-${iss.id}`);
+                    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                  className="border-amber-400/60 bg-white dark:bg-slate-900 text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-xs font-semibold rounded-lg shadow-xs"
+                >
+                  {iss.label}
+                </Button>
+              ))}
+            </div>
           </Card>
         )}
 
         {exam && issues.length > 0 && (
           <Card className="p-5 border-destructive/40 bg-destructive/5">
             <div className="flex items-center gap-2 font-semibold text-destructive mb-2">
-              <AlertTriangle className="size-5" /> Phát hiện {issues.length} câu sai định dạng
+              <AlertTriangle className="size-5" /> Phát hiện {issues.length} vấn đề định dạng
             </div>
             <ul className="text-sm space-y-1 list-disc pl-5">
               {issues.map((iss, k) => (
@@ -799,24 +929,94 @@ export default function Teacher() {
                   <> • Hình ảnh: {imageStats.total} ({imageStats.inQuestions} ở câu hỏi, {imageStats.inOptions} ở phương án)</>
                 )}
               </div>
-
             </div>
 
             <div className="space-y-6 text-sm">
               {exam.partI.length > 0 && (
                 <section>
                   <div className="font-bold text-primary mb-2">PHẦN I — Trắc nghiệm 4 phương án ({exam.partI.length} câu)</div>
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {exam.partI.map((q, i) => {
                       const bad = issueSet.has(issueKey("I", i));
+                      const isMissing = !q.answer;
                       return (
-                        <div key={q.id} className={`border-l-4 pl-3 py-1 ${bad ? "border-destructive bg-destructive/5" : "border-primary"}`}>
-                          <div className="font-medium">Câu {i + 1}: <RichText text={q.text} /></div>
-                          {q.options.map((o) => (
-                            <div key={o.key} className={o.key === q.answer ? "text-success font-medium" : "text-muted-foreground"}>
-                              {o.key}. <RichText text={o.text} /> {o.key === q.answer && "✓"}
+                        <div
+                          key={q.id}
+                          id={`q-preview-${q.id}`}
+                          className={`border-l-4 pl-3.5 pr-2 py-2.5 rounded-r-xl transition-colors ${
+                            isMissing
+                              ? "border-amber-500 bg-amber-500/10 dark:bg-amber-950/20"
+                              : bad
+                              ? "border-destructive bg-destructive/5"
+                              : "border-primary bg-card/60"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-medium text-foreground">
+                              Câu {i + 1}: <RichText text={q.text} />
                             </div>
-                          ))}
+                            {isMissing ? (
+                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                ⚠ Chưa xác định đáp án
+                              </span>
+                            ) : (
+                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                ✓ Đáp án: {q.answer}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-2 space-y-1">
+                            {q.options.map((o) => {
+                              const isChosen = o.key === q.answer;
+                              return (
+                                <div
+                                  key={o.key}
+                                  onClick={() => handleUpdateMCAnswer(q.id, o.key)}
+                                  className={`flex items-start gap-2 p-1.5 rounded-lg cursor-pointer transition-colors ${
+                                    isChosen
+                                      ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 dark:text-emerald-200 font-semibold"
+                                      : "hover:bg-muted/70 text-muted-foreground border border-transparent"
+                                  }`}
+                                  title={`Bấm để chọn ${o.key} làm đáp án đúng`}
+                                >
+                                  <span className="font-bold min-w-5">{o.key}.</span>
+                                  <div className="flex-1">
+                                    <RichText text={o.text} />
+                                  </div>
+                                  {isChosen ? (
+                                    <span className="text-emerald-600 font-bold shrink-0 text-xs">✓ Đáp án đúng</span>
+                                  ) : (
+                                    <span className="text-[11px] text-muted-foreground opacity-60 hover:opacity-100 shrink-0">
+                                      Chọn {o.key}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Quick answer buttons */}
+                          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/60">
+                            <span className="text-xs font-medium text-muted-foreground">Chọn đáp án:</span>
+                            {(["A", "B", "C", "D"] as const).map((letter) => (
+                              <Button
+                                key={letter}
+                                type="button"
+                                size="sm"
+                                variant={q.answer === letter ? "default" : "outline"}
+                                onClick={() => handleUpdateMCAnswer(q.id, letter)}
+                                className={`h-7 px-3 text-xs font-bold rounded-lg ${
+                                  q.answer === letter
+                                    ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                                    : "border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                }`}
+                              >
+                                {letter}
+                              </Button>
+                            ))}
+                          </div>
+
                           {q.explanation && (
                             <div className="mt-2 rounded-md border-l-2 border-primary/40 bg-primary/5 p-2 text-xs">
                               <div className="font-semibold text-primary mb-1">Lời giải</div>
@@ -834,23 +1034,81 @@ export default function Teacher() {
               {exam.partII.length > 0 && (
                 <section>
                   <div className="font-bold text-accent-foreground mb-2">PHẦN II — Đúng/Sai ({exam.partII.length} câu)</div>
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {exam.partII.map((q, i) => {
                       const bad = issueSet.has(issueKey("II", i));
+                      const isMissing = q.items.some((it) => it.correct === null || it.correct === undefined);
                       return (
-                        <div key={q.id} className={`border-l-4 pl-3 py-1 ${bad ? "border-destructive bg-destructive/5" : "border-accent"}`}>
-                          <div className="font-medium">Câu {i + 1}: <RichText text={q.text} /></div>
-                          {q.items.map((it) => (
-                            <div key={it.key} className="flex items-start gap-2 py-0.5">
-                              <span className="flex gap-1 shrink-0">
-                                <span className={`text-xs rounded border px-2 py-0.5 ${it.correct ? "border-success bg-success/10 text-success font-semibold" : "border-border text-muted-foreground"}`}>Đúng</span>
-                                <span className={`text-xs rounded border px-2 py-0.5 ${!it.correct ? "border-destructive bg-destructive/10 text-destructive font-semibold" : "border-border text-muted-foreground"}`}>Sai</span>
-                              </span>
-                              <span className="font-medium min-w-5">{it.key})</span>
-                              <span className="flex-1"><RichText text={it.text} /></span>
+                        <div
+                          key={q.id}
+                          id={`q-preview-${q.id}`}
+                          className={`border-l-4 pl-3.5 pr-2 py-2.5 rounded-r-xl transition-colors ${
+                            isMissing
+                              ? "border-amber-500 bg-amber-500/10 dark:bg-amber-950/20"
+                              : bad
+                              ? "border-destructive bg-destructive/5"
+                              : "border-accent bg-card/60"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-medium text-foreground">
+                              Câu {i + 1}: <RichText text={q.text} />
                             </div>
+                            {isMissing ? (
+                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                ⚠ Còn ý chưa xác định Đúng/Sai
+                              </span>
+                            ) : (
+                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                ✓ Đã có đủ đáp án
+                              </span>
+                            )}
+                          </div>
 
-                          ))}
+                          <div className="mt-2 space-y-1.5">
+                            {q.items.map((it) => (
+                              <div
+                                key={it.key}
+                                className="flex items-center justify-between gap-2 py-1 px-1.5 rounded-lg hover:bg-muted/40 transition-colors"
+                              >
+                                <div className="flex items-start gap-2 flex-1">
+                                  <span className="font-bold min-w-5 text-foreground">{it.key})</span>
+                                  <span className="flex-1 text-foreground">
+                                    <RichText text={it.text} />
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => handleUpdateTFItem(q.id, it.key, true)}
+                                    className={`h-7 px-2.5 text-xs font-bold rounded-lg ${
+                                      it.correct === true
+                                        ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                                        : "bg-transparent hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40"
+                                    }`}
+                                  >
+                                    Đúng
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => handleUpdateTFItem(q.id, it.key, false)}
+                                    className={`h-7 px-2.5 text-xs font-bold rounded-lg ${
+                                      it.correct === false
+                                        ? "bg-red-600 hover:bg-red-700 text-white shadow-xs"
+                                        : "bg-transparent hover:bg-red-500/10 text-red-700 dark:text-red-300 border border-red-500/40"
+                                    }`}
+                                  >
+                                    Sai
+                                  </Button>
+                                  {it.correct === null || it.correct === undefined ? (
+                                    <span className="text-[11px] text-amber-600 font-bold ml-1">⚠ Chưa chọn</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
 
                           {q.explanation && (
                             <div className="mt-2 rounded-md border-l-2 border-primary/40 bg-primary/5 p-2 text-xs">
@@ -869,13 +1127,48 @@ export default function Teacher() {
               {exam.partIII.length > 0 && (
                 <section>
                   <div className="font-bold text-warning mb-2">PHẦN III — Trả lời ngắn ({exam.partIII.length} câu)</div>
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {exam.partIII.map((q, i) => {
                       const bad = issueSet.has(issueKey("III", i));
+                      const isMissing = !q.answer || !q.answer.trim();
                       return (
-                        <div key={q.id} className={`border-l-4 pl-3 py-1 ${bad ? "border-destructive bg-destructive/5" : "border-warning"}`}>
-                          <div className="font-medium">Câu {i + 1}: <RichText text={q.text} /></div>
-                          <div className="text-success">Đáp án: <RichText text={q.answer} /></div>
+                        <div
+                          key={q.id}
+                          id={`q-preview-${q.id}`}
+                          className={`border-l-4 pl-3.5 pr-2 py-2.5 rounded-r-xl transition-colors ${
+                            isMissing
+                              ? "border-amber-500 bg-amber-500/10 dark:bg-amber-950/20"
+                              : bad
+                              ? "border-destructive bg-destructive/5"
+                              : "border-warning bg-card/60"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-medium text-foreground">
+                              Câu {i + 1}: <RichText text={q.text} />
+                            </div>
+                            {isMissing ? (
+                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                ⚠ Chưa có đáp án ngắn
+                              </span>
+                            ) : (
+                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                ✓ Đã có đáp án
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-2 flex items-center gap-2">
+                            <span className="text-xs font-bold text-muted-foreground shrink-0">Đáp án:</span>
+                            <Input
+                              type="text"
+                              value={q.answer || ""}
+                              onChange={(e) => handleUpdateSAAnswer(q.id, e.target.value)}
+                              placeholder="Nhập đáp án chính thức..."
+                              className="h-8 max-w-md text-xs font-semibold"
+                            />
+                          </div>
+
                           {q.explanation && (
                             <div className="mt-2 rounded-md border-l-2 border-primary/40 bg-primary/5 p-2 text-xs">
                               <div className="font-semibold text-primary mb-1">Lời giải</div>
@@ -894,6 +1187,12 @@ export default function Teacher() {
           </Card>
         )}
       </main>
+
+      <MissingAnswersAlertModal
+        isOpen={missingModalOpen}
+        onConfirm={() => setMissingModalOpen(false)}
+        missingQuestions={modalMissingList}
+      />
     </div>
   );
 }

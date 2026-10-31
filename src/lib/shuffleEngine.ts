@@ -40,11 +40,16 @@ const TF_KEYS: ("a" | "b" | "c" | "d")[] = ["a", "b", "c", "d"];
 export function shuffleMC(q: MCQuestion, opts: ShuffleOptions): MCQuestion {
   const shouldShuffleOptions = opts.shuffle_o_p1 ?? opts.shuffleAnswers ?? false;
   if (!shouldShuffleOptions) return { ...q };
+  if (!q.answer) {
+    const shuffled = shuffleArray(q.options);
+    const newOptions = shuffled.map((o, i) => ({ key: MC_KEYS[i], text: o.text }));
+    return { ...q, options: newOptions, answer: null };
+  }
   const oldCorrect = q.options.find((o) => o.key === q.answer);
   const shuffled = shuffleArray(q.options);
   const newOptions = shuffled.map((o, i) => ({ key: MC_KEYS[i], text: o.text }));
   const newAnswerIdx = shuffled.findIndex((o) => o === oldCorrect || (o.text === oldCorrect?.text && o.key === oldCorrect?.key));
-  return { ...q, options: newOptions, answer: MC_KEYS[newAnswerIdx >= 0 ? newAnswerIdx : 0] };
+  return { ...q, options: newOptions, answer: newAnswerIdx >= 0 ? MC_KEYS[newAnswerIdx] : null };
 }
 
 export function shuffleTF(q: TFQuestion, opts: ShuffleOptions): TFQuestion {

@@ -603,7 +603,7 @@ export async function exportExams(variants: ParsedExam[], codes: string[], meta:
 
 // ---------- Answer key ----------
 function tfCodeString(q: any): string {
-  return q.items.map((it: any) => (it.correct ? "Đ" : "S")).join("");
+  return q.items.map((it: any) => (it.correct === true ? "Đ" : it.correct === false ? "S" : "-")).join("");
 }
 
 export async function buildAnswerKeyBlob(variants: ParsedExam[], codes: string[]): Promise<Blob> {
@@ -628,9 +628,9 @@ export async function buildAnswerKeyBlob(variants: ParsedExam[], codes: string[]
   for (let i = 0; i < total; i++) {
     const cells = [cell(String(i + 1), true)];
     variants.forEach((v) => {
-      if (i < nP1) cells.push(cell(v.partI[i].answer));
+      if (i < nP1) cells.push(cell(v.partI[i].answer || "-"));
       else if (i < nP1 + nP2) cells.push(cell(tfCodeString(v.partII[i - nP1])));
-      else cells.push(cell(plain(v.partIII[i - nP1 - nP2].answer)));
+      else cells.push(cell(plain(v.partIII[i - nP1 - nP2].answer || "-")));
     });
     rows.push(new TableRow({ children: cells }));
   }

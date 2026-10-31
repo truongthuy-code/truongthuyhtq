@@ -44,7 +44,7 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
   for (const q of exam.partI as MCQuestion[]) {
     total++;
     maxScore += scoring.p1;
-    const ok = answers[q.id] === q.answer;
+    const ok = q.answer ? answers[q.id] === q.answer : false;
     if (ok) { correct++; score += scoring.p1; breakdown.p1.correct++; }
     details.push({ id: q.id, ok });
   }
@@ -56,7 +56,7 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
     let okItems = 0;
     for (const it of q.items) {
       const v = getTFValue(ans, it.key);
-      if (v !== null && v === !!it.correct) okItems++;
+      if (v !== null && it.correct !== null && it.correct !== undefined && v === !!it.correct) okItems++;
     }
     const key = String(okItems) as "1" | "2" | "3" | "4";
     const pts = okItems >= 1 ? (scoring.p2[key] ?? 0) : 0;
@@ -70,9 +70,9 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
     total++;
     maxScore += scoring.p3;
     const given = String(answers[q.id] ?? "").trim().toLowerCase();
-    const expected = stripRich(String(q.answer)).trim().toLowerCase();
-    let ok = given === expected;
-    if (!ok) {
+    const expected = q.answer ? stripRich(String(q.answer)).trim().toLowerCase() : "";
+    let ok = expected !== "" && given === expected;
+    if (!ok && expected !== "") {
       const a = parseFloat(given.replace(",", "."));
       const b = parseFloat(expected.replace(",", "."));
       if (!isNaN(a) && !isNaN(b) && Math.abs(a - b) < 1e-6) ok = true;
