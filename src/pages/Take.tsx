@@ -1827,10 +1827,10 @@ export default function Take() {
   };
 
   // Quy định cỡ chữ trong Chế độ từng câu hỏi tối ưu cho trình chiếu TV/máy chiếu (1920x1080):
-  // - Câu hỏi: ~40-44px (ưu tiên 42px, responsive clamp(30px, 2.25vw, 42px))
-  // - Phương án: ~28-34px (ưu tiên 32px, responsive clamp(22px, 1.65vw, 32px))
-  const qFontSizeClass = "text-[clamp(30px,2.25vw,42px)] quiz-question-tv quiz-question-text-80";
-  const optFontSizeClass = "text-[clamp(22px,1.65vw,32px)] quiz-option-tv quiz-option-text-70";
+  // - Câu hỏi: chuẩn 47px (tăng đúng +5px từ 42px, responsive clamp(35px, 2.45vw, 47px))
+  // - Phương án: chuẩn 37px (tăng đúng +5px từ 32px, responsive clamp(27px, 1.95vw, 37px))
+  const qFontSizeClass = "text-[clamp(35px,2.45vw,47px)] quiz-question-tv quiz-question-text-80";
+  const optFontSizeClass = "text-[clamp(27px,1.95vw,37px)] quiz-option-tv quiz-option-text-70";
 
   // Question navigation drawer / modal component
   const questionNavDrawer = (
@@ -2045,15 +2045,15 @@ export default function Take() {
       (currentQ.text || "").includes("\u27E6CODE:") ||
       (currentQ.text || "").includes("⟦CODE:");
 
-    // Phân loại độ dài để tự động điều chỉnh:
-    // - Câu hỏi rất dài (>500 ký tự) hoặc có bảng/code lớn: 34px câu hỏi, 26px phương án
-    // - Câu hỏi dài (250-500 ký tự) hoặc có media: 38px câu hỏi, 29px phương án
-    // - Câu hỏi ngắn & trung bình: chuẩn 42px câu hỏi, 32px phương án (chuẩn TV tối ưu)
+    // Phân loại độ dài để tự động điều chỉnh (tất cả các bậc đều tăng đúng +5px so với phiên bản trước):
+    // - Câu hỏi rất dài (>500 ký tự) hoặc có bảng/code lớn: 39px câu hỏi (+5px từ 34px), 31px phương án (+5px từ 26px)
+    // - Câu hỏi dài (250-500 ký tự) hoặc có media: 43px câu hỏi (+5px từ 38px), 34px phương án (+5px từ 29px)
+    // - Câu hỏi ngắn & trung bình: chuẩn 47px câu hỏi (+5px từ 42px), 37px phương án (+5px từ 32px)
     const isVeryLongQ = qLength > 500 || optTotalLen > 320 || (hasMediaOrCode && qLength > 300);
     const isLongQ = qLength > 250 || optTotalLen > 180 || hasMediaOrCode;
 
-    const dynamicQFontSize = isVeryLongQ ? "34px" : isLongQ ? "38px" : "42px";
-    const dynamicOptFontSize = isVeryLongQ ? "26px" : isLongQ ? "29px" : "32px";
+    const dynamicQFontSize = isVeryLongQ ? "39px" : isLongQ ? "43px" : "47px";
+    const dynamicOptFontSize = isVeryLongQ ? "31px" : isLongQ ? "34px" : "37px";
 
     return (
       <Card
@@ -2512,7 +2512,7 @@ export default function Take() {
 
           {/* Nội dung câu hỏi (Font Times New Roman, trừ code/pre) */}
           <div
-            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium ${
+            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium standard-sync-font-size ${
               isContentLong ? "mb-3" : "mb-4 sm:mb-5"
             } ${stemSizeClass}`}
           >
@@ -2584,7 +2584,7 @@ export default function Take() {
                       </div>
 
                       {/* Chữ cái A/B/C/D + Nội dung phương án (Font Times New Roman) */}
-                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize}`}>
+                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize} standard-sync-font-size`}>
                         <span className="font-bold mr-1.5">{optLetter}.</span>
                         <RichText text={opt.text} />
                       </div>
@@ -2676,7 +2676,7 @@ export default function Take() {
 
                       {/* BÊN PHẢI: Ký hiệu ý a), b)... và nội dung nhận định (Font Times New Roman) */}
                       <div
-                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize}`}
+                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize} standard-sync-font-size`}
                       >
                         <span className="font-bold mr-1.5">{label})</span>
                         <RichText text={it.text} />
@@ -2700,7 +2700,7 @@ export default function Take() {
           {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
             <div className="mt-3 w-full max-w-2xl">
-              <Label className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman">
+              <Label className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input

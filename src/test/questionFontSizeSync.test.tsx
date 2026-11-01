@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import React from "react";
 import fs from "fs";
 import path from "path";
+import RichText from "@/components/RichText";
 
 describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
   it("TEST 1: src/index.css defines quiz-sync-font-size and team-sync-font-size inheriting font-size while preserving code and formulas", () => {
@@ -94,19 +95,19 @@ describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
     expect(pre?.className).toContain("code-content");
   });
 
-  it("TEST 6: Take.tsx defines TV-optimized ~42px question and ~32px option classes in single question mode", () => {
+  it("TEST 6: Take.tsx defines TV-optimized 47px question and 37px option classes (+5px) in single question mode", () => {
     const takePath = path.resolve(process.cwd(), "src/pages/Take.tsx");
     const takeCode = fs.readFileSync(takePath, "utf-8");
 
-    // Verify TV presentation font classes (~42px question, ~32px option)
-    expect(takeCode).toContain('const qFontSizeClass = "text-[clamp(30px,2.25vw,42px)] quiz-question-tv quiz-question-text-80";');
-    expect(takeCode).toContain('const optFontSizeClass = "text-[clamp(22px,1.65vw,32px)] quiz-option-tv quiz-option-text-70";');
+    // Verify TV presentation font classes (47px question, 37px option)
+    expect(takeCode).toContain('const qFontSizeClass = "text-[clamp(35px,2.45vw,47px)] quiz-question-tv quiz-question-text-80";');
+    expect(takeCode).toContain('const optFontSizeClass = "text-[clamp(27px,1.95vw,37px)] quiz-option-tv quiz-option-text-70";');
 
     const cssPath = path.resolve(process.cwd(), "src/index.css");
     const css = fs.readFileSync(cssPath, "utf-8");
 
-    expect(css).toContain("--quiz-q-font-size: clamp(30px, 2.25vw, 42px);");
-    expect(css).toContain("--quiz-opt-font-size: clamp(22px, 1.65vw, 32px);");
+    expect(css).toContain("--quiz-q-font-size: clamp(35px, 2.45vw, 47px);");
+    expect(css).toContain("--quiz-opt-font-size: clamp(27px, 1.95vw, 37px);");
     expect(css).toContain(".quiz-question-tv");
     expect(css).toContain(".quiz-option-tv");
   });
@@ -139,14 +140,95 @@ describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
     expect(takeCode).toContain('className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4 lg:gap-5 w-full"');
   });
 
-  it("TEST 10: Automatic long-question handling adapts font sizes and applies compact classes", () => {
+  it("TEST 10: Automatic long-question handling adapts font sizes (+5px for all tiers)", () => {
     const takePath = path.resolve(process.cwd(), "src/pages/Take.tsx");
     const takeCode = fs.readFileSync(takePath, "utf-8");
 
     expect(takeCode).toContain("const isVeryLongQ =");
     expect(takeCode).toContain("const isLongQ =");
-    expect(takeCode).toContain('const dynamicQFontSize = isVeryLongQ ? "34px" : isLongQ ? "38px" : "42px";');
-    expect(takeCode).toContain('const dynamicOptFontSize = isVeryLongQ ? "26px" : isLongQ ? "29px" : "32px";');
+    expect(takeCode).toContain('const dynamicQFontSize = isVeryLongQ ? "39px" : isLongQ ? "43px" : "47px";');
+    expect(takeCode).toContain('const dynamicOptFontSize = isVeryLongQ ? "31px" : isLongQ ? "34px" : "37px";');
+  });
+
+  it("TEST 11: All nested tags in Question synchronize cleanly to 47px and Options to 37px while code remains monospace", () => {
+    const cssPath = path.resolve(process.cwd(), "src/index.css");
+    const css = fs.readFileSync(cssPath, "utf-8");
+
+    // Verify all nested selectors exist on .quiz-question-tv
+    expect(css).toContain(".quiz-question-tv p");
+    expect(css).toContain(".quiz-question-tv span");
+    expect(css).toContain(".quiz-question-tv div");
+    expect(css).toContain(".quiz-question-tv strong");
+    expect(css).toContain(".quiz-question-tv table");
+    expect(css).toContain(".quiz-question-tv td");
+    expect(css).toContain(".quiz-question-tv th");
+
+    // Verify all nested selectors exist on .quiz-option-tv
+    expect(css).toContain(".quiz-option-tv p");
+    expect(css).toContain(".quiz-option-tv span");
+    expect(css).toContain(".quiz-option-tv div");
+    expect(css).toContain(".quiz-option-tv td");
+
+    // Verify code block font preservation
+    expect(css).toContain(".quiz-question-tv pre");
+    expect(css).toContain(".quiz-question-tv code");
+    expect(css).toContain(".quiz-option-tv pre");
+    expect(css).toContain(".quiz-option-tv code");
+  });
+
+  it("TEST 12: Natural language paragraphs with indentation and punctuation in Vietnamese are NOT misclassified as code blocks in RichText", () => {
+    const richTextPath = path.resolve(process.cwd(), "src/components/RichText.tsx");
+    const richTextCode = fs.readFileSync(richTextPath, "utf-8");
+
+    expect(richTextCode).toContain("VIETNAMESE_DIACRITICS_RE");
+    
+    const scenarioQuestion =
+      "Xét tình huống ứng dụng mạng máy tính trong trường học:\n" +
+      "  Một trường THPT triển khai hạ tầng mạng máy tính gồm các máy tính phòng máy được nối với nhau qua bộ chuyển mạch Switch tạo thành mạng LAN nội bộ. Để kết nối phòng máy này với mạng Internet toàn cầu, nhà trường đăng ký đường truyền cáp quang với nhà cung cấp dịch vụ VNPT và lắp đặt thêm một bộ định tuyến Router.";
+
+    const { container } = render(<RichText text={scenarioQuestion} />);
+    
+    // There should be NO <pre> or <code> tags rendered for this natural language question
+    expect(container.querySelector("pre")).toBeNull();
+    expect(container.querySelector("code")).toBeNull();
+
+    // The text should be rendered cleanly as text spans
+    expect(container.textContent).toContain("Xét tình huống ứng dụng mạng máy tính trong trường học:");
+    expect(container.textContent).toContain("Một trường THPT triển khai hạ tầng mạng máy tính");
+  });
+
+  it("TEST 13: Questions with multiple paragraphs (lead sentence + scenario) and mixed formatting (bold, italic) render uniformly", () => {
+    const formattedStem =
+      "<b>Xét tình huống ứng dụng mạng máy tính trong trường học:</b>\n" +
+      "<i>Một trường THPT triển khai hạ tầng mạng máy tính gồm các máy tính phòng máy...</i>\n" +
+      "Cần lựa chọn nhận định đúng hoặc sai cho các ý sau:";
+
+    const { container } = render(
+      <div className="quiz-question-tv quiz-question-text-80">
+        <RichText text={formattedStem} />
+      </div>
+    );
+
+    // Verify b and i are rendered and not treated as code
+    expect(container.querySelector("b")).not.toBeNull();
+    expect(container.querySelector("i")).not.toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("TEST 14: Standard mode synchronizes all inner text elements with standard-sync-font-size without using quiz-sync-font-size", () => {
+    const takePath = path.resolve(process.cwd(), "src/pages/Take.tsx");
+    const takeCode = fs.readFileSync(takePath, "utf-8");
+
+    const cssPath = path.resolve(process.cwd(), "src/index.css");
+    const css = fs.readFileSync(cssPath, "utf-8");
+
+    expect(css).toContain(".standard-sync-font-size");
+    expect(takeCode).toContain("standard-sync-font-size");
+
+    // Standard mode implementation still does not contain quiz-sync-font-size
+    const standardSection = takeCode.slice(takeCode.indexOf("const renderStandardQuestionCard ="));
+    const standardFuncBody = standardSection.slice(0, standardSection.indexOf("const renderStandardQuestionListCard ="));
+    expect(standardFuncBody).not.toContain("quiz-sync-font-size");
   });
 });
 

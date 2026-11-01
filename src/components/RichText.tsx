@@ -93,11 +93,29 @@ function sanitizeSafeHtml(html: string): string {
   });
 }
 
+const VIETNAMESE_DIACRITICS_RE =
+  /[àáảãạâầấẩẫậăằắẳẵặèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+
 function isCodeLine(s: string): boolean {
   if (!s || s.trim().length === 0) return false;
+
+  // Đoạn văn bản tự nhiên có dấu tiếng Việt (kể cả khi thụt đầu dòng hay có dấu câu)
+  // tuyệt đối không phải là dòng mã nguồn độc lập, trừ khi bắt đầu rõ ràng bằng lệnh code (print, cout, v.v.)
+  if (VIETNAMESE_DIACRITICS_RE.test(s)) {
+    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\()/i.test(s);
+    if (!isCodeWithVn) return false;
+  }
+
   if (/^[ \t]{2,}/.test(s)) {
-    if (/[:;=+\-*/><()[\]{}#&|!~,"'%\\]/.test(s)) return true;
-    if (/^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b)/i.test(s)) return true;
+    // Chỉ coi là dòng code thụt đầu dòng nếu có từ khóa/cú pháp lập trình thực sự,
+    // không được phán đoán bừa chỉ vì có dấu phẩy ',' hay dấu ngoặc thông thường
+    if (
+      /^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b|if\b|elif\b|for\b|while\b|print\s*\(|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\(|[a-zA-Z_]\w*\s*=[^=]|[a-zA-Z_]\w*\([^)]*\);?|[a-zA-Z_]\w*\.[a-zA-Z_]\w*\(|[{};][ \t]*$)/i.test(
+        s
+      )
+    ) {
+      return true;
+    }
   }
   if (
     /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
@@ -275,12 +293,12 @@ export default function RichText({ text, className }: { text: string; className?
               return (
                 <span
                   key={idx}
-                  className="whitespace-pre-wrap inline text-[inherit]"
+                  className="whitespace-pre-wrap inline text-[inherit] font-[inherit]"
                   dangerouslySetInnerHTML={{ __html: sanitizeSafeHtml(t.value) }}
                 />
               );
             }
-            return <span key={idx} className="whitespace-pre-wrap">{t.value}</span>;
+            return <span key={idx} className="whitespace-pre-wrap text-[inherit] font-[inherit]">{t.value}</span>;
           }
           if (t.kind === "math") {
             let html = "";

@@ -231,7 +231,11 @@
   .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70),
   .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70) *:not(.quiz-question-text-80):not(.quiz-question-text-80 *):not(.quiz-option-text-70):not(.quiz-option-text-70 *):not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
   .team-sync-font-size,
-  .team-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  .team-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .standard-sync-font-size,
+  .standard-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .question-content:not(.quiz-question-tv):not(.quiz-question-text-80),
+  .question-content:not(.quiz-question-tv):not(.quiz-question-text-80) *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
     font-size: inherit !important;
   }
 }
@@ -282,16 +286,16 @@
 
 /* =========================================================================
    CỠ CHỮ TỐI ƯU TRÌNH CHIẾU TRÊN TV / MÁY CHIẾU (1920x1080) TRONG CHẾ ĐỘ TỪNG CÂU HỎI:
-   - Nội dung câu hỏi = 40-44px (chuẩn ưu tiên 42px, clamp(30px, 2.25vw, 42px))
-   - Các phương án trả lời = 28-34px (chuẩn ưu tiên 32px, clamp(22px, 1.65vw, 32px))
+   - Nội dung câu hỏi = Chuẩn 47px (tăng đúng +5px từ 42px, clamp(35px, 2.45vw, 47px))
+   - Các phương án trả lời = Chuẩn 37px (tăng đúng +5px từ 32px, clamp(27px, 1.95vw, 37px))
    - Font: Times New Roman ("Times New Roman", Times, Georgia, serif)
    - Bố cục phương án: 2 cột × 2 hàng (2x2 grid)
-   - Áp dụng triệt để cho toàn bộ thẻ HTML, RichText, Word import: p, span, div, strong, b, em, i, u, s, font, li, ul, ol, td, th, table
+   - Đồng bộ tuyệt đối: Toàn bộ thẻ HTML, RichText, Word import (p, span, div, strong, b, em, i, u, s, font, li, ul, ol, td, th, table) trong cùng câu hỏi/phương án đều có cùng cỡ chữ
    - Bảo toàn tuyệt đối code monospace (pre, code, .code-content, .hljs), KaTeX (.katex), SVG (svg), ảnh
    ========================================================================= */
 :root {
-  --quiz-q-font-size: clamp(30px, 2.25vw, 42px);
-  --quiz-opt-font-size: clamp(22px, 1.65vw, 32px);
+  --quiz-q-font-size: clamp(35px, 2.45vw, 47px);
+  --quiz-opt-font-size: clamp(27px, 1.95vw, 37px);
 }
 
 .quiz-question-tv,
@@ -334,7 +338,7 @@
 .quiz-question-text-80 label,
 .quiz-question-text-80 .rich-text-root,
 .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
-  font-size: var(--quiz-q-font-size, 42px) !important;
+  font-size: var(--quiz-q-font-size, 47px) !important;
   line-height: 1.4 !important;
   font-family: "Times New Roman", Times, Georgia, serif !important;
 }
@@ -381,20 +385,20 @@
 .quiz-option-text-70 input,
 .quiz-option-text-70 .rich-text-root,
 .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
-  font-size: var(--quiz-opt-font-size, 32px) !important;
+  font-size: var(--quiz-opt-font-size, 37px) !important;
   line-height: 1.35 !important;
   font-family: "Times New Roman", Times, Georgia, serif !important;
 }
 
-/* Lớp co giãn tự động khi câu hỏi rất dài */
+/* Lớp co giãn tự động khi câu hỏi dài (được tăng +5px tương ứng) */
 .quiz-q-compact,
 .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
-  font-size: clamp(26px, 1.8vw, 34px) !important;
+  font-size: clamp(31px, 2.1vw, 39px) !important;
 }
 
 .quiz-opt-compact,
 .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
-  font-size: clamp(20px, 1.4vw, 26px) !important;
+  font-size: clamp(25px, 1.6vw, 31px) !important;
 }
 
 /* Bảo toàn tuyệt đối code monospace trong Chế độ từng câu hỏi */
