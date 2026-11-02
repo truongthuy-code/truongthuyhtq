@@ -510,6 +510,216 @@
   font-size: clamp(25px, 1.6vw, 31px) !important;
 }
 
+/* =========================================================================
+   CHẾ ĐỘ TỪNG CÂU HỎI - RESPONSIVE CHO MOBILE VÀ TABLET:
+   - Mobile (< 640px):
+       + Câu hỏi: 30px
+       + Phương án (Phần I, II, III): 22px
+   - Tablet (≥ 640px và < 1024px):
+       + Câu hỏi: 32px
+       + Phương án (Phần I, II, III): 24px
+   - Desktop (≥ 1024px):
+       + GIỮ NGUYÊN HOÀN TOÀN cỡ chữ hiện tại
+   ========================================================================= */
+
+@media (max-width: 639.98px) {
+  :root {
+    --quiz-q-font-size: 30px;
+    --quiz-opt-font-size: 22px;
+  }
+
+  .quiz-question-tv,
+  .quiz-question-text-80,
+  .quiz-question-tv p,
+  .quiz-question-tv span,
+  .quiz-question-tv div,
+  .quiz-question-tv strong,
+  .quiz-question-tv b,
+  .quiz-question-tv em,
+  .quiz-question-tv i,
+  .quiz-question-tv u,
+  .quiz-question-tv s,
+  .quiz-question-tv font,
+  .quiz-question-tv li,
+  .quiz-question-tv ul,
+  .quiz-question-tv ol,
+  .quiz-question-tv td,
+  .quiz-question-tv th,
+  .quiz-question-tv table,
+  .quiz-question-tv label,
+  .quiz-question-tv .rich-text-root,
+  .quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-question-text-80 p,
+  .quiz-question-text-80 span,
+  .quiz-question-text-80 div,
+  .quiz-question-text-80 strong,
+  .quiz-question-text-80 b,
+  .quiz-question-text-80 em,
+  .quiz-question-text-80 i,
+  .quiz-question-text-80 u,
+  .quiz-question-text-80 s,
+  .quiz-question-text-80 font,
+  .quiz-question-text-80 li,
+  .quiz-question-text-80 ul,
+  .quiz-question-text-80 ol,
+  .quiz-question-text-80 td,
+  .quiz-question-text-80 th,
+  .quiz-question-text-80 table,
+  .quiz-question-text-80 label,
+  .quiz-question-text-80 .rich-text-root,
+  .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-q-compact,
+  .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 30px !important;
+  }
+
+  .quiz-option-tv,
+  .quiz-option-text-70,
+  .quiz-option-tv p,
+  .quiz-option-tv span,
+  .quiz-option-tv div,
+  .quiz-option-tv strong,
+  .quiz-option-tv b,
+  .quiz-option-tv em,
+  .quiz-option-tv i,
+  .quiz-option-tv u,
+  .quiz-option-tv s,
+  .quiz-option-tv font,
+  .quiz-option-tv li,
+  .quiz-option-tv ul,
+  .quiz-option-tv ol,
+  .quiz-option-tv td,
+  .quiz-option-tv th,
+  .quiz-option-tv table,
+  .quiz-option-tv label,
+  .quiz-option-tv input,
+  .quiz-option-tv .rich-text-root,
+  .quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-option-text-70 p,
+  .quiz-option-text-70 span,
+  .quiz-option-text-70 div,
+  .quiz-option-text-70 strong,
+  .quiz-option-text-70 b,
+  .quiz-option-text-70 em,
+  .quiz-option-text-70 i,
+  .quiz-option-text-70 u,
+  .quiz-option-text-70 s,
+  .quiz-option-text-70 font,
+  .quiz-option-text-70 li,
+  .quiz-option-text-70 ul,
+  .quiz-option-text-70 ol,
+  .quiz-option-text-70 td,
+  .quiz-option-text-70 th,
+  .quiz-option-text-70 table,
+  .quiz-option-text-70 label,
+  .quiz-option-text-70 input,
+  .quiz-option-text-70 .rich-text-root,
+  .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-opt-compact,
+  .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 22px !important;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  :root {
+    --quiz-q-font-size: 32px;
+    --quiz-opt-font-size: 24px;
+  }
+
+  .quiz-question-tv,
+  .quiz-question-text-80,
+  .quiz-question-tv p,
+  .quiz-question-tv span,
+  .quiz-question-tv div,
+  .quiz-question-tv strong,
+  .quiz-question-tv b,
+  .quiz-question-tv em,
+  .quiz-question-tv i,
+  .quiz-question-tv u,
+  .quiz-question-tv s,
+  .quiz-question-tv font,
+  .quiz-question-tv li,
+  .quiz-question-tv ul,
+  .quiz-question-tv ol,
+  .quiz-question-tv td,
+  .quiz-question-tv th,
+  .quiz-question-tv table,
+  .quiz-question-tv label,
+  .quiz-question-tv .rich-text-root,
+  .quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-question-text-80 p,
+  .quiz-question-text-80 span,
+  .quiz-question-text-80 div,
+  .quiz-question-text-80 strong,
+  .quiz-question-text-80 b,
+  .quiz-question-text-80 em,
+  .quiz-question-text-80 i,
+  .quiz-question-text-80 u,
+  .quiz-question-text-80 s,
+  .quiz-question-text-80 font,
+  .quiz-question-text-80 li,
+  .quiz-question-text-80 ul,
+  .quiz-question-text-80 ol,
+  .quiz-question-text-80 td,
+  .quiz-question-text-80 th,
+  .quiz-question-text-80 table,
+  .quiz-question-text-80 label,
+  .quiz-question-text-80 .rich-text-root,
+  .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-q-compact,
+  .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 32px !important;
+  }
+
+  .quiz-option-tv,
+  .quiz-option-text-70,
+  .quiz-option-tv p,
+  .quiz-option-tv span,
+  .quiz-option-tv div,
+  .quiz-option-tv strong,
+  .quiz-option-tv b,
+  .quiz-option-tv em,
+  .quiz-option-tv i,
+  .quiz-option-tv u,
+  .quiz-option-tv s,
+  .quiz-option-tv font,
+  .quiz-option-tv li,
+  .quiz-option-tv ul,
+  .quiz-option-tv ol,
+  .quiz-option-tv td,
+  .quiz-option-tv th,
+  .quiz-option-tv table,
+  .quiz-option-tv label,
+  .quiz-option-tv input,
+  .quiz-option-tv .rich-text-root,
+  .quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-option-text-70 p,
+  .quiz-option-text-70 span,
+  .quiz-option-text-70 div,
+  .quiz-option-text-70 strong,
+  .quiz-option-text-70 b,
+  .quiz-option-text-70 em,
+  .quiz-option-text-70 i,
+  .quiz-option-text-70 u,
+  .quiz-option-text-70 s,
+  .quiz-option-text-70 font,
+  .quiz-option-text-70 li,
+  .quiz-option-text-70 ul,
+  .quiz-option-text-70 ol,
+  .quiz-option-text-70 td,
+  .quiz-option-text-70 th,
+  .quiz-option-text-70 table,
+  .quiz-option-text-70 label,
+  .quiz-option-text-70 input,
+  .quiz-option-text-70 .rich-text-root,
+  .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-opt-compact,
+  .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 24px !important;
+  }
+}
+
 /* Bảo toàn tuyệt đối code monospace trong Chế độ từng câu hỏi */
 .quiz-question-tv pre,
 .quiz-question-tv code,
