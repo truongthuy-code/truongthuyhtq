@@ -80,14 +80,24 @@ function sanitizeSafeHtml(html: string): string {
     if (["b", "strong", "i", "em", "u", "s", "strike", "del", "sub", "sup", "mark", "br"].includes(t)) {
       return `<${tag}>`;
     }
-    if (t === "span") {
-      const colorMatch = attrs.match(/style=["']color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']/i);
-      if (colorMatch) {
-        return `<span ${colorMatch[0]}>`;
-      }
-      return tag.startsWith("/") ? "</span>" : "<span>";
+    if (t === "p" || t === "div") {
+      const colorMatch = attrs.match(/style=["'][^"']*color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)[^"']*["']/i);
+      const styleAttr = colorMatch ? ` style="color: ${colorMatch[1]}"` : "";
+      return tag.startsWith("/") ? `</${t}>` : `<${t}${styleAttr} class="my-1 text-[inherit] font-[inherit]">`;
     }
-    // Không nuốt mất thẻ lạ (như <div>, <p>, <h1>, <html> trong code HTML).
+    if (t === "font") {
+      const colorMatch = attrs.match(/color=["'](#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']/i);
+      const styleAttr = colorMatch ? ` style="color: ${colorMatch[1]}"` : "";
+      return tag.startsWith("/") ? "</span>" : `<span${styleAttr} class="text-[inherit] font-[inherit]">`;
+    }
+    if (t === "span") {
+      const colorMatch = attrs.match(/style=["'][^"']*color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)[^"']*["']/i);
+      if (colorMatch) {
+        return `<span style="color: ${colorMatch[1]}" class="text-[inherit] font-[inherit]">`;
+      }
+      return tag.startsWith("/") ? "</span>" : `<span class="text-[inherit] font-[inherit]">`;
+    }
+    // Không nuốt mất thẻ lạ (như <h1>, <html> trong code HTML).
     // Escape để hiển thị đúng dưới dạng text mà không bị render thành DOM!
     return `&lt;${tag}${attrs}&gt;`;
   });
@@ -102,7 +112,7 @@ function isCodeLine(s: string): boolean {
   // Đoạn văn bản tự nhiên có dấu tiếng Việt (kể cả khi thụt đầu dòng hay có dấu câu)
   // tuyệt đối không phải là dòng mã nguồn độc lập, trừ khi bắt đầu rõ ràng bằng lệnh code (print, cout, v.v.)
   if (VIETNAMESE_DIACRITICS_RE.test(s)) {
-    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\()/i.test(s);
+    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\(|<\/?(?:html|head|body|script|style)[>\s/])/i.test(s);
     if (!isCodeWithVn) return false;
   }
 
@@ -118,7 +128,7 @@ function isCodeLine(s: string): boolean {
     }
   }
   if (
-    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|script|style)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
       s
     )
   ) {
@@ -237,7 +247,17 @@ function tokenize(s: string): Token[] {
       const sep = rest.indexOf(":");
       const lang = sep === -1 ? "plaintext" : rest.slice(0, sep);
       const content = sep === -1 ? "" : decodeURIComponent(rest.slice(sep + 1));
-      out.push({ kind: "code", lang, content });
+      if (
+        (lang === "plaintext" || !lang) &&
+        VIETNAMESE_DIACRITICS_RE.test(content) &&
+        !/^\s*(?:def\b|class\b|import\b|from\b|for\b|while\b|if\b|elif\b|else:|return\b|print\s*\(|cout\s*<<|printf\s*\(|scanf\s*\(|SELECT\b|CREATE\s+TABLE|ALTER\s+TABLE|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+          content.trim()
+        )
+      ) {
+        pushText(content);
+      } else {
+        out.push({ kind: "code", lang, content });
+      }
     } else if (payload.startsWith("IMG:")) {
       out.push({ kind: "img", src: decodeURIComponent(payload.slice(4)) });
     } else if (payload.startsWith("TBL:")) {
@@ -289,7 +309,7 @@ export default function RichText({ text, className }: { text: string; className?
       <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
         {tokens.map((t, idx) => {
           if (t.kind === "text") {
-            if (/<(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span)[\s>]/i.test(t.value)) {
+            if (/<(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span|p|div|font)[\s>]/i.test(t.value)) {
               return (
                 <span
                   key={idx}

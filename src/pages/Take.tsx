@@ -2191,16 +2191,21 @@ export default function Take() {
             </RadioGroup>
           )}
 
-          {/* 6. CÂU HỎI ĐÚNG / SAI (PHẦN II) */}
+          {/* 6. CÂU HỎI ĐÚNG / SAI (PHẦN II) - BỐ CỤC MỖI PHƯƠNG ÁN a), b), c), d) CHIẾM 1 DÒNG RIÊNG */}
           {currentQ.type === "tf" && (
-            <div className="space-y-4 w-full">
+            <div
+              className="space-y-4 w-full"
+              data-mode="single-question"
+              data-section="part-2"
+              data-type="true-false"
+            >
               <div
                 className={`${isSingleView ? qFontSizeClass : "text-sm sm:text-base"} font-bold text-muted-foreground mb-3 font-times-new-roman quiz-sync-font-size break-words`}
                 style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
               >
                 Chọn <b className="text-emerald-600">Đúng</b> hoặc <b className="text-rose-600">Sai</b> cho từng ý:
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5 sm:gap-4 w-full">
+              <div className="flex flex-col gap-3.5 sm:gap-4 w-full single-question-tf-list">
                 {(optionOrders[currentQ.id] || currentQ.items?.map((it: any) => it.key) || []).map(
                   (key: string, itemIdx: number) => {
                     const it = currentQ.items?.find((x: any) => String(x.key).trim().toLowerCase() === String(key).trim().toLowerCase()) ||
@@ -2215,7 +2220,8 @@ export default function Take() {
                     return (
                       <div
                         key={itemKey}
-                        className={`rounded-2xl sm:rounded-3xl border-2 p-3.5 sm:p-4.5 flex flex-col justify-between gap-3 transition-all shadow-sm ${
+                        data-tf-item={label}
+                        className={`single-question-tf-item w-full rounded-2xl sm:rounded-3xl border-2 p-3.5 sm:p-4.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4 transition-all shadow-sm ${
                           itOk === true
                             ? "border-emerald-500 bg-emerald-500/10"
                             : itOk === false
@@ -2223,7 +2229,7 @@ export default function Take() {
                             : "border-border/90 bg-card hover:bg-muted/20"
                         }`}
                       >
-                        <div className="flex items-start gap-3 flex-1">
+                        <div className="flex items-start gap-3 flex-1 min-w-0 w-full md:w-auto">
                           <div className="size-9 sm:size-10 rounded-xl bg-muted border-2 border-border font-black text-base sm:text-lg flex items-center justify-center shrink-0">
                             {label})
                           </div>
@@ -2246,8 +2252,8 @@ export default function Take() {
                           </div>
                         </div>
 
-                        {/* Hai nút [ ĐÚNG ] và [ SAI ] rõ ràng, trực quan, dễ bấm */}
-                        <div className="flex items-center gap-2.5 shrink-0 self-end">
+                        {/* Hai nút [ ĐÚNG ] và [ SAI ] rõ ràng, cùng hàng với phương án trên màn hình phù hợp */}
+                        <div className="flex items-center gap-2.5 shrink-0 self-end md:self-center ml-auto md:ml-0">
                           <button
                             type="button"
                             disabled={!!qFb}
@@ -2433,16 +2439,16 @@ export default function Take() {
     })();
 
     const stemSizeClass = isContentShort
-      ? "text-lg sm:text-xl md:text-2xl"
+      ? "text-[23px] sm:text-[25px] md:text-[29px]"
       : isContentLong
-      ? "text-sm sm:text-base md:text-lg"
-      : "text-base sm:text-lg md:text-xl";
+      ? "text-[19px] sm:text-[21px] md:text-[23px]"
+      : "text-[21px] sm:text-[23px] md:text-[25px]";
 
     const optionTextSize = isContentShort
-      ? "text-base sm:text-lg"
+      ? "text-[21px] sm:text-[23px]"
       : isContentLong
-      ? "text-xs sm:text-sm"
-      : "text-sm sm:text-base";
+      ? "text-[17px] sm:text-[19px]"
+      : "text-[19px] sm:text-[21px]";
 
     const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
     const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
@@ -2700,7 +2706,7 @@ export default function Take() {
           {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
             <div className="mt-3 w-full max-w-2xl">
-              <Label className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
+              <Label className="text-[19px] sm:text-[21px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2713,7 +2719,7 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-11 sm:h-12 text-base sm:text-lg font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                className="h-12 sm:h-14 text-[21px] sm:text-[23px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
                 placeholder="Nhập câu trả lời hoặc số liệu..."
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">

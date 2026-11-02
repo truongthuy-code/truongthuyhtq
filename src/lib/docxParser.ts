@@ -169,12 +169,28 @@ const MONO_FONTS = [
 ];
 const isMonoFont = (n: string) => !!n && MONO_FONTS.some((f) => n.toLowerCase().includes(f));
 
+const VIETNAMESE_DIACRITICS_RE =
+  /[àáảãạâầấẩẫậăằắẳẵặèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+
 export function isParaCodeText(s: string): boolean {
   if (!s || s.trim().length === 0) return false;
-  // Indented line with code punctuation or code keywords
+
+  // Đoạn văn tự nhiên có dấu tiếng Việt (kể cả khi thụt đầu dòng hay có dấu câu)
+  // tuyệt đối không phải là dòng mã nguồn độc lập, trừ khi bắt đầu bằng lệnh in code rõ ràng
+  if (VIETNAMESE_DIACRITICS_RE.test(s)) {
+    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\(|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/])/i.test(s);
+    if (!isCodeWithVn) return false;
+  }
+
+  // Indented line with actual programming keywords or syntax
   if (/^[ \t]{2,}/.test(s)) {
-    if (/[:;=+\-*/><()[\]{}#&|!~,"'%\\]/.test(s)) return true;
-    if (/^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b)/i.test(s)) return true;
+    if (
+      /^[ \t]{2,}(?:else:|finally:|try:|except\b|return\b|break\b|continue\b|pass\b|yield\b|AND\b|OR\b|if\b|elif\b|for\b|while\b|print\s*\(|cout\s*<<|cin\s*>>|printf\s*\(|scanf\s*\(|[a-zA-Z_]\w*\s*=[^=]|[a-zA-Z_]\w*\([^)]*\);?|[a-zA-Z_]\w*\.[a-zA-Z_]\w*\(|[{};][ \t]*$)/i.test(
+        s
+      )
+    ) {
+      return true;
+    }
   }
   // Control structure / statement start without indentation
   if (
