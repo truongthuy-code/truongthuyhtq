@@ -514,7 +514,7 @@ export default function TeamTake() {
               )}
             </div>
 
-            <div className="font-bold !text-[37px] sm:!text-[41px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size team-question-stem">
+            <div className="font-bold !text-[34px] sm:!text-[38px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size team-question-stem">
               <RichText text={q.text} />
             </div>
 
@@ -542,7 +542,7 @@ export default function TeamTake() {
                       >
                         {theme.letter}
                       </div>
-                      <span className="flex-1 font-semibold !text-[28px] sm:!text-[32px] leading-relaxed text-foreground team-sync-font-size">
+                      <span className="flex-1 font-semibold !text-[26px] sm:!text-[30px] leading-relaxed text-foreground team-sync-font-size team-option-text">
                         <RichText text={opt.text} />
                       </span>
                     </button>
@@ -567,7 +567,7 @@ export default function TeamTake() {
                         <span className="size-8 rounded-lg bg-muted border font-black text-sm flex items-center justify-center shrink-0">
                           {label})
                         </span>
-                        <span className="font-semibold !text-[28px] sm:!text-[32px] leading-relaxed flex-1 team-sync-font-size">
+                        <span className="font-semibold !text-[26px] sm:!text-[30px] leading-relaxed flex-1 team-sync-font-size team-option-text">
                           <RichText text={it.text} />
                         </span>
                       </div>
@@ -606,12 +606,12 @@ export default function TeamTake() {
             {/* Trả lời ngắn */}
             {q.type === "sa" && (
               <div className="mt-4">
-                <Label className="font-bold !text-[37px] sm:!text-[41px] block mb-2 font-times-new-roman team-sync-font-size">Đáp án của nhóm:</Label>
+                <Label className="font-bold !text-[34px] sm:!text-[38px] block mb-2 font-times-new-roman team-sync-font-size">Đáp án của nhóm:</Label>
                 <Input
                   value={qAns ? String(qAns.answer ?? "") : draft[q.id] || ""}
                   disabled={!!qAns}
                   onChange={(e) => setDraft({ ...draft, [q.id]: e.target.value })}
-                  className="h-14 sm:h-16 text-[28px] sm:text-[32px] font-black rounded-2xl px-5 border-2 font-times-new-roman"
+                  className="h-14 sm:h-16 text-[26px] sm:text-[30px] font-black rounded-2xl px-5 border-2 font-times-new-roman"
                   placeholder="Nhập câu trả lời hoặc số liệu của nhóm..."
                 />
               </div>

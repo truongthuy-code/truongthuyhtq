@@ -2439,16 +2439,16 @@ export default function Take() {
     })();
 
     const stemSizeClass = isContentShort
-      ? "!text-[35px] sm:!text-[37px] md:!text-[41px]"
+      ? "!text-[32px] sm:!text-[34px] md:!text-[38px]"
       : isContentLong
-      ? "!text-[31px] sm:!text-[33px] md:!text-[35px]"
-      : "!text-[33px] sm:!text-[35px] md:!text-[37px]";
+      ? "!text-[28px] sm:!text-[30px] md:!text-[32px]"
+      : "!text-[30px] sm:!text-[32px] md:!text-[34px]";
 
     const optionTextSize = isContentShort
-      ? "!text-[24px] sm:!text-[26px]"
+      ? "!text-[22px] sm:!text-[24px]"
       : isContentLong
-      ? "!text-[20px] sm:!text-[22px]"
-      : "!text-[22px] sm:!text-[24px]";
+      ? "!text-[18px] sm:!text-[20px]"
+      : "!text-[20px] sm:!text-[22px]";
 
     const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
     const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
@@ -2592,7 +2592,7 @@ export default function Take() {
                       </div>
 
                       {/* Chữ cái A/B/C/D + Nội dung phương án (Font Times New Roman) */}
-                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize} standard-sync-font-size`}>
+                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}>
                         <span className="font-bold mr-1.5">{optLetter}.</span>
                         <RichText text={opt.text} />
                       </div>
@@ -2684,7 +2684,7 @@ export default function Take() {
 
                       {/* BÊN PHẢI: Ký hiệu ý a), b)... và nội dung nhận định (Font Times New Roman) */}
                       <div
-                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize} standard-sync-font-size`}
+                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}
                       >
                         <span className="font-bold mr-1.5">{label})</span>
                         <RichText text={it.text} />
@@ -2708,7 +2708,7 @@ export default function Take() {
           {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
             <div className="mt-3 w-full max-w-2xl">
-              <Label className="!text-[31px] sm:!text-[33px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
+              <Label className="!text-[28px] sm:!text-[30px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2721,7 +2721,7 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-12 sm:h-14 text-[24px] sm:text-[26px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                className="h-12 sm:h-14 text-[22px] sm:text-[24px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
                 placeholder="Nhập câu trả lời hoặc số liệu..."
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">

@@ -237,66 +237,114 @@
   }
 
   /* =========================================================================
-     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ TIÊU CHUẨN (+6PX)
-     - Mobile: 33px (Short: 35px, Long: 31px)
-     - Tablet (sm >= 640px): 35px (Short: 37px, Long: 33px)
-     - Desktop (md >= 768px): 37px (Short: 41px, Long: 35px)
+     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ TIÊU CHUẨN (-3PX)
+     - Mobile: 30px (Short: 32px, Long: 28px)
+     - Tablet (sm >= 640px): 32px (Short: 34px, Long: 30px)
+     - Desktop (md >= 768px): 34px (Short: 38px, Long: 32px)
      ========================================================================= */
   .standard-question-stem {
-    font-size: 33px !important;
+    font-size: 30px !important;
     font-family: "Times New Roman", Times, Georgia, serif !important;
   }
   @media (min-width: 640px) {
     .standard-question-stem {
-      font-size: 35px !important;
+      font-size: 32px !important;
     }
   }
   @media (min-width: 768px) {
     .standard-question-stem {
-      font-size: 37px !important;
+      font-size: 34px !important;
     }
   }
 
   .standard-question-stem.is-short {
-    font-size: 35px !important;
+    font-size: 32px !important;
   }
   @media (min-width: 640px) {
     .standard-question-stem.is-short {
-      font-size: 37px !important;
+      font-size: 34px !important;
     }
   }
   @media (min-width: 768px) {
     .standard-question-stem.is-short {
-      font-size: 41px !important;
+      font-size: 38px !important;
     }
   }
 
   .standard-question-stem.is-long {
-    font-size: 31px !important;
+    font-size: 28px !important;
   }
   @media (min-width: 640px) {
     .standard-question-stem.is-long {
-      font-size: 33px !important;
+      font-size: 30px !important;
     }
   }
   @media (min-width: 768px) {
     .standard-question-stem.is-long {
-      font-size: 35px !important;
+      font-size: 32px !important;
     }
   }
 
   /* =========================================================================
-     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ ĐỘI NHÓM (+6PX)
-     - Mobile: 37px
-     - Desktop (sm >= 640px): 41px
+     CỠ CHỮ PHƯƠNG ÁN TRẢ LỜI TRONG CHẾ ĐỘ TIÊU CHUẨN (-2PX)
+     - Mobile: 20px (Short: 22px, Long: 18px)
+     - Desktop (sm >= 640px): 22px (Short: 24px, Long: 20px)
+     ========================================================================= */
+  .standard-option-text {
+    font-size: 20px !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+  }
+  @media (min-width: 640px) {
+    .standard-option-text {
+      font-size: 22px !important;
+    }
+  }
+
+  .standard-option-text.is-short {
+    font-size: 22px !important;
+  }
+  @media (min-width: 640px) {
+    .standard-option-text.is-short {
+      font-size: 24px !important;
+    }
+  }
+
+  .standard-option-text.is-long {
+    font-size: 18px !important;
+  }
+  @media (min-width: 640px) {
+    .standard-option-text.is-long {
+      font-size: 20px !important;
+    }
+  }
+
+  /* =========================================================================
+     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ ĐỘI NHÓM (-3PX)
+     - Mobile: 34px
+     - Desktop (sm >= 640px): 38px
      ========================================================================= */
   .team-question-stem {
-    font-size: 37px !important;
+    font-size: 34px !important;
     font-family: "Times New Roman", Times, Georgia, serif !important;
   }
   @media (min-width: 640px) {
     .team-question-stem {
-      font-size: 41px !important;
+      font-size: 38px !important;
+    }
+  }
+
+  /* =========================================================================
+     CỠ CHỮ PHƯƠNG ÁN TRẢ LỜI TRONG CHẾ ĐỘ ĐỘI NHÓM (-2PX)
+     - Mobile: 26px
+     - Desktop (sm >= 640px): 30px
+     ========================================================================= */
+  .team-option-text {
+    font-size: 26px !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+  }
+  @media (min-width: 640px) {
+    .team-option-text {
+      font-size: 30px !important;
     }
   }
 }
