@@ -2439,16 +2439,16 @@ export default function Take() {
     })();
 
     const stemSizeClass = isContentShort
-      ? "text-[29px] sm:text-[31px] md:text-[35px]"
+      ? "!text-[35px] sm:!text-[37px] md:!text-[41px]"
       : isContentLong
-      ? "text-[25px] sm:text-[27px] md:text-[29px]"
-      : "text-[27px] sm:text-[29px] md:text-[31px]";
+      ? "!text-[31px] sm:!text-[33px] md:!text-[35px]"
+      : "!text-[33px] sm:!text-[35px] md:!text-[37px]";
 
     const optionTextSize = isContentShort
-      ? "text-[24px] sm:text-[26px]"
+      ? "!text-[24px] sm:!text-[26px]"
       : isContentLong
-      ? "text-[20px] sm:text-[22px]"
-      : "text-[22px] sm:text-[24px]";
+      ? "!text-[20px] sm:!text-[22px]"
+      : "!text-[22px] sm:!text-[24px]";
 
     const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
     const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
@@ -2518,7 +2518,9 @@ export default function Take() {
 
           {/* Nội dung câu hỏi (Font Times New Roman, trừ code/pre) */}
           <div
-            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium standard-sync-font-size ${
+            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium standard-sync-font-size standard-question-stem ${
+              isContentShort ? "is-short" : isContentLong ? "is-long" : ""
+            } ${
               isContentLong ? "mb-3" : "mb-4 sm:mb-5"
             } ${stemSizeClass}`}
           >
@@ -2706,7 +2708,7 @@ export default function Take() {
           {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
             <div className="mt-3 w-full max-w-2xl">
-              <Label className="text-[25px] sm:text-[27px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
+              <Label className="!text-[31px] sm:!text-[33px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input

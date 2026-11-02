@@ -227,16 +227,77 @@
     -moz-tab-size: 4 !important;
   }
 
-  /* ĐỒNG BỘ CỠ CHỮ KẾ THỪA CHO CHẾ ĐỘ ĐỘI NHÓM & TỪNG CÂU (KHÔNG ĐÈ 80PX/70PX) */
+  /* ĐỒNG BỘ CỠ CHỮ KẾ THỪA CHO CÁC PHẦN TỬ CON (KHÔNG ÁP DỤNG TRÊN CHÍNH CONTAINER) */
   .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70),
   .quiz-sync-font-size:not(.quiz-question-text-80):not(.quiz-option-text-70) *:not(.quiz-question-text-80):not(.quiz-question-text-80 *):not(.quiz-option-text-70):not(.quiz-option-text-70 *):not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
-  .team-sync-font-size,
   .team-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
-  .standard-sync-font-size,
   .standard-sync-font-size *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
-  .question-content:not(.quiz-question-tv):not(.quiz-question-text-80),
-  .question-content:not(.quiz-question-tv):not(.quiz-question-text-80) *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  .question-content *:not(.quiz-question-tv):not(.quiz-question-tv *):not(.quiz-question-text-80):not(.quiz-question-text-80 *):not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
     font-size: inherit !important;
+  }
+
+  /* =========================================================================
+     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ TIÊU CHUẨN (+6PX)
+     - Mobile: 33px (Short: 35px, Long: 31px)
+     - Tablet (sm >= 640px): 35px (Short: 37px, Long: 33px)
+     - Desktop (md >= 768px): 37px (Short: 41px, Long: 35px)
+     ========================================================================= */
+  .standard-question-stem {
+    font-size: 33px !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+  }
+  @media (min-width: 640px) {
+    .standard-question-stem {
+      font-size: 35px !important;
+    }
+  }
+  @media (min-width: 768px) {
+    .standard-question-stem {
+      font-size: 37px !important;
+    }
+  }
+
+  .standard-question-stem.is-short {
+    font-size: 35px !important;
+  }
+  @media (min-width: 640px) {
+    .standard-question-stem.is-short {
+      font-size: 37px !important;
+    }
+  }
+  @media (min-width: 768px) {
+    .standard-question-stem.is-short {
+      font-size: 41px !important;
+    }
+  }
+
+  .standard-question-stem.is-long {
+    font-size: 31px !important;
+  }
+  @media (min-width: 640px) {
+    .standard-question-stem.is-long {
+      font-size: 33px !important;
+    }
+  }
+  @media (min-width: 768px) {
+    .standard-question-stem.is-long {
+      font-size: 35px !important;
+    }
+  }
+
+  /* =========================================================================
+     CỠ CHỮ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ ĐỘI NHÓM (+6PX)
+     - Mobile: 37px
+     - Desktop (sm >= 640px): 41px
+     ========================================================================= */
+  .team-question-stem {
+    font-size: 37px !important;
+    font-family: "Times New Roman", Times, Georgia, serif !important;
+  }
+  @media (min-width: 640px) {
+    .team-question-stem {
+      font-size: 41px !important;
+    }
   }
 }
 
