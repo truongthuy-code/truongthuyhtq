@@ -2439,16 +2439,16 @@ export default function Take() {
     })();
 
     const stemSizeClass = isContentShort
-      ? "text-[23px] sm:text-[25px] md:text-[29px]"
+      ? "text-[29px] sm:text-[31px] md:text-[35px]"
       : isContentLong
-      ? "text-[19px] sm:text-[21px] md:text-[23px]"
-      : "text-[21px] sm:text-[23px] md:text-[25px]";
+      ? "text-[25px] sm:text-[27px] md:text-[29px]"
+      : "text-[27px] sm:text-[29px] md:text-[31px]";
 
     const optionTextSize = isContentShort
-      ? "text-[21px] sm:text-[23px]"
+      ? "text-[24px] sm:text-[26px]"
       : isContentLong
-      ? "text-[17px] sm:text-[19px]"
-      : "text-[19px] sm:text-[21px]";
+      ? "text-[20px] sm:text-[22px]"
+      : "text-[22px] sm:text-[24px]";
 
     const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
     const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
@@ -2706,7 +2706,7 @@ export default function Take() {
           {/* PHẦN III: Trả lời ngắn */}
           {currentQ.type === "sa" && (
             <div className="mt-3 w-full max-w-2xl">
-              <Label className="text-[19px] sm:text-[21px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
+              <Label className="text-[25px] sm:text-[27px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2719,7 +2719,7 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-12 sm:h-14 text-[21px] sm:text-[23px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                className="h-12 sm:h-14 text-[24px] sm:text-[26px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
                 placeholder="Nhập câu trả lời hoặc số liệu..."
               />
               <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">

@@ -5,47 +5,50 @@ import fs from "fs";
 import path from "path";
 import RichText from "@/components/RichText";
 
-describe("VERIFICATION: +5PX FONT SIZE INCREASE IN STANDARD & TEAM MODES", () => {
+describe("VERIFICATION: +6PX QUESTION & +3PX OPTION FONT SIZE INCREASE IN STANDARD & TEAM MODES", () => {
   const takeFilePath = path.resolve(__dirname, "../pages/Take.tsx");
   const takeContent = fs.readFileSync(takeFilePath, "utf-8");
 
   const teamTakeFilePath = path.resolve(__dirname, "../pages/TeamTake.tsx");
   const teamTakeContent = fs.readFileSync(teamTakeFilePath, "utf-8");
 
-  it("1. Standard mode question stem has been increased by exactly +5px across all tiers", () => {
-    // Normal content: text-[21px] sm:text-[23px] md:text-[25px] (+5px from 16px/18px/20px)
-    expect(takeContent).toContain('"text-[21px] sm:text-[23px] md:text-[25px]"');
+  it("1. Standard mode question stem has been increased by exactly +6px across all tiers", () => {
+    // Normal content: text-[27px] sm:text-[29px] md:text-[31px] (+6px from 21px/23px/25px)
+    expect(takeContent).toContain('"text-[27px] sm:text-[29px] md:text-[31px]"');
 
-    // Short content: text-[23px] sm:text-[25px] md:text-[29px] (+5px from 18px/20px/24px)
-    expect(takeContent).toContain('"text-[23px] sm:text-[25px] md:text-[29px]"');
+    // Short content: text-[29px] sm:text-[31px] md:text-[35px] (+6px from 23px/25px/29px)
+    expect(takeContent).toContain('"text-[29px] sm:text-[31px] md:text-[35px]"');
 
-    // Long content: text-[19px] sm:text-[21px] md:text-[23px] (+5px from 14px/16px/18px)
-    expect(takeContent).toContain('"text-[19px] sm:text-[21px] md:text-[23px]"');
+    // Long content: text-[25px] sm:text-[27px] md:text-[29px] (+6px from 19px/21px/23px)
+    expect(takeContent).toContain('"text-[25px] sm:text-[27px] md:text-[29px]"');
   });
 
-  it("2. Standard mode options have been increased by exactly +5px across all tiers", () => {
-    // Normal content options: text-[19px] sm:text-[21px] (+5px from 14px/16px)
-    expect(takeContent).toContain('"text-[19px] sm:text-[21px]"');
+  it("2. Standard mode options have been increased by exactly +3px across all tiers", () => {
+    // Normal content options: text-[22px] sm:text-[24px] (+3px from 19px/21px)
+    expect(takeContent).toContain('"text-[22px] sm:text-[24px]"');
 
-    // Short content options: text-[21px] sm:text-[23px] (+5px from 16px/18px)
-    expect(takeContent).toContain('"text-[21px] sm:text-[23px]"');
+    // Short content options: text-[24px] sm:text-[26px] (+3px from 21px/23px)
+    expect(takeContent).toContain('"text-[24px] sm:text-[26px]"');
 
-    // Long content options: text-[17px] sm:text-[19px] (+5px from 12px/14px)
-    expect(takeContent).toContain('"text-[17px] sm:text-[19px]"');
+    // Long content options: text-[20px] sm:text-[22px] (+3px from 17px/19px)
+    expect(takeContent).toContain('"text-[20px] sm:text-[22px]"');
   });
 
-  it("3. Team mode questions and options have been increased by exactly +5px", () => {
-    // Question stem in TeamTake: text-[25px] sm:text-[29px] (+5px from 20px/24px)
-    expect(teamTakeContent).toContain('text-[25px] sm:text-[29px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size');
+  it("3. Team mode questions (+6px) and options (+3px) have been precisely updated", () => {
+    // Question stem in TeamTake: text-[31px] sm:text-[35px] (+6px from 25px/29px)
+    expect(teamTakeContent).toContain('text-[31px] sm:text-[35px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size');
 
-    // MCQ options in TeamTake: text-[25px] sm:text-[29px] (+5px from 20px/24px)
-    expect(teamTakeContent).toContain('text-[25px] sm:text-[29px] leading-relaxed text-foreground team-sync-font-size');
+    // MCQ options in TeamTake: text-[28px] sm:text-[32px] (+3px from 25px/29px)
+    expect(teamTakeContent).toContain('text-[28px] sm:text-[32px] leading-relaxed text-foreground team-sync-font-size');
 
-    // TF statements in TeamTake: text-[25px] sm:text-[29px] (+5px from 20px/24px)
-    expect(teamTakeContent).toContain('font-semibold text-[25px] sm:text-[29px] leading-relaxed flex-1 team-sync-font-size');
+    // TF statements in TeamTake: text-[28px] sm:text-[32px] (+3px from 25px/29px)
+    expect(teamTakeContent).toContain('font-semibold text-[28px] sm:text-[32px] leading-relaxed flex-1 team-sync-font-size');
 
-    // Short answer label in TeamTake: text-[25px] sm:text-[29px] (+5px from 20px/24px)
-    expect(teamTakeContent).toContain('Label className="font-bold text-[25px] sm:text-[29px] block mb-2 font-times-new-roman team-sync-font-size"');
+    // Short answer label in TeamTake: text-[31px] sm:text-[35px] (+6px from 25px/29px)
+    expect(teamTakeContent).toContain('Label className="font-bold text-[31px] sm:text-[35px] block mb-2 font-times-new-roman team-sync-font-size"');
+
+    // Short answer input in TeamTake: text-[28px] sm:text-[32px] (+3px from 25px/29px)
+    expect(teamTakeContent).toContain('text-[28px] sm:text-[32px] font-black rounded-2xl px-5 border-2 font-times-new-roman');
   });
 
   it("4. Single Question mode is strictly untouched (+0px change)", () => {
@@ -61,7 +64,7 @@ describe("VERIFICATION: +5PX FONT SIZE INCREASE IN STANDARD & TEAM MODES", () =>
       "Cần phân tích các đặc điểm của mô hình mạng này.";
 
     const { container } = render(
-      <div className="font-times-new-roman leading-relaxed text-slate-900 question-content font-medium standard-sync-font-size text-[21px] sm:text-[23px] md:text-[25px]">
+      <div className="font-times-new-roman leading-relaxed text-slate-900 question-content font-medium standard-sync-font-size text-[27px] sm:text-[29px] md:text-[31px]">
         <RichText text={multiParaQuestion} />
       </div>
     );
@@ -81,7 +84,7 @@ describe("VERIFICATION: +5PX FONT SIZE INCREASE IN STANDARD & TEAM MODES", () =>
       "<i>Một trường THPT triển khai hạ tầng mạng máy tính gồm các máy tính phòng máy được nối với nhau qua bộ chuyển mạch Switch tạo thành mạng LAN nội bộ...</i>";
 
     const { container } = render(
-      <div className="font-bold text-[25px] sm:text-[29px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size">
+      <div className="font-bold text-[31px] sm:text-[35px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size">
         <RichText text={multiParaQuestion} />
       </div>
     );

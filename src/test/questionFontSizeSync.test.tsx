@@ -36,21 +36,21 @@ describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
     expect(takeCode).toMatch(/quiz-sync-font-size[\s\S]*?Nhập câu trả lời của bạn/);
   });
 
-  it("TEST 3: TeamTake.tsx synchronizes question text, options, true/false, and short answer to text-[25px] sm:text-[29px] (+5px)", () => {
+  it("TEST 3: TeamTake.tsx synchronizes question text, options, true/false, and short answer", () => {
     const teamPath = path.resolve(process.cwd(), "src/pages/TeamTake.tsx");
     const teamCode = fs.readFileSync(teamPath, "utf-8");
 
-    // Question content uses text-[25px] sm:text-[29px] and team-sync-font-size
-    expect(teamCode).toMatch(/text-\[25px\] sm:text-\[29px\][\s\S]*?question-content[\s\S]*?team-sync-font-size/);
+    // Question content uses text-[31px] sm:text-[35px] and team-sync-font-size
+    expect(teamCode).toMatch(/text-\[31px\] sm:text-\[35px\][\s\S]*?question-content[\s\S]*?team-sync-font-size/);
 
-    // Part I options use text-[25px] sm:text-[29px] and team-sync-font-size
-    expect(teamCode).toMatch(/text-\[25px\] sm:text-\[29px\] leading-relaxed text-foreground team-sync-font-size/);
+    // Part I options use text-[28px] sm:text-[32px] and team-sync-font-size
+    expect(teamCode).toMatch(/text-\[28px\] sm:text-\[32px\] leading-relaxed text-foreground team-sync-font-size/);
 
-    // Part II True/False items use text-[25px] sm:text-[29px] and team-sync-font-size
-    expect(teamCode).toMatch(/font-semibold text-\[25px\] sm:text-\[29px\] leading-relaxed flex-1 team-sync-font-size/);
+    // Part II True/False items use text-[28px] sm:text-[32px] and team-sync-font-size
+    expect(teamCode).toMatch(/font-semibold text-\[28px\] sm:text-\[32px\] leading-relaxed flex-1 team-sync-font-size/);
 
-    // Part III Short answer label uses text-[25px] sm:text-[29px] and team-sync-font-size
-    expect(teamCode).toMatch(/Label className="font-bold text-\[25px\] sm:text-\[29px\] block mb-2 font-times-new-roman team-sync-font-size"/);
+    // Part III Short answer label uses text-[31px] sm:text-[35px] and team-sync-font-size
+    expect(teamCode).toMatch(/Label className="font-bold text-\[31px\] sm:text-\[35px\] block mb-2 font-times-new-roman team-sync-font-size"/);
   });
 
   it("TEST 4: Standard mode (renderStandardQuestionCard) does not use quiz-sync-font-size", () => {
@@ -237,7 +237,7 @@ describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
       "<i>Một trường THPT triển khai hạ tầng mạng máy tính gồm các máy tính phòng máy được nối với nhau qua bộ chuyển mạch Switch tạo thành mạng LAN nội bộ. Để kết nối phòng máy này với mạng Internet toàn cầu, nhà trường đăng ký đường truyền cáp quang với nhà cung cấp dịch vụ VNPT và lắp đặt thêm một bộ định tuyến Router.</i>";
 
     const { container } = render(
-      <div className="font-times-new-roman leading-relaxed text-slate-900 question-content font-medium standard-sync-font-size text-[21px] sm:text-[23px] md:text-[25px]">
+      <div className="font-times-new-roman leading-relaxed text-slate-900 question-content font-medium standard-sync-font-size text-[27px] sm:text-[29px] md:text-[31px]">
         <RichText text={sampleQuestion} />
       </div>
     );
@@ -273,7 +273,7 @@ describe("QUESTION FONT SIZE SYNCHRONIZATION TESTS", () => {
       "<i>Một trường THPT triển khai hạ tầng mạng máy tính gồm các máy tính phòng máy được nối với nhau qua bộ chuyển mạch Switch tạo thành mạng LAN nội bộ...</i>";
 
     const { container } = render(
-      <div className="font-bold text-[25px] sm:text-[29px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size">
+      <div className="font-bold text-[31px] sm:text-[35px] leading-relaxed text-foreground mb-6 question-content font-times-new-roman team-sync-font-size">
         <RichText text={sampleQuestion} />
       </div>
     );
