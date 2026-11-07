@@ -211,10 +211,24 @@ function convert(n: Element): string {
   }
 }
 
+/**
+ * Escapes unescaped percent signs (`%`) in LaTeX strings to `\%`.
+ * In LaTeX/KaTeX, a bare `%` denotes a comment, which causes KaTeX to truncate or omit
+ * everything following the `%`.
+ */
+export function escapeLatexPercent(latex: string): string {
+  if (!latex || !latex.includes("%")) return latex;
+  return latex.replace(/(\\*)%/g, (match, slashes) => {
+    if (slashes.length % 2 === 1) return match;
+    return slashes + "\\%";
+  });
+}
+
 export function ommlElementToLatex(el: Element): string {
   try {
-    return convert(el).trim();
+    return escapeLatexPercent(convert(el).trim());
   } catch {
-    return textOf(el);
+    return escapeLatexPercent(textOf(el));
   }
 }
+

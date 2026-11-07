@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { ommlElementToLatex } from "./ommlToLatex";
+import { ommlElementToLatex, escapeLatexPercent } from "./ommlToLatex";
 import { buildOleMathMap, type OleMap } from "./mathtypeOle";
 import { convertMetafileToDisplayable } from "./metafileToImage";
 
@@ -121,7 +121,7 @@ const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 export const encMath = (latex: string) =>
-  `${SENT_OPEN}MATH:${latex.replace(/[\u27E6\u27E7]/g, "")}${SENT_CLOSE}`;
+  `${SENT_OPEN}MATH:${escapeLatexPercent(latex.replace(/[\u27E6\u27E7]/g, ""))}${SENT_CLOSE}`;
 export const encCode = (lang: string, content: string) =>
   `${SENT_OPEN}CODE:${lang}:${encodeURIComponent(content)}${SENT_CLOSE}`;
 const encImg = (src: string) =>

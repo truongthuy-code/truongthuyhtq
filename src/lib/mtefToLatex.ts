@@ -14,6 +14,7 @@
  */
 
 import { MTEF_CHARS, SPECIAL_CHAR } from "./mtefChars";
+import { escapeLatexPercent } from "./ommlToLatex";
 
 /* ---------------------------------- types --------------------------------- */
 
@@ -518,7 +519,7 @@ function tidy(s: string): string {
   for (const f of FUNC_NAMES) {
     out = out.replace(new RegExp(`(^|[^\\\\A-Za-z])${f}`, "g"), `$1\\${f} `);
   }
-  return out.replace(/\s+/g, " ").trim();
+  return escapeLatexPercent(out.replace(/\s+/g, " ").trim());
 }
 
 /* ---------------------------------- public --------------------------------- */

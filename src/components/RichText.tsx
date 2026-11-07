@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import hljs from "highlight.js/lib/common";
 import "highlight.js/styles/github.css";
 import { ZoomIn, X } from "lucide-react";
+import { escapeLatexPercent } from "../lib/ommlToLatex";
 
 const SENT_OPEN = "\u27E6";
 const SENT_CLOSE = "\u27E7";
@@ -25,7 +26,7 @@ function tokenizePlain(s: string): Token[] {
   while ((m = re.exec(s)) !== null) {
     if (m.index > last) out.push({ kind: "text", value: s.slice(last, m.index) });
     const latex = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim();
-    if (latex) out.push({ kind: "math", latex });
+    if (latex) out.push({ kind: "math", latex: escapeLatexPercent(latex) });
     last = m.index + m[0].length;
   }
   if (last < s.length) out.push({ kind: "text", value: s.slice(last) });
@@ -323,7 +324,8 @@ export default function RichText({ text, className }: { text: string; className?
           if (t.kind === "math") {
             let html = "";
             try {
-              html = katex.renderToString(t.latex, { throwOnError: false, output: "html" });
+              const safeLatex = escapeLatexPercent(t.latex);
+              html = katex.renderToString(safeLatex, { throwOnError: false, output: "html" });
             } catch {
               html = `<code>${t.latex}</code>`;
             }

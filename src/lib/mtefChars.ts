@@ -21,7 +21,7 @@ export const MTEF_CHARS: Record<string, string> = {
   "char/0x0022": "''",
   "char/0x0023/mathmode": "\\@#",
   "char/0x0024/mathmode": "\\$",
-  "char/0x0025/mathmode": "%",
+  "char/0x0025/mathmode": "\\%",
   "char/0x0026/mathmode": "\\And ",
   "char/0x0027/mathmode": "'",
   "char/0x0028": "(",
