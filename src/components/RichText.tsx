@@ -5,6 +5,7 @@ import hljs from "highlight.js/lib/common";
 import "highlight.js/styles/github.css";
 import { ZoomIn, X } from "lucide-react";
 import { escapeLatexPercent } from "../lib/ommlToLatex";
+import { isHtmlCodeText } from "../lib/docxParser";
 
 const SENT_OPEN = "\u27E6";
 const SENT_CLOSE = "\u27E7";
@@ -75,32 +76,101 @@ function detectLangSimple(code: string): string {
   return "plaintext";
 }
 
+function extractColor(attrs: string): string | null {
+  if (!attrs) return null;
+  const m =
+    attrs.match(/\bcolor:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)/i) ||
+    attrs.match(/\bcolor=["'](#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']/i);
+  return m ? m[1] : null;
+}
+
+function cleanStyleAttrs(attrs: string): string {
+  if (!attrs) return "";
+  let cleaned = attrs
+    .replace(/font-size:\s*[^;"]*;?/gi, "")
+    .replace(/\bsize=["'][^"']*["']/gi, "");
+  cleaned = cleaned.replace(/style=["']\s*["']/gi, "").replace(/\s{2,}/g, " ").trim();
+  return cleaned ? " " + cleaned : "";
+}
+
 function sanitizeSafeHtml(html: string): string {
-  return html.replace(/<(\/?[a-zA-Z0-9]+)([^>]*)>/g, (_match, tag, attrs) => {
-    const t = tag.toLowerCase().replace(/^\//, "");
-    if (["b", "strong", "i", "em", "u", "s", "strike", "del", "sub", "sup", "mark", "br"].includes(t)) {
-      return `<${tag}>`;
+  // If the text contains multiple lines, evaluate each line independently so heading lines
+  // (like <b>Câu 1: ...</b>) retain Word styling while HTML code lines (like <p>...</p>)
+  // are escaped verbatim as code!
+  if (html.includes("\n")) {
+    return html.split("\n").map(sanitizeSafeHtml).join("\n");
+  }
+
+  // Trường hợp A: Text contains HTML code snippet or HTML tags.
+  // ALL HTML tags must be escaped as literal text (&lt;...&gt;).
+  // Never execute them as DOM elements, never swallow tags, and never convert to Markdown!
+  if (isHtmlCodeText(html)) {
+    return html.replace(/<(\/?[a-zA-Z0-9]+)([^>]*)>/g, (_match, tagWithSlash, attrs) => {
+      return `&lt;${tagWithSlash}${cleanStyleAttrs(attrs)}&gt;`;
+    });
+  }
+
+  // Trường hợp B: Standard Word visual formatting (bold, italic, underline, color)
+  const allowedPairTags = ["b", "strong", "i", "em", "u", "s", "strike", "del", "sub", "sup", "mark"];
+
+  const openCount: Record<string, number> = {};
+  const closeCount: Record<string, number> = {};
+  const re = /<\/?([a-zA-Z0-9]+)[^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const isClose = m[0].startsWith("</");
+    const tag = m[1].toLowerCase();
+    if (isClose) {
+      closeCount[tag] = (closeCount[tag] || 0) + 1;
+    } else {
+      openCount[tag] = (openCount[tag] || 0) + 1;
     }
-    if (t === "p" || t === "div") {
-      const colorMatch = attrs.match(/style=["'][^"']*color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)[^"']*["']/i);
-      const styleAttr = colorMatch ? ` style="color: ${colorMatch[1]}"` : "";
-      return tag.startsWith("/") ? `</${t}>` : `<${t}${styleAttr} class="my-1 text-[inherit] font-[inherit]">`;
-    }
-    if (t === "font") {
-      const colorMatch = attrs.match(/color=["'](#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']/i);
-      const styleAttr = colorMatch ? ` style="color: ${colorMatch[1]}"` : "";
-      return tag.startsWith("/") ? "</span>" : `<span${styleAttr} class="text-[inherit] font-[inherit]">`;
-    }
-    if (t === "span") {
-      const colorMatch = attrs.match(/style=["'][^"']*color:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)[^"']*["']/i);
-      if (colorMatch) {
-        return `<span style="color: ${colorMatch[1]}" class="text-[inherit] font-[inherit]">`;
+  }
+
+  const openStack: string[] = [];
+
+  return html.replace(/<(\/?[a-zA-Z0-9]+)([^>]*)>/g, (_match, tagWithSlash, attrs) => {
+    const isClose = tagWithSlash.startsWith("/");
+    const tag = tagWithSlash.toLowerCase().replace(/^\//, "");
+
+    // 1. Spans or fonts with color (paired only) - preserve color styling, strip font-size
+    if (tag === "span" || tag === "font") {
+      const color = extractColor(attrs);
+      const hasBoth = (openCount[tag] || 0) > 0 && (closeCount[tag] || 0) > 0;
+      if (color && hasBoth) {
+        if (!isClose) {
+          openStack.push(tag);
+          return `<span style="color: ${color}" class="text-[inherit] font-[inherit]">`;
+        } else if (openStack.includes(tag)) {
+          const idx = openStack.lastIndexOf(tag);
+          openStack.splice(idx, 1);
+          return "</span>";
+        }
       }
-      return tag.startsWith("/") ? "</span>" : `<span class="text-[inherit] font-[inherit]">`;
+      // If unpaired or no color, escape as literal HTML code with font-size stripped
+      return `&lt;${tagWithSlash}${cleanStyleAttrs(attrs)}&gt;`;
     }
-    // Không nuốt mất thẻ lạ (như <h1>, <html> trong code HTML).
-    // Escape để hiển thị đúng dưới dạng text mà không bị render thành DOM!
-    return `&lt;${tag}${attrs}&gt;`;
+
+    // 2. Allowed formatting tags (b, i, u, sup, sub, mark, etc.) ONLY when paired
+    if (allowedPairTags.includes(tag)) {
+      const hasBoth = (openCount[tag] || 0) > 0 && (closeCount[tag] || 0) > 0;
+      if (hasBoth) {
+        if (!isClose) {
+          openStack.push(tag);
+          return `<${tag}>`;
+        } else if (openStack.includes(tag)) {
+          const idx = openStack.lastIndexOf(tag);
+          openStack.splice(idx, 1);
+          return `</${tag}>`;
+        }
+      }
+      // If unpaired, escape as literal HTML code so user sees it!
+      return `&lt;${tagWithSlash}${cleanStyleAttrs(attrs)}&gt;`;
+    }
+
+    // 3. All other tags (p, div, table, img, script, h1, a, etc.) are escaped as text/code!
+    // Never executed as DOM elements and never swallowed by browser!
+    return `&lt;${tagWithSlash}${cleanStyleAttrs(attrs)}&gt;`;
   });
 }
 
@@ -129,7 +199,7 @@ function isCodeLine(s: string): boolean {
     }
   }
   if (
-    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|script|style)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|img|link|meta|title)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
       s
     )
   ) {
@@ -149,7 +219,7 @@ function tokenize(s: string): Token[] {
         const lang = detectLangSimple(txt);
         if (
           lang !== "plaintext" &&
-          /^(?:<!DOCTYPE|<\/?(?:html|head|body|div|p|h[1-6]|table|form)|SELECT\b|CREATE\s+TABLE)/i.test(
+          /^(?:<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|img)|SELECT\b|CREATE\s+TABLE|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM)/i.test(
             txt.trim()
           )
         ) {
@@ -310,7 +380,7 @@ export default function RichText({ text, className }: { text: string; className?
       <span className={className ? `rich-text-root ${className}` : "rich-text-root"}>
         {tokens.map((t, idx) => {
           if (t.kind === "text") {
-            if (/<(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span|p|div|font)[\s>]/i.test(t.value)) {
+            if (/<[a-zA-Z0-9]+(?:\s+[^>]*)?>|<\/[a-zA-Z0-9]+>/i.test(t.value)) {
               return (
                 <span
                   key={idx}

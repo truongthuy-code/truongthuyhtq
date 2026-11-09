@@ -132,7 +132,7 @@ const encTbl = (rows: string[][]) =>
 export function stripRich(s: string): string {
   return s
     .replace(new RegExp(`${SENT_OPEN}[^${SENT_CLOSE}]*${SENT_CLOSE}`, "g"), " ")
-    .replace(/<[^>]*>/g, " ")
+    .replace(/<\/?(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span|font)(?:\s+[^>]*)?>/gi, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -178,7 +178,7 @@ export function isParaCodeText(s: string): boolean {
   // Đoạn văn tự nhiên có dấu tiếng Việt (kể cả khi thụt đầu dòng hay có dấu câu)
   // tuyệt đối không phải là dòng mã nguồn độc lập, trừ khi bắt đầu bằng lệnh in code rõ ràng
   if (VIETNAMESE_DIACRITICS_RE.test(s)) {
-    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\(|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/])/i.test(s);
+    const isCodeWithVn = /^\s*(?:print\s*\(|printf\s*\(|cout\s*<<|\/\/|#|console\.log\s*\(|writeln\s*\(|readln\s*\(|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|img|meta|title)[>\s/])/i.test(s);
     if (!isCodeWithVn) return false;
   }
 
@@ -194,12 +194,53 @@ export function isParaCodeText(s: string): boolean {
   }
   // Control structure / statement start without indentation
   if (
-    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|tr|td|h[1-6]|ul|ol|li)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
+    /^\s*(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+|return\b|if\s+.*:|elif\s+.*:|else:|while\s+.*:|for\s+.*:|try:|except\b|finally:|with\s+.*:|#include\s*<|SELECT\b|FROM\b|WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|INSERT\s+INTO|UPDATE\b|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|<!DOCTYPE|<\/?(?:html|head|body|div|span|p|a|table|thead|tbody|tr|th|td|script|style|ul|ol|li|h[1-6]|form|input|button|label|select|option|img|link|meta|title)[>\s/]|program\s+\w+|begin\s*$|end[.;]\s*$)/i.test(
       s
     )
   ) {
     return true;
   }
+  return false;
+}
+
+/**
+ * Detects if a text string contains HTML code (e.g. programming questions, HTML code snippets,
+ * nested HTML tags, or options representing HTML tags) that MUST be preserved and displayed verbatim,
+ * rather than being treated as Word presentation formatting.
+ */
+export function isHtmlCodeText(s: string): boolean {
+  if (!s || typeof s !== "string") return false;
+
+  // 1. Structural, semantic, or form HTML tags that represent HTML code rather than simple Word styling
+  if (
+    /<\/?(?:html|head|body|p|div|span|a|table|thead|tbody|tr|th|td|img|ul|ol|li|h[1-6]|form|input|button|label|select|option|strong|em|code|pre|script|style|br|hr|header|footer|nav|section|article|meta|link|title|iframe)[>\s/]/i.test(
+      s
+    )
+  ) {
+    // If it's ONLY an internal colored span without any other HTML tags or code keywords, it's Word styling
+    const isOnlyColorSpan =
+      /^<span\s+style=["']color:\s*(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+)["']>[^<]*<\/span>$/i.test(s.trim());
+    if (isOnlyColorSpan) return false;
+
+    return true;
+  }
+
+  // 2. Code contextual phrases in Vietnamese or English
+  if (
+    /(?:đoạn\s+mã|mã\s+nguồn|mã\s+HTML|thẻ\s+HTML|thẻ\s*<|cặp\s+thẻ|phần\s+tử\s*<|thuộc\s+tính\s*<|tag\s*<|HTML\s+tag|doctype)/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+
+  // 3. Paired tags with code syntax or multiple distinct tags (e.g. <b>..</b> and <i>..</i> in same line)
+  if (/<[biu][>\s/].*<\/[biu]>/i.test(s)) {
+    if (/<b[>\s/].*<\/b>/i.test(s) && /<i[>\s/].*<\/i>/i.test(s)) {
+      return true;
+    }
+  }
+
   return false;
 }
 

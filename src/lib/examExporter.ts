@@ -7,7 +7,7 @@ import {
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
 import type { ParsedExam } from "./docxParser";
-import { stripRich } from "./docxParser";
+import { stripRich, isHtmlCodeText } from "./docxParser";
 
 export type ExamMeta = {
   agency: string;      // SỞ GD&ĐT ...
@@ -170,23 +170,36 @@ function parseHtmlTextRuns(text: string, baseOpts: { bold?: boolean; italics?: b
     );
   };
 
+  const isHtmlCode = isHtmlCodeText(text);
+
   while ((m = tagRe.exec(text)) !== null) {
     if (m.index > last) {
       pushSegment(text.slice(last, m.index));
     }
     const isClose = m[0].startsWith("</");
     const tag = m[1].toLowerCase();
-    if (tag === "b" || tag === "strong") bold = !isClose;
-    else if (tag === "i" || tag === "em") italics = !isClose;
-    else if (tag === "u") underline = !isClose;
-    else if (tag === "s" || tag === "strike" || tag === "del") strike = !isClose;
-    else if (tag === "sub") subScript = !isClose;
-    else if (tag === "sup") superScript = !isClose;
-    else if (tag === "mark") highlight = isClose ? undefined : "yellow";
-    else if (tag === "span") {
-      if (isClose) color = BLACK;
-      else if (m[2]) {
-        color = m[2].replace("#", "");
+
+    if (isHtmlCode) {
+      // In HTML code snippets, all tags (including <b>, <i>, <strong>, <em>, <p>, <div>, etc.)
+      // are literal code and MUST be preserved verbatim as text runs!
+      pushSegment(m[0]);
+    } else {
+      if (tag === "b" || tag === "strong") bold = !isClose;
+      else if (tag === "i" || tag === "em") italics = !isClose;
+      else if (tag === "u") underline = !isClose;
+      else if (tag === "s" || tag === "strike" || tag === "del") strike = !isClose;
+      else if (tag === "sub") subScript = !isClose;
+      else if (tag === "sup") superScript = !isClose;
+      else if (tag === "mark") highlight = isClose ? undefined : "yellow";
+      else if (tag === "span") {
+        if (isClose) color = BLACK;
+        else if (m[2]) {
+          color = m[2].replace("#", "");
+        }
+      } else {
+        // Non-formatting HTML tags (e.g. <p>, <div>, <img>, <table>, <a>, <h1>, etc.)
+        // MUST NOT be swallowed or deleted — write them as literal text runs!
+        pushSegment(m[0]);
       }
     }
     last = m.index + m[0].length;
@@ -583,6 +596,11 @@ async function buildDoc(sections: any[]): Promise<Blob> {
     sections,
   });
   return await Packer.toBlob(doc);
+}
+
+export async function buildExamDocxBlob(variant: ParsedExam, code: string, meta: ExamMeta, opts: ExportOptions): Promise<Blob> {
+  const section = sectionFor(variant, code, meta, opts);
+  return await buildDoc([section]);
 }
 
 export async function exportExams(variants: ParsedExam[], codes: string[], meta: ExamMeta, opts: ExportOptions, baseName: string) {
