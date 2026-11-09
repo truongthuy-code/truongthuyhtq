@@ -15,7 +15,8 @@ type Token =
   | { kind: "math"; latex: string }
   | { kind: "code"; lang: string; content: string }
   | { kind: "img"; src: string }
-  | { kind: "tbl"; rows: string[][] };
+  | { kind: "tbl"; rows: string[][] }
+  | { kind: "style"; flags: string[]; content: string };
 
 /** Detect $..$, $$..$$, \(..\), \[..\] inside plain text and split into math tokens. */
 function tokenizePlain(s: string): Token[] {
@@ -336,6 +337,16 @@ function tokenize(s: string): Token[] {
         const rows = JSON.parse(decodeURIComponent(payload.slice(4))) as string[][];
         out.push({ kind: "tbl", rows });
       } catch {/* skip */}
+    } else if (payload.startsWith("STYLE:")) {
+      const rest = payload.slice(6);
+      const sep = rest.indexOf(":");
+      const flagsStr = sep === -1 ? "" : rest.slice(0, sep);
+      const content = sep === -1 ? "" : decodeURIComponent(rest.slice(sep + 1));
+      out.push({
+        kind: "style",
+        flags: flagsStr ? flagsStr.split(",") : [],
+        content,
+      });
     } else {
       pushText(s.slice(open, close + 1));
     }
@@ -390,6 +401,40 @@ export default function RichText({ text, className }: { text: string; className?
               );
             }
             return <span key={idx} className="whitespace-pre-wrap text-[inherit] font-[inherit]">{t.value}</span>;
+          }
+          if (t.kind === "style") {
+            const isBold = t.flags.includes("b");
+            const isItalic = t.flags.includes("i");
+            const isUnderline = t.flags.includes("u");
+            const isStrike = t.flags.includes("s");
+            const isSub = t.flags.includes("sub");
+            const isSup = t.flags.includes("sup");
+            const colorFlag = t.flags.find((f) => f.startsWith("c="));
+            const color = colorFlag ? colorFlag.slice(2) : undefined;
+            const hlFlag = t.flags.find((f) => f.startsWith("hl="));
+            const highlight = hlFlag ? hlFlag.slice(3) : undefined;
+
+            let classes = "whitespace-pre-wrap inline text-[inherit] font-[inherit]";
+            if (isBold) classes += " font-bold";
+            if (isItalic) classes += " italic";
+            if (isUnderline) classes += " underline";
+            if (isStrike) classes += " line-through";
+
+            let el = (
+              <span
+                key={idx}
+                className={classes}
+                style={{
+                  color: color || undefined,
+                  backgroundColor: highlight || undefined,
+                }}
+              >
+                {t.content}
+              </span>
+            );
+            if (isSub) el = <sub key={idx}>{el}</sub>;
+            if (isSup) el = <sup key={idx}>{el}</sup>;
+            return el;
           }
           if (t.kind === "math") {
             let html = "";

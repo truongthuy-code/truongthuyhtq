@@ -80,7 +80,8 @@ type RichTok =
   | { kind: "math"; latex: string }
   | { kind: "img"; src: string }
   | { kind: "tbl"; rows: string[][] }
-  | { kind: "code"; content: string };
+  | { kind: "code"; content: string }
+  | { kind: "style"; flags: string[]; content: string };
 
 function tokenizeRich(s: string): RichTok[] {
   const out: RichTok[] = [];
@@ -112,6 +113,12 @@ function tokenizeRich(s: string): RichTok[] {
       const rest = payload.slice(5);
       const sep = rest.indexOf(":");
       out.push({ kind: "code", content: sep === -1 ? "" : decodeURIComponent(rest.slice(sep + 1)) });
+    } else if (payload.startsWith("STYLE:")) {
+      const rest = payload.slice(6);
+      const sep = rest.indexOf(":");
+      const flagsStr = sep === -1 ? "" : rest.slice(0, sep);
+      const content = sep === -1 ? "" : decodeURIComponent(rest.slice(sep + 1));
+      out.push({ kind: "style", flags: flagsStr ? flagsStr.split(",") : [], content });
     } else {
       out.push({ kind: "text", text: s.slice(open, close + 1) });
     }
@@ -210,6 +217,30 @@ function parseHtmlTextRuns(text: string, baseOpts: { bold?: boolean; italics?: b
   return runs;
 }
 
+function styleTokToRun(tok: { flags: string[]; content: string }, baseOpts: { bold?: boolean; italics?: boolean } = {}): TextRun {
+  const isBold = tok.flags.includes("b") || !!baseOpts.bold;
+  const isItalics = tok.flags.includes("i") || !!baseOpts.italics;
+  const isUnderline = tok.flags.includes("u");
+  const isStrike = tok.flags.includes("s");
+  const isSub = tok.flags.includes("sub");
+  const isSup = tok.flags.includes("sup");
+  const colorFlag = tok.flags.find((f) => f.startsWith("c="));
+  const color = colorFlag ? colorFlag.slice(2).replace("#", "") : undefined;
+
+  return new TextRun({
+    text: tok.content,
+    bold: isBold,
+    italics: isItalics,
+    strike: isStrike,
+    subScript: isSub,
+    superScript: isSup,
+    underline: isUnderline ? { type: UnderlineType.SINGLE } : undefined,
+    color: color || BLACK,
+    font: FONT,
+    size: SIZE,
+  });
+}
+
 function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean } = {}): any[] {
   const toks = tokenizeRich(s || "");
   const runs: any[] = [];
@@ -245,6 +276,8 @@ function parseRichRuns(s: string, baseOpts: { bold?: boolean; italics?: boolean 
       }
     } else if (tok.kind === "code") {
       runs.push(new TextRun({ text: tok.content, font: "Consolas", size: 20, color: "1E293B" }));
+    } else if (tok.kind === "style") {
+      runs.push(styleTokToRun(tok, baseOpts));
     }
   }
   return runs;
@@ -316,6 +349,8 @@ function renderCellToChildren(cell: string, colW: number): (Paragraph | Table)[]
       }
     } else if (tok.kind === "math") {
       currentRuns.push(new DMath({ children: [new MathRun(tok.latex)] }));
+    } else if (tok.kind === "style") {
+      currentRuns.push(styleTokToRun(tok));
     } else if (tok.kind === "text") {
       const lines = tok.text.split("\n");
       for (let lIdx = 0; lIdx < lines.length; lIdx++) {
@@ -388,6 +423,8 @@ function renderRichBlock(prefixRuns: any[], richText: string): (Paragraph | Tabl
       currentRuns.push(new DMath({ children: [new MathRun(tok.latex)] }));
     } else if (tok.kind === "code") {
       currentRuns.push(new TextRun({ text: tok.content, font: "Consolas", size: 20, color: "1E293B" }));
+    } else if (tok.kind === "style") {
+      currentRuns.push(styleTokToRun(tok));
     } else if (tok.kind === "text") {
       const lines = tok.text.split("\n");
       for (let lIdx = 0; lIdx < lines.length; lIdx++) {

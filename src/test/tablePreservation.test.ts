@@ -90,8 +90,9 @@ describe("Table content and formatting preservation in DOCX", () => {
     const match = q.text.match(/\u27E6TBL:([^\u27E7]+)\u27E7/);
     expect(match).toBeTruthy();
     const rows: string[][] = JSON.parse(decodeURIComponent(match![1]));
-    expect(rows.length).toBe(2);
-    expect(rows[0][0]).toContain("<b>Chương trình Python</b>");
+    expect(rows[0][0]).not.toContain("<b>");
+    expect(rows[0][0]).toContain("STYLE:b:");
+    expect(stripRich(rows[0][0])).toBe("Chương trình Python");
 
     // The code cell in row 1, col 0 must preserve indentation
     const codeCell = rows[1][0];
@@ -178,15 +179,21 @@ describe("Table content and formatting preservation in DOCX", () => {
     const rows: string[][] = JSON.parse(decodeURIComponent(match![1]));
     const cell = rows[0][0];
 
-    expect(cell).toContain("<b>in đậm</b>");
-    expect(cell).toContain("<i>in nghiêng</i>");
-    expect(cell).toContain("<u>gạch chân</u>");
-    expect(cell).toContain("<s>gạch xóa</s>");
-    expect(cell).toContain("<sub>2</sub>");
-    expect(cell).toContain("<sup>3</sup>");
-    expect(cell).toContain('<span style="color:#0000FF">chữ xanh</span>');
+    // Word formatting in table cells is preserved via STYLE tokens without inserting raw HTML tags
+    expect(cell).toContain("STYLE:b:");
+    expect(cell).toContain("STYLE:i:");
+    expect(cell).toContain("STYLE:u:");
+    expect(cell).toContain("STYLE:s:");
+    expect(cell).toContain("STYLE:sub:");
+    expect(cell).toContain("STYLE:sup:");
+    expect(cell).toContain("STYLE:c=#0000FF:");
 
-    // stripRich correctly strips tags
+    // No raw HTML tags inserted from Word styling
+    expect(cell).not.toContain("<b>");
+    expect(cell).not.toContain("<i>");
+    expect(cell).not.toContain("<u>");
+
+    // stripRich correctly preserves underlying plain text
     const stripped = stripRich(cell);
     expect(stripped).toContain("in đậm");
     expect(stripped).toContain("in nghiêng");

@@ -130,7 +130,18 @@ const encTbl = (rows: string[][]) =>
   `${SENT_OPEN}TBL:${encodeURIComponent(JSON.stringify(rows))}${SENT_CLOSE}`;
 
 export function stripRich(s: string): string {
-  return s
+  if (!s) return "";
+  let res = s.replace(
+    new RegExp(`${SENT_OPEN}STYLE:[^:]*:([^${SENT_CLOSE}]*)${SENT_CLOSE}`, "g"),
+    (_m, enc) => {
+      try {
+        return decodeURIComponent(enc);
+      } catch {
+        return enc;
+      }
+    }
+  );
+  return res
     .replace(new RegExp(`${SENT_OPEN}[^${SENT_CLOSE}]*${SENT_CLOSE}`, "g"), " ")
     .replace(/<\/?(?:b|strong|i|em|u|s|strike|del|sub|sup|mark|span|font)(?:\s+[^>]*)?>/gi, " ")
     .replace(/&amp;/g, "&")
@@ -141,11 +152,11 @@ export function stripRich(s: string): string {
     .trim();
 }
 
-/** Returns true if the rich text has any visible content (text, image, table, math, code). */
+/** Returns true if the rich text has any visible content (text, image, table, math, code, style). */
 export function hasRichContent(s: string): boolean {
   if (!s) return false;
   if (stripRich(s)) return true;
-  return /[\u27E6](IMG|TBL|MATH|CODE):/.test(s);
+  return /[\u27E6](IMG|TBL|MATH|CODE|STYLE):/.test(s);
 }
 
 const COLOR_RED = (hex: string) => {
@@ -209,7 +220,7 @@ export function isParaCodeText(s: string): boolean {
  * rather than being treated as Word presentation formatting.
  */
 export function isHtmlCodeText(s: string): boolean {
-  if (!s || typeof s !== "string") return false;
+  if (!s || typeof s !== "string" || !s.includes("<")) return false;
 
   // 1. Structural, semantic, or form HTML tags that represent HTML code rather than simple Word styling
   if (
@@ -225,7 +236,7 @@ export function isHtmlCodeText(s: string): boolean {
     return true;
   }
 
-  // 2. Code contextual phrases in Vietnamese or English
+  // 2. Code contextual phrases in Vietnamese or English accompanied by tags
   if (
     /(?:đoạn\s+mã|mã\s+nguồn|mã\s+HTML|thẻ\s+HTML|thẻ\s*<|cặp\s+thẻ|phần\s+tử\s*<|thuộc\s+tính\s*<|tag\s*<|HTML\s+tag|doctype)/i.test(
       s
@@ -378,25 +389,34 @@ function readRunProps(rPr: Element | undefined): RunProps {
   return { red, underline, mono, bold, italic, strike, sub, sup, color, highlight };
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+export function encStyle(props: RunProps, text: string): string {
+  if (!text) return "";
+  const flags: string[] = [];
+  if (props.bold) flags.push("b");
+  if (props.italic) flags.push("i");
+  if (props.underline) flags.push("u");
+  if (props.strike) flags.push("s");
+  if (props.sub) flags.push("sub");
+  if (props.sup) flags.push("sup");
+  if (props.color) flags.push(`c=${props.color}`);
+  if (props.highlight) flags.push(`hl=${props.highlight}`);
+
+  if (flags.length === 0) return text;
+  return `${SENT_OPEN}STYLE:${flags.join(",")}:${encodeURIComponent(text)}${SENT_CLOSE}`;
 }
 
-function formatTextWithProps(text: string, props: RunProps): string {
-  if (!text) return "";
-  let res = escapeHtml(text);
-  if (props.sub) res = `<sub>${res}</sub>`;
-  if (props.sup) res = `<sup>${res}</sup>`;
-  if (props.bold) res = `<b>${res}</b>`;
-  if (props.italic) res = `<i>${res}</i>`;
-  if (props.underline) res = `<u>${res}</u>`;
-  if (props.strike) res = `<s>${res}</s>`;
-  if (props.highlight) res = `<mark>${res}</mark>`;
-  if (props.color) res = `<span style="color:${props.color}">${res}</span>`;
-  return res;
+export function sameRunProps(a: RunProps, b: RunProps): boolean {
+  return (
+    !!a.bold === !!b.bold &&
+    !!a.italic === !!b.italic &&
+    !!a.underline === !!b.underline &&
+    !!a.strike === !!b.strike &&
+    !!a.sub === !!b.sub &&
+    !!a.sup === !!b.sup &&
+    a.color === b.color &&
+    a.highlight === b.highlight &&
+    !!a.mono === !!b.mono
+  );
 }
 
 function runText(r: Element): string {
@@ -503,6 +523,20 @@ export function groupCodeTokens(toks: Tok[]): Tok[] {
 
 function tokensToRich(toks: Tok[]): string {
   const grouped = groupCodeTokens(toks);
+  // Merge consecutive text tokens with identical props without mutating input tokens
+  const collapsed: Tok[] = [];
+  for (const t of grouped) {
+    const prev = collapsed[collapsed.length - 1];
+    if (t.kind === "text" && prev && prev.kind === "text" && sameRunProps(t.props, prev.props)) {
+      collapsed[collapsed.length - 1] = {
+        ...prev,
+        text: prev.text + t.text,
+      };
+    } else {
+      collapsed.push(t.kind === "text" ? { ...t } : t);
+    }
+  }
+
   // Group consecutive mono text into a single code block.
   let out = "";
   let codeBuf = "";
@@ -511,7 +545,7 @@ function tokensToRich(toks: Tok[]): string {
     out += encCode(detectLang(codeBuf), codeBuf);
     codeBuf = "";
   };
-  for (const t of grouped) {
+  for (const t of collapsed) {
     if (t.kind === "text") {
       if (t.props.mono) {
         codeBuf += t.text;
@@ -527,7 +561,7 @@ function tokensToRich(toks: Tok[]): string {
           t.props.color ||
           t.props.highlight;
         if (hasStyle) {
-          out += formatTextWithProps(t.text, t.props);
+          out += encStyle(t.props, t.text);
         } else {
           out += t.text;
         }
@@ -2259,14 +2293,18 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
     } else {
       // Part III: Short Answer
       let answer = "";
+      const unpackStyleOnly = (s: string) =>
+        s.replace(new RegExp(`${SENT_OPEN}STYLE:[^:]*:([^${SENT_CLOSE}]*)${SENT_CLOSE}`, "g"), (_m, enc) => {
+          try { return decodeURIComponent(enc); } catch { return enc; }
+        });
       let stemCleaned = stemRich;
       if (ansToks.length) {
-        answer = tokensToRich(ansToks).replace(/\s+/g, " ").trim();
+        answer = unpackStyleOnly(tokensToRich(ansToks)).replace(/\s+/g, " ").trim();
       } else {
-        const m = stemRich.match(/Đáp\s*án\s*[:.]?\s*(.+)$/i);
+        const m = stemRich.match(/Đ[áa]p\s*[áa]n\s*[:.]?\s*(.+)$/i);
         if (m) {
-          answer = m[1].trim();
-          stemCleaned = stemRich.replace(/Đáp\s*án\s*[:.]?\s*.+$/i, "").trim();
+          answer = unpackStyleOnly(m[1]).trim();
+          stemCleaned = stemRich.replace(/Đ[áa]p\s*[áa]n\s*[:.]?\s*.+$/i, "").trim();
         }
       }
       partIII.push({
