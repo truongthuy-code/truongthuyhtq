@@ -3,17 +3,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
   Folder, BookOpen, GraduationCap, Award, Star, FileText, Library, Bookmark,
-  AlertTriangle, Check, ArrowRight, FolderPlus, FolderEdit,
+  AlertTriangle, Check, FolderPlus,
 } from "lucide-react";
 import {
   ExamFolder,
   FOLDER_COLOR_PRESETS,
   FOLDER_ICON_PRESETS,
-  SAMPLE_FOLDER_NAMES,
   createFolder,
   updateFolder,
   deleteFolder,
@@ -65,7 +63,6 @@ export function CreateOrEditFolderModal({
 }: CreateOrEditFolderModalProps) {
   const isEditing = !!folder;
   const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
   const [color, setColor] = useState("sky");
   const [icon, setIcon] = useState("folder");
   const [submitting, setSubmitting] = useState(false);
@@ -74,12 +71,10 @@ export function CreateOrEditFolderModal({
     if (open) {
       if (folder) {
         setName(folder.name || "");
-        setDescription(folder.description || "");
         setColor(folder.color || "sky");
         setIcon(folder.icon || "folder");
       } else {
         setName("");
-        setDescription("");
         setColor("sky");
         setIcon("folder");
       }
@@ -99,7 +94,7 @@ export function CreateOrEditFolderModal({
       if (isEditing && folder) {
         const updated = await updateFolder(folder.id, {
           name: cleanName,
-          description,
+          description: folder.description,
           color,
           icon,
         });
@@ -109,7 +104,6 @@ export function CreateOrEditFolderModal({
       } else {
         const created = await createFolder({
           name: cleanName,
-          description,
           color,
           icon,
           teacher_id: teacherId,
@@ -129,132 +123,108 @@ export function CreateOrEditFolderModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg rounded-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <div className={`size-10 rounded-xl bg-gradient-to-br ${selectedColorMeta.iconGradient} text-white grid place-items-center shadow-sm`}>
-              {renderFolderIcon(icon, "size-5")}
+      <DialogContent className="sm:max-w-md w-[calc(100vw-2rem)] rounded-2xl p-4 sm:p-5 shadow-2xl border border-border/80">
+        <DialogHeader className="pb-0.5">
+          <div className="flex items-center gap-2.5">
+            <div className={`size-9 rounded-xl bg-gradient-to-br ${selectedColorMeta.iconGradient} text-white grid place-items-center shadow-sm shrink-0`}>
+              {renderFolderIcon(icon, "size-4.5")}
             </div>
-            <div>
-              <DialogTitle className="text-lg font-bold">
+            <div className="min-w-0">
+              <DialogTitle className="text-base sm:text-lg font-bold leading-tight">
                 {isEditing ? "Chỉnh sửa thư mục" : "Tạo thư mục mới"}
               </DialogTitle>
-              <DialogDescription className="text-xs">
+              <DialogDescription className="text-[11px] sm:text-xs text-muted-foreground leading-tight truncate">
                 {isEditing
-                  ? "Cập nhật tên, mô tả, màu sắc hoặc biểu tượng của thư mục."
-                  : "Phân loại đề thi theo lớp, môn học, học kỳ hoặc kỳ thi."}
+                  ? "Cập nhật tên, màu sắc hoặc biểu tượng thư mục."
+                  : "Phân loại và gom nhóm các đề thi cùng môn học, lớp học."}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 py-2">
-          {/* Tên thư mục */}
-          <div className="space-y-1.5">
-            <Label htmlFor="folder-name" className="text-xs font-semibold">
+        <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-3.5 pt-1">
+          {/* 1. Ô nhập tên thư mục */}
+          <div className="space-y-1">
+            <Label htmlFor="folder-name" className="text-xs font-semibold text-foreground">
               Tên thư mục <span className="text-destructive">*</span>
             </Label>
             <Input
               id="folder-name"
-              placeholder="VD: LỚP 12A1, KIỂM TRA GIỮA HỌC KỲ..."
+              placeholder="VD: LỚP 10, LỚP 11, KIỂM TRA GIỮA KỲ..."
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="rounded-xl font-medium"
+              className="h-9 sm:h-10 rounded-xl text-sm font-medium"
               autoFocus
               maxLength={80}
             />
           </div>
 
-          {/* Gợi ý tên thư mục mẫu nếu tạo mới */}
-          {!isEditing && (
-            <div className="space-y-1">
-              <span className="text-[11px] text-muted-foreground font-medium">Gợi ý mẫu nhanh:</span>
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {SAMPLE_FOLDER_NAMES.map((sName) => (
-                  <button
-                    key={sName}
-                    type="button"
-                    onClick={() => setName(sName)}
-                    className="text-[11px] px-2 py-0.5 rounded-lg border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    + {sName}
-                  </button>
-                ))}
-              </div>
+          {/* 2. Chọn màu sắc thư mục (hàng ngang 8 màu compact) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold text-foreground">Màu sắc thư mục</Label>
+              <span className="text-[11px] font-medium text-muted-foreground">
+                {selectedColorMeta.name}
+              </span>
             </div>
-          )}
-
-          {/* Mô tả */}
-          <div className="space-y-1.5">
-            <Label htmlFor="folder-desc" className="text-xs font-semibold">
-              Mô tả thư mục <span className="text-muted-foreground text-[10px]">(không bắt buộc)</span>
-            </Label>
-            <Textarea
-              id="folder-desc"
-              placeholder="Ghi chú về lớp học, môn học, giáo viên phụ trách..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="rounded-xl text-xs resize-none"
-              rows={2}
-              maxLength={200}
-            />
-          </div>
-
-          {/* Chọn màu sắc */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold">Chọn màu sắc thư mục</Label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-8 gap-1.5 sm:gap-2">
               {FOLDER_COLOR_PRESETS.map((p) => {
                 const isSelected = color === p.key;
                 return (
                   <button
                     key={p.key}
                     type="button"
+                    title={p.name}
                     onClick={() => setColor(p.key)}
-                    className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all ${
+                    className={`aspect-square w-full rounded-full flex items-center justify-center transition-all ${p.dot} ${
                       isSelected
-                        ? `${p.bg} ${p.border} ring-2 ${p.ring} font-semibold shadow-sm`
-                        : "border-border/60 hover:bg-muted/40"
+                        ? "ring-2 ring-offset-2 ring-primary scale-110 shadow-sm"
+                        : "opacity-80 hover:opacity-100 hover:scale-105"
                     }`}
                   >
-                    <span className={`size-3.5 rounded-full ${p.dot} shrink-0`} />
-                    <span className="text-xs truncate">{p.name}</span>
+                    {isSelected && <Check className="size-3.5 text-white stroke-[3]" />}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Chọn biểu tượng */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold">Chọn biểu tượng</Label>
-            <div className="grid grid-cols-4 gap-2">
+          {/* 3. Chọn biểu tượng thư mục (hàng ngang 8 biểu tượng compact) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold text-foreground">Biểu tượng thư mục</Label>
+              <span className="text-[11px] font-medium text-muted-foreground">
+                {FOLDER_ICON_PRESETS.find((ic) => ic.key === icon)?.label || "Thư mục"}
+              </span>
+            </div>
+            <div className="grid grid-cols-8 gap-1.5 sm:gap-2">
               {FOLDER_ICON_PRESETS.map((ic) => {
                 const isSelected = icon === ic.key;
                 return (
                   <button
                     key={ic.key}
                     type="button"
+                    title={ic.label}
                     onClick={() => setIcon(ic.key)}
-                    className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all ${
+                    className={`aspect-square w-full rounded-xl border flex items-center justify-center transition-all ${
                       isSelected
-                        ? "bg-primary/10 border-primary text-primary font-semibold ring-2 ring-primary/40 shadow-sm"
-                        : "border-border/60 hover:bg-muted/40 text-muted-foreground"
+                        ? `${selectedColorMeta.bg} ${selectedColorMeta.border} ring-2 ${selectedColorMeta.ring} ${selectedColorMeta.text} font-bold scale-105 shadow-sm`
+                        : "border-border/60 hover:bg-muted/50 text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    {renderFolderIcon(ic.key, "size-4 shrink-0")}
-                    <span className="text-xs truncate">{ic.label}</span>
+                    {renderFolderIcon(ic.key, "size-4 sm:size-4.5")}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <DialogFooter className="pt-2 gap-2 sm:gap-0">
+          {/* 4. Nút Hủy và Tạo thư mục - luôn hiển thị đầy đủ không cần cuộn */}
+          <DialogFooter className="pt-2 sm:pt-3 border-t border-border/50 gap-2 sm:gap-2 flex-row justify-end">
             <Button
               type="button"
               variant="outline"
-              className="rounded-xl"
+              className="h-9 sm:h-10 px-4 rounded-xl text-xs sm:text-sm font-medium flex-1 sm:flex-none"
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
@@ -262,7 +232,7 @@ export function CreateOrEditFolderModal({
             </Button>
             <Button
               type="submit"
-              className="rounded-xl text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700"
+              className="h-9 sm:h-10 px-5 rounded-xl text-xs sm:text-sm font-semibold text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 flex-1 sm:flex-none"
               disabled={submitting}
             >
               {submitting ? "Đang lưu…" : isEditing ? "Lưu thay đổi" : "Tạo thư mục"}

@@ -309,4 +309,59 @@ describe("Hệ thống Quản lý Thư mục Đề thi & Tạo đề trong Thư 
       expect(iconKeys).toContain("award");
     });
   });
+
+  describe("Nhóm 5: Tối ưu giao diện Hộp thoại Tạo thư mục mới (Không cuộn, xóa mô tả, nút bấm luôn hiển thị)", () => {
+    it("5.1. Xóa hoàn toàn trường mô tả thư mục: không có textarea hay nhãn 'Mô tả thư mục'", async () => {
+      const { render, screen } = await import("@testing-library/react");
+      const { CreateOrEditFolderModal } = await import("@/components/FolderModals");
+
+      const { container } = render(
+        <CreateOrEditFolderModal
+          open={true}
+          onOpenChange={() => {}}
+          teacherId="teacher-123"
+          onSuccess={() => {}}
+        />
+      );
+
+      // Xác nhận không có bất kỳ nhãn hoặc trường nhập mô tả nào
+      expect(screen.queryByLabelText(/mô tả thư mục/i)).toBeNull();
+      expect(screen.queryByPlaceholderText(/ghi chú về lớp học/i)).toBeNull();
+      expect(container.querySelector("textarea")).toBeNull();
+
+      // Xác nhận có đầy đủ các thành phần theo đúng yêu cầu:
+      // 1. Tiêu đề
+      expect(screen.getByText("Tạo thư mục mới")).toBeInTheDocument();
+      // 2. Ô nhập tên thư mục
+      expect(screen.getByLabelText(/tên thư mục/i)).toBeInTheDocument();
+      // 3. Khu vực lựa chọn màu sắc
+      expect(screen.getByText("Màu sắc thư mục")).toBeInTheDocument();
+      // 4. Khu vực lựa chọn biểu tượng
+      expect(screen.getByText("Biểu tượng thư mục")).toBeInTheDocument();
+      // 5. Nút Hủy
+      expect(screen.getByRole("button", { name: "Hủy" })).toBeInTheDocument();
+      // 6. Nút Tạo thư mục
+      expect(screen.getByRole("button", { name: "Tạo thư mục" })).toBeInTheDocument();
+    });
+
+    it("5.2. Hộp thoại không chứa lớp cuộn dọc nội bộ (không có overflow-y-auto)", async () => {
+      const { render } = await import("@testing-library/react");
+      const { CreateOrEditFolderModal } = await import("@/components/FolderModals");
+
+      const { container } = render(
+        <CreateOrEditFolderModal
+          open={true}
+          onOpenChange={() => {}}
+          teacherId="teacher-123"
+          onSuccess={() => {}}
+        />
+      );
+
+      // Kiểm tra dialog content không có overflow-y-auto gây thanh cuộn nội bộ
+      const dialogContent = document.querySelector('[role="dialog"]') || container.querySelector('[role="dialog"]');
+      if (dialogContent) {
+        expect(dialogContent.className).not.toContain("overflow-y-auto");
+      }
+    });
+  });
 });
