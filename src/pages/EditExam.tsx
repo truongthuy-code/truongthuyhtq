@@ -20,6 +20,7 @@ import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
 import { sha256, encryptExamPassword, decryptExamPassword } from "@/lib/examSecurity";
+import { ExamFolder, getFolders, getFolderIdForExam, moveExamToFolder } from "@/lib/folderStorage";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -43,6 +44,8 @@ export default function EditExam() {
   const [lockMode, setLockMode] = useState<LockMode>(DEFAULT_LOCK);
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
   const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
+  const [folders, setFolders] = useState<ExamFolder[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string>("none");
 
   useEffect(() => {
     if (!id) return;
@@ -119,6 +122,14 @@ export default function EditExam() {
         password: decPass,
       });
 
+      // Load folders
+      try {
+        const fList = await getFolders(user?.id, isAdmin);
+        setFolders(fList);
+        const fId = getFolderIdForExam(examData);
+        setSelectedFolderId(fId || "none");
+      } catch {}
+
       setLoading(false);
     })();
   }, [id, navigate, isAdmin, user]);
@@ -173,11 +184,21 @@ export default function EditExam() {
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       auto_submit_on_close: schedule.auto_submit_on_close,
+      folder_id: selectedFolderId === "none" ? null : selectedFolderId,
     };
+
+    const targetFolderId = selectedFolderId === "none" ? null : selectedFolderId;
+    await moveExamToFolder(id, targetFolderId);
 
     try {
       await withSupabaseAuthRetry(async () => {
-        return await supabase.from("exams").update(updates as any).eq("id", id);
+        let res = await supabase.from("exams").update(updates as any).eq("id", id);
+        if (res.error && (res.error.code === "42703" || res.error.message?.includes("folder_id"))) {
+          const fallbackUpdates = { ...updates };
+          delete fallbackUpdates.folder_id;
+          res = await supabase.from("exams").update(fallbackUpdates as any).eq("id", id);
+        }
+        return res;
       }, user as any);
     } catch (err: any) {
       console.warn("Supabase update error:", err);
@@ -189,6 +210,7 @@ export default function EditExam() {
     saveUnifiedExam({
       ...(existing || { id, created_at: new Date().toISOString() }),
       ...updates,
+      folder_id: targetFolderId,
     } as any);
 
     syncExamAssignmentCodes({
@@ -202,7 +224,7 @@ export default function EditExam() {
 
     setSaving(false);
     toast.success("Đã lưu cài đặt đề thi thành công!");
-    navigate(isAdmin ? "/admin" : "/");
+    navigate(isAdmin ? "/admin" : targetFolderId ? `/?folder=${targetFolderId}` : "/");
   };
 
   if (loading) return <div className="min-h-screen grid place-items-center text-muted-foreground">Đang tải…</div>;
@@ -224,6 +246,26 @@ export default function EditExam() {
           <div>
             <Label>Tên đề thi</Label>
             <Input value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+          </div>
+
+          <div>
+            <Label>Thư mục lưu trữ</Label>
+            <Select value={selectedFolderId} onValueChange={setSelectedFolderId}>
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="Chọn thư mục..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">📂 Đề thi chưa phân loại</SelectItem>
+                {folders.map((f) => (
+                  <SelectItem key={f.id} value={f.id}>
+                    📁 {f.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Phân loại đề thi vào thư mục tương ứng để quản lý khoa học.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

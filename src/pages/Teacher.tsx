@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,7 @@ import { parseTextExam } from "@/lib/textExamParser";
 import { parsePdfExam } from "@/lib/pdfParser";
 import { DEFAULT_SCORING, ScoringConfig } from "@/lib/grading";
 import { supabase } from "@/integrations/supabase/client";
-import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard, CheckCircle2 } from "lucide-react";
+import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard, CheckCircle2, Folder } from "lucide-react";
 import { Link } from "react-router-dom";
 import RichText from "@/components/RichText";
 import LockModeSettings from "@/components/LockModeSettings";
@@ -22,6 +22,7 @@ import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
+import { getFolders, moveExamToFolder } from "@/lib/folderStorage";
 import {
   syncExamAssignmentCodes,
   generateUniqueNumericExamCode,
@@ -72,6 +73,25 @@ function validateExam(exam: ParsedExam): Issue[] {
 export default function Teacher() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  const [targetFolderId] = useState<string | null>(() => {
+    return searchParams.get("folder") || (location.state as any)?.folderId || null;
+  });
+  const [targetFolderName, setTargetFolderName] = useState<string | null>(() => {
+    return (location.state as any)?.folderName || null;
+  });
+
+  useEffect(() => {
+    if (targetFolderId && !targetFolderName) {
+      getFolders(user?.id).then((folders) => {
+        const found = folders.find((f) => f.id === targetFolderId);
+        if (found) setTargetFolderName(found.name);
+      });
+    }
+  }, [targetFolderId, targetFolderName, user]);
+
   const docxInputRef = useRef<HTMLInputElement | null>(null);
   const docxReadSeq = useRef(0);
   const [parsing, setParsing] = useState(false);
@@ -334,52 +354,60 @@ export default function Teacher() {
         });
       }
 
-      return await supabase
-        .from("exams")
-        .insert({
-          title,
-          questions: exam as any,
-          duration_minutes: duration,
-          max_attempts: maxAttempts,
-          shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-          shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-          shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-          shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-          scoring: {
-            ...(scoring as any),
-            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-          } as any,
-          allow_review: allowReview,
-          display_mode: displayMode,
-          instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-          team_config: {
-            ...(finalTeamConfig || {}),
-            allow_back: displayMode === "quizizz" ? allowBack : true,
-          } as any,
-          lock_mode: {
-            ...(lockMode || {}),
-            allow_back: displayMode === "quizizz" ? allowBack : true,
-            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-            has_password: passwordConfig.requirePassword,
-            require_password: passwordConfig.requirePassword,
-            password_hash: passHash,
-            encrypted_password: encPass,
-          } as any,
-          open_at: schedule.open_at,
-          close_at: schedule.close_at,
-          auto_submit_on_close: schedule.auto_submit_on_close,
-          original_file_url,
-          original_file_name,
-          original_file_path,
-          created_by: verifiedUid,
-          teacher_name: profile?.full_name || currentUser?.name || "Giáo viên",
-          school_name: profile?.school_name || currentUser?.school || "",
-          subject_name: profile?.subject_name || currentUser?.subject || "",
-        } as any)
-        .select("id")
-        .single();
+      const insertPayload: any = {
+        title,
+        questions: exam as any,
+        duration_minutes: duration,
+        max_attempts: maxAttempts,
+        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+        scoring: {
+          ...(scoring as any),
+          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+        } as any,
+        allow_review: allowReview,
+        display_mode: displayMode,
+        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
+        team_config: {
+          ...(finalTeamConfig || {}),
+          allow_back: displayMode === "quizizz" ? allowBack : true,
+        } as any,
+        lock_mode: {
+          ...(lockMode || {}),
+          allow_back: displayMode === "quizizz" ? allowBack : true,
+          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+          has_password: passwordConfig.requirePassword,
+          require_password: passwordConfig.requirePassword,
+          password_hash: passHash,
+          encrypted_password: encPass,
+        } as any,
+        open_at: schedule.open_at,
+        close_at: schedule.close_at,
+        auto_submit_on_close: schedule.auto_submit_on_close,
+        original_file_url,
+        original_file_name,
+        original_file_path,
+        created_by: verifiedUid,
+        teacher_name: profile?.full_name || currentUser?.name || "Giáo viên",
+        school_name: profile?.school_name || currentUser?.school || "",
+        subject_name: profile?.subject_name || currentUser?.subject || "",
+      };
+
+      if (targetFolderId) {
+        insertPayload.folder_id = targetFolderId;
+      }
+
+      let res = await supabase.from("exams").insert(insertPayload).select("id").single();
+      // If error is code 42703 (folder_id column not created yet in remote Supabase), retry safely without folder_id in payload
+      if (res.error && (res.error.code === "42703" || res.error.message?.includes("folder_id"))) {
+        delete insertPayload.folder_id;
+        res = await supabase.from("exams").insert(insertPayload).select("id").single();
+      }
+      return res;
     }, currentUser as any);
 
     if (error || !data?.id) {
@@ -452,6 +480,7 @@ export default function Teacher() {
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: finalTeamConfig as any,
+      folder_id: targetFolderId || null,
       lock_mode: {
         ...(lockMode || {}),
         allow_back: displayMode === "quizizz" ? allowBack : true,
@@ -464,9 +493,17 @@ export default function Teacher() {
       } as any,
     });
 
+    if (targetFolderId) {
+      await moveExamToFolder(data.id, targetFolderId);
+    }
+
     setSaving(false);
-    toast.success("Tạo đề thi và lưu mã bài thi thành công!");
-    navigate(`/exam/${data.id}/share`);
+    if (targetFolderName) {
+      toast.success(`Đã tạo đề thi thành công trong thư mục "${targetFolderName}"!`);
+    } else {
+      toast.success("Tạo đề thi và lưu mã bài thi thành công!");
+    }
+    navigate(`/exam/${data.id}/share${targetFolderId ? `?folder=${targetFolderId}` : ""}`);
   };
 
 
@@ -474,8 +511,11 @@ export default function Teacher() {
     <div className="min-h-screen bg-gradient-soft">
       <header className="border-b bg-background/80 backdrop-blur sticky top-0 z-10">
         <div className="container flex items-center justify-between py-4">
-          <Link to="/" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="size-4" /> Trang chủ
+          <Link
+            to={targetFolderId ? `/?folder=${targetFolderId}` : "/"}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground font-medium"
+          >
+            <ArrowLeft className="size-4" /> {targetFolderName ? `Trở về ${targetFolderName}` : "Trang chủ"}
           </Link>
           <div className="font-semibold">Tạo bài thi mới</div>
           <Button asChild variant="outline" size="sm">
@@ -485,6 +525,26 @@ export default function Teacher() {
       </header>
 
       <main className="container max-w-3xl py-10 space-y-6">
+        {/* Banner hiển thị ngữ cảnh thư mục đang mở */}
+        {targetFolderName && (
+          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-foreground animate-slide-up shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="size-9 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 text-white grid place-items-center shadow-xs">
+                <Folder className="size-5" />
+              </div>
+              <div>
+                <div className="text-[10px] font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">
+                  Đang tạo đề cho thư mục:
+                </div>
+                <div className="text-base font-extrabold text-foreground">{targetFolderName}</div>
+              </div>
+            </div>
+            <span className="text-xs font-semibold text-teal-800 dark:text-teal-300 px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/60 border border-teal-300 dark:border-teal-800">
+              Tự động lưu vào thư mục này
+            </span>
+          </div>
+        )}
+
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-lg flex items-center gap-2"><Upload className="size-5 text-primary" /> Tải đề thi</h2>

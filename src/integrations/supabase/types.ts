@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      exam_folders: {
+        Row: {
+          color: string | null
+          created_at: string
+          description: string | null
+          icon: string | null
+          id: string
+          name: string
+          teacher_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          name: string
+          teacher_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          name?: string
+          teacher_id?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       exam_teams: {
         Row: {
           answered_count: number
@@ -73,6 +106,7 @@ export type Database = {
           created_by: string | null
           display_mode: string
           duration_minutes: number
+          folder_id: string | null
           id: string
           instant_feedback: boolean
           lock_mode: Json
@@ -110,6 +144,7 @@ export type Database = {
           created_by?: string | null
           display_mode?: string
           duration_minutes?: number
+          folder_id?: string | null
           id?: string
           instant_feedback?: boolean
           lock_mode?: Json
@@ -147,6 +182,7 @@ export type Database = {
           created_by?: string | null
           display_mode?: string
           duration_minutes?: number
+          folder_id?: string | null
           id?: string
           instant_feedback?: boolean
           lock_mode?: Json

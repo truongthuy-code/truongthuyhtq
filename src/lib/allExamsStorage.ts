@@ -28,6 +28,7 @@ export interface SystemExam {
   auto_submit_on_close?: boolean;
   instant_feedback?: boolean;
   lock_mode?: any;
+  folder_id?: string | null;
   is_sample?: boolean;
 }
 
