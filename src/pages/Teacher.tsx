@@ -228,12 +228,15 @@ export default function Teacher() {
     if (total === 0) {
       toast.warning("Không phát hiện câu hỏi nào. Kiểm tra định dạng.");
     } else {
+      if (parsed.answerWarnings && parsed.answerWarnings.length > 0) {
+        toast.warning(parsed.answerWarnings[0], { duration: 7000 });
+      }
       const missing = getMissingAnswerQuestions(parsed);
       if (missing.length > 0) {
         // Cảnh báo dạng hộp thoại ở giữa màn hình, không tự động biến mất, bắt buộc bấm OK
         setModalMissingList(missing);
         setMissingModalOpen(true);
-      } else {
+      } else if (!parsed.answerWarnings?.length) {
         toast.success(`Đã tách ${parsed.partI.length} câu Phần I, ${parsed.partII.length} câu Phần II, ${parsed.partIII.length} câu Phần III`);
       }
     }

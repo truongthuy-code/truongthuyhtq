@@ -110,6 +110,7 @@ export type ParsedExam = {
   partII: TFQuestion[];
   partIII: SAQuestion[];
   auditLog?: DocxObjectAudit[];
+  answerWarnings?: string[];
 };
 
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -439,7 +440,7 @@ type MathTok = { kind: "math"; latex: string };
 type CodeTok = { kind: "code"; lang: string; content: string };
 type ObjTok = { kind: "obj" }; // OLE math/object — placeholder
 type ImgTok = { kind: "img"; src: string };
-type TblTok = { kind: "tbl"; rows: string[][] };
+type TblTok = { kind: "tbl"; rows: string[][]; answerGrid?: string[][] };
 /** Paragraph boundary marker (keeps document structure inside a question). */
 type PbrkTok = { kind: "pbrk" };
 type Tok = TextTok | MathTok | CodeTok | ObjTok | ImgTok | TblTok | PbrkTok;
@@ -1255,6 +1256,36 @@ function parseCell(tc: Element, images: ImageMap, ole?: OleMap): string {
   return outParts.join("\n").trimEnd();
 }
 
+function getCellSpanAndMerge(tc: Element): { gridSpan: number; vMerge: "none" | "restart" | "continue" } {
+  let gridSpan = 1;
+  let vMerge: "none" | "restart" | "continue" = "none";
+
+  const tcPr = Array.from(tc.childNodes).find((n) => {
+    if (n.nodeType !== 1) return false;
+    const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
+    return ln === "tcPr";
+  }) as Element | undefined;
+
+  if (!tcPr) return { gridSpan, vMerge };
+
+  for (let i = 0; i < tcPr.childNodes.length; i++) {
+    const child = tcPr.childNodes[i];
+    if (child.nodeType !== 1) continue;
+    const el = child as Element;
+    const ln = el.localName || el.nodeName.replace(/^.*:/, "");
+    if (ln === "gridSpan") {
+      const raw = el.getAttributeNS(W_NS, "val") || el.getAttribute("w:val") || "1";
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 1) gridSpan = parsed;
+    } else if (ln === "vMerge") {
+      const raw = (el.getAttributeNS(W_NS, "val") || el.getAttribute("w:val") || "").toLowerCase();
+      vMerge = raw === "restart" ? "restart" : "continue";
+    }
+  }
+
+  return { gridSpan, vMerge };
+}
+
 function parseTable(tbl: Element, images: ImageMap, ole?: OleMap): Para {
   const rows: string[][] = [];
   const trs = Array.from(tbl.childNodes).filter((n) => {
@@ -1263,20 +1294,61 @@ function parseTable(tbl: Element, images: ImageMap, ole?: OleMap): Para {
     return ln === "tr";
   }) as Element[];
 
+  let hasMergedCells = false;
+  const expandedRows: string[][] = [];
+  const vMergeAnchors: Record<number, string> = {};
+
   for (const tr of trs) {
     const cells: string[] = [];
+    const expandedCells: string[] = [];
     const tcs = Array.from(tr.childNodes).filter((n) => {
       if (n.nodeType !== 1) return false;
       const ln = (n as Element).localName || (n as Element).nodeName.replace(/^.*:/, "");
       return ln === "tc";
     }) as Element[];
 
+    let colCursor = 0;
     for (const tc of tcs) {
-      cells.push(parseCell(tc, images, ole));
+      const cellRich = parseCell(tc, images, ole);
+      cells.push(cellRich);
+
+      const { gridSpan, vMerge } = getCellSpanAndMerge(tc);
+      if (gridSpan > 1 || vMerge !== "none") {
+        hasMergedCells = true;
+      }
+
+      const plainCell = stripRich(cellRich).trim();
+      let effectiveRich = cellRich;
+      if (vMerge === "continue") {
+        const anchor = vMergeAnchors[colCursor] || "";
+        if (!plainCell && anchor && parseStrictTFCell(anchor) !== null) {
+          effectiveRich = anchor;
+        }
+      } else if (vMerge === "restart") {
+        for (let k = 0; k < gridSpan; k++) {
+          vMergeAnchors[colCursor + k] = plainCell;
+        }
+      } else {
+        for (let k = 0; k < gridSpan; k++) {
+          delete vMergeAnchors[colCursor + k];
+        }
+      }
+
+      expandedCells.push(effectiveRich);
+      const isTfVal = parseStrictTFCell(stripRich(effectiveRich).trim()) !== null;
+      for (let k = 1; k < gridSpan; k++) {
+        expandedCells.push(isTfVal ? effectiveRich : "");
+      }
+      colCursor += gridSpan;
     }
+
     rows.push(cells);
+    expandedRows.push(expandedCells);
   }
-  const tok: TblTok = { kind: "tbl", rows };
+
+  const tok: TblTok = hasMergedCells
+    ? { kind: "tbl", rows, answerGrid: expandedRows }
+    : { kind: "tbl", rows };
   return { toks: [tok], plain: " ", rich: encTbl(rows), hasAnyMark: false };
 }
 
@@ -1656,7 +1728,267 @@ export function findPartIIRowIndices(grid: string[][]): { rowA: number; rowB: nu
   return null;
 }
 
-export function tryParseTransposedPartII(grid: string[][], partII: TFQuestion[]): boolean {
+export function parseStrictTFCell(cellStr: string): boolean | null {
+  const s = cellStr.replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const clean = s
+    .replace(/^(?:\([a-d]\)|[a-d][.):]|(?:Ý|L[ệe]nh|M[ệe]nh\s*đ[ềe])\s*[a-d][:.]?)\s*/i, "")
+    .trim();
+  if (!clean) return null;
+  if (/^[Đđ]\.?$/u.test(clean) || /^Đ[úu]ng\.?$/i.test(clean) || /^(?:True|T|D)\.?$/i.test(clean)) {
+    return true;
+  }
+  if (/^[Ss]\.?$/u.test(clean) || /^Sai\.?$/i.test(clean) || /^(?:False|F)\.?$/i.test(clean)) {
+    return false;
+  }
+  return null;
+}
+
+export function matchPartIIColHeaderLetter(cell: string): "a" | "b" | "c" | "d" | null {
+  const s = cell.replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const m = s.match(
+    /^(?:\(([a-d])\)|([a-d])(?:\)|\.|:)?|(?:đáp\s*án(?:\s*ý)?|ý|lệnh|mệnh\s*đề|nội\s*dung|câu)\s*\(?([a-d])\)?(?:\)|\.|:)?)$/i
+  );
+  if (!m) return null;
+  const letter = (m[1] || m[2] || m[3] || "").toLowerCase();
+  if (letter === "a" || letter === "b" || letter === "c" || letter === "d") {
+    return letter;
+  }
+  return null;
+}
+
+export function hasExplicitPartIIRowLabels(grid: string[][]): boolean {
+  const isExplicitRowForLetter = (row: string[], letter: string): boolean => {
+    const first = row[0]?.trim().toLowerCase() || "";
+    const labelRe = new RegExp(`^(?:\\(?${letter}[.) :]?|ý\\s*${letter}[:.]?|lệnh\\s*${letter}[:.]?)$`, "i");
+    if (labelRe.test(first)) return true;
+
+    const cellPrefixRe = new RegExp(`^(?:\\(?${letter}[.) :]?|ý\\s*${letter}[:.]?)\\s*(?:[đsđstdtruefal]|đúng|sai)`, "i");
+    if (row.some((c) => cellPrefixRe.test(c.trim()))) return true;
+    return false;
+  };
+
+  let rowA = -1, rowB = -1, rowC = -1, rowD = -1;
+  for (let r = 0; r < grid.length; r++) {
+    if (rowA === -1 && isExplicitRowForLetter(grid[r], "a")) rowA = r;
+    else if (rowB === -1 && isExplicitRowForLetter(grid[r], "b")) rowB = r;
+    else if (rowC === -1 && isExplicitRowForLetter(grid[r], "c")) rowC = r;
+    else if (rowD === -1 && isExplicitRowForLetter(grid[r], "d")) rowD = r;
+  }
+  return rowA !== -1 && rowB !== -1 && rowC !== -1 && rowD !== -1;
+}
+
+export function hasExplicitPartIIColHeader(grid: string[][]): boolean {
+  if (!grid || grid.length < 2) return false;
+  const maxHeaderScan = Math.min(grid.length - 1, 3);
+  for (let r = 0; r <= maxHeaderScan; r++) {
+    const row = grid[r];
+    if (!row || row.length < 3) continue;
+    const found = new Set<"a" | "b" | "c" | "d">();
+    for (let c = 0; c < row.length; c++) {
+      const letter = matchPartIIColHeaderLetter(row[c] || "");
+      if (letter) found.add(letter);
+    }
+    if (found.size >= 2) return true;
+  }
+  return false;
+}
+
+export type Shape2PartIIMatch = {
+  headerRowIdx: number;
+  qCol: number;
+  colMap: Partial<Record<"a" | "b" | "c" | "d", number>>;
+  dataRowIndices: number[];
+  validAnswerCount: number;
+  hasInvalidCells: boolean;
+};
+
+export function detectPartIIShape2Table(grid: string[][]): Shape2PartIIMatch | null {
+  if (!grid || grid.length < 2) return null;
+
+  const maxHeaderScan = Math.min(grid.length - 1, 3);
+  for (let r = 0; r <= maxHeaderScan; r++) {
+    const row = grid[r];
+    if (!row || row.length < 3) continue;
+
+    const colMap: Partial<Record<"a" | "b" | "c" | "d", number>> = {};
+    for (let c = 0; c < row.length; c++) {
+      const letter = matchPartIIColHeaderLetter(row[c] || "");
+      if (letter && colMap[letter] === undefined) {
+        colMap[letter] = c;
+      }
+    }
+
+    const mappedCols = Object.values(colMap).filter((v): v is number => v !== undefined);
+    if (mappedCols.length < 2) continue;
+
+    const firstMappedCol = Math.min(...mappedCols);
+    const mappedSet = new Set(mappedCols);
+
+    // Pick question-number column outside the a/b/c/d columns (preferring columns before firstMappedCol)
+    let qCol = -1;
+    const candidateCols: number[] = [];
+    for (let c = 0; c < row.length; c++) {
+      if (!mappedSet.has(c)) candidateCols.push(c);
+    }
+    if (candidateCols.length === 0) continue;
+
+    for (const c of candidateCols) {
+      const hCur = (grid[r][c] || "").trim();
+      const hPrev = r > 0 ? (grid[r - 1]?.[c] || "").trim() : "";
+      if (/^(?:C[âa]u(?:\s*h[ỏo]i)?|B[àa]i|Question)\b/i.test(hCur) || /^(?:C[âa]u(?:\s*h[ỏo]i)?|B[àa]i|Question)\b/i.test(hPrev)) {
+        qCol = c;
+        break;
+      }
+    }
+    if (qCol === -1) {
+      const beforeCols = candidateCols.filter((c) => c < firstMappedCol);
+      if (beforeCols.length > 0) {
+        // Prefer rightmost column before 'a)' that contains question numbers below
+        qCol =
+          beforeCols.find((c) =>
+            grid.slice(r + 1).some((dr) => /^\s*C[âa]u\s*\d+/i.test((dr[c] || "").trim()))
+          ) ?? beforeCols[beforeCols.length - 1];
+      } else {
+        qCol = candidateCols[0];
+      }
+    }
+
+    const dataRowIndices: number[] = [];
+    let validAnswerCount = 0;
+    let hasInvalidCells = false;
+
+    for (let dr = r + 1; dr < grid.length; dr++) {
+      const dRow = grid[dr];
+      if (!dRow) continue;
+      const qCell = (dRow[qCol] || "").trim();
+      if (!qCell || /^(?:t[ổo]ng|ghi\s*ch[úu]|đi[ểe]m)\b/i.test(qCell)) continue;
+      if (!/(?:C[âa]u(?:\s*h[ỏo]i)?\s*)?\d+/i.test(qCell)) continue;
+
+      let rowHasContent = false;
+      for (const colIdx of mappedCols) {
+        if (colIdx >= dRow.length) continue;
+        const valStr = (dRow[colIdx] || "").trim();
+        if (!valStr) continue;
+        rowHasContent = true;
+        if (parseStrictTFCell(valStr) !== null) {
+          validAnswerCount++;
+        } else {
+          hasInvalidCells = true;
+        }
+      }
+      if (rowHasContent) {
+        dataRowIndices.push(dr);
+      }
+    }
+
+    if (dataRowIndices.length >= 1 && (validAnswerCount >= 1 || hasInvalidCells)) {
+      return {
+        headerRowIdx: r,
+        qCol,
+        colMap,
+        dataRowIndices,
+        validAnswerCount,
+        hasInvalidCells,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function applyPartIIShape2Table(
+  match: Shape2PartIIMatch,
+  grid: string[][],
+  partI: MCQuestion[],
+  partII: TFQuestion[],
+  warnings?: string[],
+): boolean {
+  let matchedAny = false;
+  const keys: Array<"a" | "b" | "c" | "d"> = ["a", "b", "c", "d"];
+
+  for (const dr of match.dataRowIndices) {
+    const qCell = (grid[dr][match.qCol] || "").trim();
+    const m = qCell.match(/(?:C[âa]u(?:\s*h[ỏo]i)?\s*)?(\d+)/i);
+    if (!m) continue;
+    const qNum = parseInt(m[1], 10);
+
+    let targetIdx = qNum - 1;
+    if (qNum > partII.length && qNum > partI.length && (qNum - partI.length) <= partII.length) {
+      targetIdx = qNum - partI.length - 1;
+    } else if (qNum > partII.length && qNum >= 13 && qNum <= 16) {
+      targetIdx = qNum - 13;
+    }
+
+    if (targetIdx < 0 || targetIdx >= partII.length) continue;
+
+    const q = partII[targetIdx];
+    for (const key of keys) {
+      const colIdx = match.colMap[key];
+      if (colIdx === undefined || colIdx >= grid[dr].length) continue;
+      const rawCell = (grid[dr][colIdx] || "").trim();
+      if (!rawCell) continue;
+      const val = parseStrictTFCell(rawCell);
+      if (val !== null) {
+        const item = q.items.find((x) => x.key === key);
+        if (item) item.correct = val;
+        matchedAny = true;
+      } else {
+        warnings?.push(
+          `Bảng đáp án Phần II (hàng Câu ${qNum}, cột ${key}): giá trị "${rawCell}" không hợp lệ (cần Đ hoặc S). Vui lòng kiểm tra lại.`
+        );
+      }
+    }
+  }
+
+  if (!matchedAny && match.validAnswerCount === 0 && match.hasInvalidCells) {
+    warnings?.push(
+      "Bảng đáp án Phần II theo hàng/cột a, b, c, d không chứa giá trị Đ/S hợp lệ. Vui lòng kiểm tra lại."
+    );
+  }
+
+  return matchedAny;
+}
+
+function isHeaderlessTransposedPartIITable(grid: string[][]): boolean {
+  if (!grid || grid.length === 0) return false;
+  let validRows = 0;
+  for (const row of grid) {
+    if (!row || row.length < 5) continue;
+    if (!/^\s*C[âa]u\s*\d+/i.test(row[0] || "")) continue;
+    const vals = [1, 2, 3, 4].map((c) => parseStrictTFCell(row[c] || ""));
+    if (vals.every((v) => v !== null)) validRows++;
+  }
+  return validRows >= 1;
+}
+
+function hasHeaderQuestionNumbers(row: string[] | undefined): boolean {
+  if (!row || row.length < 2) return false;
+  let count = 0;
+  for (let c = 0; c < row.length; c++) {
+    const cell = (row[c] || "").trim();
+    if (/^(?:C[âa]u\s*)?\d+\.?$/i.test(cell)) count++;
+  }
+  return count >= 2;
+}
+
+function looksLikeAmbiguousTFGrid(grid: string[][]): boolean {
+  if (!grid || grid.length < 2) return false;
+  let strictTfCells = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (parseStrictTFCell(cell || "") !== null) strictTfCells++;
+    }
+  }
+  return strictTfCells >= 4;
+}
+
+export function tryParseTransposedPartII(
+  grid: string[][],
+  partII: TFQuestion[],
+  partI: MCQuestion[] = [],
+): boolean {
   let matchedAny = false;
   for (let r = 0; r < grid.length; r++) {
     const row = grid[r];
@@ -1664,16 +1996,18 @@ export function tryParseTransposedPartII(grid: string[][], partII: TFQuestion[])
     // Check if row[0] has question number
     const m = row[0].match(/(?:C[âa]u\s*)?(\d+)/i);
     if (!m) continue;
-    let qNum = parseInt(m[1]);
-    if (qNum > partII.length && qNum >= 13 && qNum <= 16) {
+    let qNum = parseInt(m[1], 10);
+    if (qNum > partII.length && qNum > partI.length && (qNum - partI.length) <= partII.length) {
+      qNum = qNum - partI.length;
+    } else if (qNum > partII.length && qNum >= 13 && qNum <= 16) {
       qNum = qNum - 12;
     }
     if (qNum < 1 || qNum > partII.length) continue;
 
-    const valA = parseTFVal(row[1]);
-    const valB = parseTFVal(row[2]);
-    const valC = parseTFVal(row[3]);
-    const valD = parseTFVal(row[4]);
+    const valA = parseStrictTFCell(row[1]);
+    const valB = parseStrictTFCell(row[2]);
+    const valC = parseStrictTFCell(row[3]);
+    const valD = parseStrictTFCell(row[4]);
     if (valA !== null && valB !== null && valC !== null && valD !== null) {
       const q = partII[qNum - 1];
       const itA = q.items.find((x) => x.key === "a"); if (itA) itA.correct = valA;
@@ -1691,6 +2025,7 @@ export function parseAnswerKeySection(
   partI: MCQuestion[],
   partII: TFQuestion[],
   partIII: SAQuestion[],
+  warnings?: string[],
 ) {
   let currentPart: 1 | 2 | 3 = 1;
 
@@ -1703,7 +2038,8 @@ export function parseAnswerKeySection(
     // 1. Process Tables
     const tblToks = p.toks.filter((t): t is TblTok => t.kind === "tbl");
     for (const tbl of tblToks) {
-      const grid = tbl.rows.map((row) => row.map((cell) => stripRich(cell).trim()));
+      const sourceRows = tbl.answerGrid ?? tbl.rows;
+      const grid = sourceRows.map((row) => row.map((cell) => stripRich(cell).trim()));
       if (!grid.length) continue;
 
       // Check if table contains a part header in any cell
@@ -1713,10 +2049,53 @@ export function parseAnswerKeySection(
         currentPart = tblPart;
       }
 
-      // Check Part II table (strictly column-based: Col 1 -> Câu 1, Col 2 -> Câu 2...)
+      // Classify Part II table structure before extracting answers:
+      // Case A (Hình 1): rows = a, b, c, d | cols = Câu 1, Câu 2...
+      // Case B (Hình 2): header row = a), b), c), d) | rows = Câu 1, Câu 2...
+      const shape2Match = detectPartIIShape2Table(grid);
+      const explicitShape1 = hasExplicitPartIIRowLabels(grid);
+      const explicitShape2Header = hasExplicitPartIIColHeader(grid);
+
+      if ((shape2Match || explicitShape2Header) && explicitShape1) {
+        warnings?.push(
+          "Phát hiện bảng đáp án Phần II có cấu trúc không rõ ràng (trùng nhãn a, b, c, d ở cả hàng và cột). Vui lòng kiểm tra lại đáp án."
+        );
+        currentPart = 2;
+        continue;
+      }
+
+      if (shape2Match) {
+        const applied = applyPartIIShape2Table(shape2Match, grid, partI, partII, warnings);
+        if (applied || shape2Match.validAnswerCount > 0 || shape2Match.hasInvalidCells) {
+          currentPart = 2;
+          continue;
+        }
+      }
+
+      // Check headerless transposed Part II table with explicit "Câu N" in col 0 and 4 strict Đ/S columns
+      if (!explicitShape1 && isHeaderlessTransposedPartIITable(grid)) {
+        if (tryParseTransposedPartII(grid, partII, partI)) {
+          currentPart = 2;
+          continue;
+        }
+      }
+
+      // Check Part II table (Hình 1 — strictly column-based: Col 1 -> Câu 1, Col 2 -> Câu 2...)
       const tfIndices = findPartIIRowIndices(grid);
       if (tfIndices) {
         const { rowA, rowB, rowC, rowD, headerRow } = tfIndices;
+        const canTrustShape1 =
+          explicitShape1 ||
+          (headerRow !== null && hasHeaderQuestionNumbers(grid[headerRow]));
+
+        if (!canTrustShape1 && looksLikeAmbiguousTFGrid(grid)) {
+          warnings?.push(
+            "Không xác định chắc chắn được cấu trúc bảng đáp án Phần II (thiếu nhãn hàng/cột Câu và a, b, c, d). Vui lòng kiểm tra lại đáp án."
+          );
+          currentPart = 2;
+          continue;
+        }
+
         const numCols = Math.max(
           grid[rowA].length,
           grid[rowB].length,
@@ -1764,9 +2143,16 @@ export function parseAnswerKeySection(
         continue;
       }
 
-      // Check transposed Part II table (row-based)
-      if (tryParseTransposedPartII(grid, partII)) {
+      // Check transposed Part II table (row-based fallback)
+      if (tryParseTransposedPartII(grid, partII, partI)) {
         currentPart = 2;
+        continue;
+      }
+
+      if (currentPart === 2 && looksLikeAmbiguousTFGrid(grid)) {
+        warnings?.push(
+          "Không xác định chắc chắn được cấu trúc bảng đáp án Phần II. Vui lòng kiểm tra lại đáp án."
+        );
         continue;
       }
 
@@ -2089,6 +2475,7 @@ export function parsePostHetSection(
   partI: MCQuestion[],
   partII: TFQuestion[],
   partIII: SAQuestion[],
+  warnings?: string[],
 ) {
   let explStartIdx = -1;
   for (let i = 0; i < postHetParas.length; i++) {
@@ -2102,12 +2489,12 @@ export function parsePostHetSection(
   const explParas = explStartIdx >= 0 ? postHetParas.slice(explStartIdx) : [];
 
   if (ansParas.length > 0) {
-    parseAnswerKeySection(ansParas, partI, partII, partIII);
+    parseAnswerKeySection(ansParas, partI, partII, partIII, warnings);
   }
   if (explParas.length > 0) {
     const explTableParas = explParas.filter((p) => p.toks.some((t) => t.kind === "tbl"));
     if (explTableParas.length > 0) {
-      parseAnswerKeySection(explTableParas, partI, partII, partIII);
+      parseAnswerKeySection(explTableParas, partI, partII, partIII, warnings);
     }
     parseExplSection(explParas, partI, partII, partIII);
   }
@@ -2135,8 +2522,15 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
       for (let i = 1; i < paras.length; i++) {
         const tblTok = paras[i].toks.find((t): t is TblTok => t.kind === "tbl");
         if (tblTok) {
-          const grid = tblTok.rows.map((r) => r.map((c) => stripRich(c).trim()));
-          if (findPartIIRowIndices(grid) || tryParseTransposedPartII(grid, [])) {
+          const sourceRows = tblTok.answerGrid ?? tblTok.rows;
+          const grid = sourceRows.map((r) => r.map((c) => stripRich(c).trim()));
+          if (
+            detectPartIIShape2Table(grid) ||
+            hasExplicitPartIIRowLabels(grid) ||
+            isHeaderlessTransposedPartIITable(grid) ||
+            findPartIIRowIndices(grid) ||
+            tryParseTransposedPartII(grid, [])
+          ) {
             ansTblIdx = i;
             if (ansTblIdx > 0 && detectPart(paras[ansTblIdx - 1].plain) > 0) {
               ansTblIdx--;
@@ -2448,17 +2842,21 @@ export async function parseDocx(file: File): Promise<ParsedExam> {
 
   flush();
 
+  const answerWarnings: string[] = [];
+
   // If there is content after HẾT, parse answers and explanations
   if (postHetParas.length > 0) {
-    parsePostHetSection(postHetParas, partI, partII, partIII);
+    parsePostHetSection(postHetParas, partI, partII, partIII, answerWarnings);
   } else {
     // Fallback: check if there are any answer key tables that might have been included in examParas
     const tableParas = examParas.filter((p) => p.toks.some((t) => t.kind === "tbl"));
     if (tableParas.length > 0) {
-      parseAnswerKeySection(tableParas, partI, partII, partIII);
+      parseAnswerKeySection(tableParas, partI, partII, partIII, answerWarnings);
     }
   }
 
-  return { partI, partII, partIII };
+  return answerWarnings.length > 0
+    ? { partI, partII, partIII, answerWarnings }
+    : { partI, partII, partIII };
 }
 
