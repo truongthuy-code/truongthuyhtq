@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } from "./src/lib/sampleExams";
 import verifyExamPasswordHandler from "./api/verify-exam-password";
 import checkQuestionAnswerHandler from "./api/check-question-answer";
+import submitExamHandler from "./api/submit-exam";
 
 const app = express();
 const PORT = 3000;
@@ -842,6 +843,14 @@ app.post("/api/check-question-answer", async (req, res) => {
 // -------------------------------------------------------------
 app.post("/api/verify-exam-password", async (req, res) => {
   return verifyExamPasswordHandler(req, res);
+});
+
+// -------------------------------------------------------------
+// POST /api/submit-exam
+// Handles Scale-100 scoring config lookup & exact submission grading
+// -------------------------------------------------------------
+app.post("/api/submit-exam", async (req, res) => {
+  return submitExamHandler(req, res);
 });
 
 // -------------------------------------------------------------

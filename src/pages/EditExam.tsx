@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,8 +8,18 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { DEFAULT_SCORING, ScoringConfig } from "@/lib/grading";
-import { ArrowLeft, Loader2, Save } from "lucide-react";
+import {
+  attachQuestionScores,
+  DEFAULT_SCORING,
+  detectExamStructure,
+  getPartIISampleItemCount,
+  isScale100Scoring,
+  reconcileScale100Scoring,
+  ScoringConfig,
+  validateScale100Config,
+} from "@/lib/grading";
+import ScoringConfigPanel from "@/components/ScoringConfigPanel";
+import { AlertTriangle, ArrowLeft, Loader2, Save } from "lucide-react";
 import LockModeSettings from "@/components/LockModeSettings";
 import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
@@ -18,6 +28,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
+import { getAllSubmissions } from "@/lib/studentStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
 import { sha256, encryptExamPassword, decryptExamPassword } from "@/lib/examSecurity";
 import { ExamFolder, getFolders, getFolderIdForExam, moveExamToFolder } from "@/lib/folderStorage";
@@ -34,6 +45,7 @@ export default function EditExam() {
   const [shuffleQ, setShuffleQ] = useState({ p1: false, p2: false, p3: false });
   const [shuffleO, setShuffleO] = useState({ p1: false, p2: false, p3: false });
   const [scoring, setScoring] = useState<ScoringConfig>(DEFAULT_SCORING);
+  const [examQuestions, setExamQuestions] = useState<any>(null);
   const [allowReview, setAllowReview] = useState(false);
   const [enableMinCorrect, setEnableMinCorrect] = useState<boolean>(false);
   const [minCorrectPercentage, setMinCorrectPercentage] = useState<number>(70);
@@ -46,6 +58,23 @@ export default function EditExam() {
   const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
   const [folders, setFolders] = useState<ExamFolder[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string>("none");
+  const [existingSubmissionsCount, setExistingSubmissionsCount] = useState(0);
+  const [initialScoringSnapshot, setInitialScoringSnapshot] = useState("");
+  const [confirmPublishedScoringEdit, setConfirmPublishedScoringEdit] = useState(false);
+
+  const examCounts = useMemo(() => detectExamStructure(examQuestions), [examQuestions]);
+  const itemCountP2 = useMemo(() => getPartIISampleItemCount(examQuestions), [examQuestions]);
+  const scoringValidation = useMemo(() => {
+    if (!isScale100Scoring(scoring)) return { valid: true, total: 100, diff: 0, message: null };
+    return validateScale100Config(scoring, examCounts);
+  }, [scoring, examCounts]);
+
+  const hasScoringChanged = useMemo(() => {
+    if (!initialScoringSnapshot) return false;
+    return JSON.stringify(scoring) !== initialScoringSnapshot;
+  }, [scoring, initialScoringSnapshot]);
+
+  const needsSubmissionConfirmation = existingSubmissionsCount > 0 && hasScoringChanged && !confirmPublishedScoringEdit;
 
   useEffect(() => {
     if (!id) return;
@@ -75,12 +104,38 @@ export default function EditExam() {
         return;
       }
 
+      let parsedQs = examData.questions;
+      if (typeof parsedQs === "string") {
+        try {
+          parsedQs = JSON.parse(parsedQs);
+        } catch {}
+      }
+      setExamQuestions(parsedQs || null);
+
       setTitle(examData.title);
       setDuration(examData.duration_minutes || 45);
       setMaxAttempts(examData.max_attempts || 1);
       setShuffleQ({ p1: !!examData.shuffle_q_p1, p2: !!examData.shuffle_q_p2, p3: !!examData.shuffle_q_p3 });
       setShuffleO({ p1: !!examData.shuffle_o_p1, p2: !!examData.shuffle_o_p2, p3: !!examData.shuffle_o_p3 });
-      setScoring((examData.scoring as any) || DEFAULT_SCORING);
+      const rawScoring = examData.scoring as any;
+      const loadedScoring = isScale100Scoring(rawScoring)
+        ? reconcileScale100Scoring(parsedQs, rawScoring)
+        : (rawScoring || DEFAULT_SCORING);
+      setScoring(loadedScoring);
+      setInitialScoringSnapshot(JSON.stringify(loadedScoring));
+
+      // Check existing submissions to safeguard published scoring configuration
+      let subCount = getAllSubmissions().filter((s) => s.examId === id).length;
+      try {
+        const { count } = await supabase
+          .from("submissions")
+          .select("id", { count: "exact", head: true })
+          .eq("exam_id", id);
+        if (typeof count === "number") {
+          subCount = Math.max(subCount, count);
+        }
+      } catch {}
+      setExistingSubmissionsCount(subCount);
       setAllowReview(!!examData.allow_review);
       const savedEnableMin = !!(
         (examData as any).enable_min_correct_percentage ??
@@ -142,6 +197,16 @@ export default function EditExam() {
       return;
     }
 
+    if (isScale100Scoring(scoring) && !scoringValidation.valid) {
+      toast.error(scoringValidation.message || "Cấu hình thang điểm 100 chưa hợp lệ!");
+      return;
+    }
+
+    if (needsSubmissionConfirmation) {
+      toast.error("Vui lòng xác nhận thay đổi cấu hình tính điểm cho đề thi đã có học sinh làm bài.");
+      return;
+    }
+
     setSaving(true);
 
     const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
@@ -151,7 +216,22 @@ export default function EditExam() {
       ? encryptExamPassword(passwordConfig.password.trim(), id)
       : "";
 
-    const updates = {
+    const baseScoring = isScale100Scoring(scoring)
+      ? reconcileScale100Scoring(examQuestions, scoring)
+      : (scoring as any);
+
+    const finalScoring: any = {
+      ...baseScoring,
+      enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+      min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+    };
+
+    const syncedQuestions =
+      examQuestions && isScale100Scoring(finalScoring) && !Array.isArray(examQuestions) && (examQuestions.partI || examQuestions.partII || examQuestions.partIII)
+        ? attachQuestionScores(examQuestions, finalScoring)
+        : examQuestions;
+
+    const updates: any = {
       title,
       duration_minutes: duration,
       max_attempts: maxAttempts,
@@ -159,11 +239,8 @@ export default function EditExam() {
       shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
       shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
       shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-      scoring: {
-        ...(scoring as any),
-        enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-        min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-      } as any,
+      scoring: finalScoring,
+      ...(syncedQuestions ? { questions: syncedQuestions } : {}),
       allow_review: allowReview,
       display_mode: displayMode,
       instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
@@ -330,34 +407,41 @@ export default function EditExam() {
             </div>
           </div>
 
-          <div className="space-y-3 rounded-lg border p-4 bg-muted/30">
-            <div className="text-sm font-medium">Cài đặt điểm</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Phần I — điểm / câu</Label>
-                <Input type="number" step="0.05" min={0} value={scoring.p1}
-                  onChange={(e) => setScoring({ ...scoring, p1: +e.target.value })} className="mt-1" />
+          <ScoringConfigPanel
+            counts={examCounts}
+            itemCountP2={itemCountP2}
+            scoring={scoring}
+            onChange={(next) => {
+              setScoring(next);
+              if (JSON.stringify(next) === initialScoringSnapshot) {
+                setConfirmPublishedScoringEdit(false);
+              }
+            }}
+            allowLegacyToggle
+          />
+
+          {existingSubmissionsCount > 0 && hasScoringChanged && (
+            <div
+              role="alert"
+              className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-3.5 text-xs space-y-2 text-amber-950 dark:text-amber-200"
+            >
+              <div className="flex items-start gap-2 font-bold">
+                <AlertTriangle className="size-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <span>
+                  Bảo toàn kết quả đã nộp: Đề thi này đã có <strong>{existingSubmissionsCount}</strong> lượt nộp bài. Thay đổi cấu hình điểm sẽ giữ nguyên kết quả các bài đã nộp trước đó và chỉ áp dụng cho các lượt nộp bài mới.
+                </span>
               </div>
-              <div>
-                <Label className="text-xs">Phần III — điểm / câu</Label>
-                <Input type="number" step="0.05" min={0} value={scoring.p3}
-                  onChange={(e) => setScoring({ ...scoring, p3: +e.target.value })} className="mt-1" />
-              </div>
+              <label className="flex items-center gap-2 pl-6 cursor-pointer font-semibold select-none">
+                <input
+                  type="checkbox"
+                  checked={confirmPublishedScoringEdit}
+                  onChange={(e) => setConfirmPublishedScoringEdit(e.target.checked)}
+                  className="rounded border-amber-500 accent-amber-600"
+                />
+                <span>Tôi xác nhận cập nhật cấu hình tính điểm cho các lượt làm bài mới</span>
+              </label>
             </div>
-            <div>
-              <div className="text-xs font-medium mb-1">Phần II — điểm theo số ý đúng</div>
-              <div className="grid grid-cols-4 gap-2">
-                {(["1","2","3","4"] as const).map((k) => (
-                  <div key={k}>
-                    <Label className="text-xs">Đúng {k} ý</Label>
-                    <Input type="number" step="0.05" min={0} value={scoring.p2[k]}
-                      onChange={(e) => setScoring({ ...scoring, p2: { ...scoring.p2, [k]: +e.target.value } })}
-                      className="mt-1" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          )}
 
           <div className="rounded-lg border p-4 space-y-2">
             <Label className="text-sm font-medium">🖥️ Hình thức hiển thị bài kiểm tra</Label>
@@ -544,7 +628,11 @@ export default function EditExam() {
             <Switch id="allow-review" checked={allowReview} onCheckedChange={setAllowReview} />
           </div>
 
-          <Button onClick={onSave} disabled={saving || !title} className="w-full bg-gradient-primary">
+          <Button
+            onClick={onSave}
+            disabled={saving || !title || !scoringValidation.valid || needsSubmissionConfirmation}
+            className="w-full bg-gradient-primary"
+          >
             {saving ? <Loader2 className="size-4 animate-spin mr-2" /> : <Save className="size-4 mr-2" />}
             Lưu cài đặt
           </Button>

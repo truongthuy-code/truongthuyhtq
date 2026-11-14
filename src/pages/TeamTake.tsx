@@ -11,6 +11,7 @@ import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { LeaderboardBoard, rankTeams, LbTeam } from "./TeamLeaderboard";
+import { formatScore } from "@/lib/grading";
 import {
   ChevronLeft,
   ChevronRight,
@@ -387,7 +388,7 @@ export default function TeamTake() {
             <h2 className="text-3xl font-black text-foreground">Nhóm {teamName} đã hoàn thành!</h2>
             <div className="mt-4 flex flex-wrap justify-center gap-4 text-base">
               <span className="px-4 py-2 rounded-2xl bg-primary/10 text-primary font-black border border-primary/20">
-                Tổng điểm: {Number(team?.score || 0).toFixed(2)}
+                Tổng điểm: {formatScore(team?.score || 0)}{team?.max_score ? ` / ${formatScore(team.max_score)}` : ""}
               </span>
               <span className="px-4 py-2 rounded-2xl bg-emerald-500/10 text-emerald-600 font-black border border-emerald-500/20">
                 Số câu đúng: {team?.correct_count || 0} / {questions.length}
@@ -462,7 +463,7 @@ export default function TeamTake() {
           {/* Điểm & Tiến độ */}
           <div className="flex items-center gap-3 text-xs sm:text-sm font-bold">
             <span className="px-3 py-1.5 rounded-xl bg-primary/10 text-primary border border-primary/20 flex items-center gap-1">
-              <Flame className="size-4" /> Điểm: <b>{Number(team?.score || 0).toFixed(2)}</b>
+              <Flame className="size-4" /> Điểm: <b>{formatScore(team?.score || 0)}</b>
             </span>
             <span className="px-3 py-1.5 rounded-xl bg-muted border">
               Đã làm: <b>{answeredCount}</b>/{questions.length}

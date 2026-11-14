@@ -12,26 +12,14 @@ describe("VERIFICATION: -3PX QUESTION AND -2PX OPTION FONT SIZE REDUCTION IN STA
   const teamTakeFilePath = path.resolve(__dirname, "../pages/TeamTake.tsx");
   const teamTakeContent = fs.readFileSync(teamTakeFilePath, "utf-8");
 
-  it("1. Standard mode question stem has been reduced by exactly -3px across all tiers", () => {
-    // Normal content: !text-[30px] sm:!text-[32px] md:!text-[34px] (-3px from 33px/35px/37px)
-    expect(takeContent).toContain('"!text-[30px] sm:!text-[32px] md:!text-[34px]"');
-
-    // Short content: !text-[32px] sm:!text-[34px] md:!text-[38px] (-3px from 35px/37px/41px)
-    expect(takeContent).toContain('"!text-[32px] sm:!text-[34px] md:!text-[38px]"');
-
-    // Long content: !text-[28px] sm:!text-[30px] md:!text-[32px] (-3px from 31px/33px/35px)
-    expect(takeContent).toContain('"!text-[28px] sm:!text-[30px] md:!text-[32px]"');
+  it("1. Standard mode question stem uses 20px bold Times New Roman typography (+2px from 18px)", () => {
+    expect(takeContent).toContain('const stemSizeClass = "!text-[20px]";');
+    expect(takeContent).toContain("standard-question-stem");
   });
 
-  it("2. Standard mode options have been reduced by exactly -2px across all tiers", () => {
-    // Normal content options: !text-[20px] sm:!text-[22px] (-2px from 22px/24px)
-    expect(takeContent).toContain('"!text-[20px] sm:!text-[22px]"');
-
-    // Short content options: !text-[22px] sm:!text-[24px] (-2px from 24px/26px)
-    expect(takeContent).toContain('"!text-[22px] sm:!text-[24px]"');
-
-    // Long content options: !text-[18px] sm:!text-[20px] (-2px from 20px/22px)
-    expect(takeContent).toContain('"!text-[18px] sm:!text-[20px]"');
+  it("2. Standard mode options use compact 17px Times New Roman typography", () => {
+    expect(takeContent).toContain('const optionTextSize = "!text-[17px]";');
+    expect(takeContent).toContain("standard-option-text");
   });
 
   it("3. Team mode questions have been reduced by -3px and options by -2px", () => {
@@ -64,7 +52,7 @@ describe("VERIFICATION: -3PX QUESTION AND -2PX OPTION FONT SIZE REDUCTION IN STA
       "Cần phân tích các đặc điểm của mô hình mạng này.";
 
     const { container } = render(
-      <div className="font-times-new-roman leading-relaxed text-slate-900 question-content font-medium standard-sync-font-size text-[30px] sm:text-[32px] md:text-[34px]">
+      <div className="font-times-new-roman leading-[1.5] text-slate-900 question-content font-bold standard-sync-font-size standard-question-stem !text-[20px]">
         <RichText text={multiParaQuestion} />
       </div>
     );

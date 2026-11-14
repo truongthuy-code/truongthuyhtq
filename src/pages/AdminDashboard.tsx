@@ -58,6 +58,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { formatScore } from "@/lib/grading";
 import {
   getAllTeachers,
   TeacherUser,
@@ -1792,17 +1793,23 @@ export default function AdminDashboard() {
                             {ex?.title || s.exam_id}
                           </TableCell>
                           <TableCell className="text-center font-bold">
-                            <span
-                              className={
-                                Number(s.score) >= 8
-                                  ? "text-emerald-600 font-black"
-                                  : Number(s.score) >= 5
-                                  ? "text-blue-600 font-semibold"
-                                  : "text-rose-600 font-semibold"
-                              }
-                            >
-                              {s.score}/{s.max_score || 10}
-                            </span>
+                            {(() => {
+                              const maxS = Number(s.max_score) || 10;
+                              const ratio = maxS > 0 ? (Number(s.score) || 0) / maxS : 0;
+                              return (
+                                <span
+                                  className={
+                                    ratio >= 0.8
+                                      ? "text-emerald-600 font-black"
+                                      : ratio >= 0.5
+                                      ? "text-blue-600 font-semibold"
+                                      : "text-rose-600 font-semibold"
+                                  }
+                                >
+                                  {formatScore(s.score)}/{formatScore(maxS)}
+                                </span>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell className="text-center text-xs">
                             <span className="text-emerald-600 font-bold">{s.correct_count ?? "—"}</span> /{" "}
@@ -2394,7 +2401,7 @@ export default function AdminDashboard() {
                 <div>
                   <span className="text-muted-foreground text-xs">Điểm số:</span>
                   <div className="font-black text-primary text-base">
-                    {selectedSubDetail.score}/{selectedSubDetail.max_score || 10}
+                    {formatScore(selectedSubDetail.score)}/{formatScore(selectedSubDetail.max_score || 10)}
                   </div>
                 </div>
                 <div>

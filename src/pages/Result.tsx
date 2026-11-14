@@ -6,7 +6,7 @@ import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
 import { Check, X, ShieldAlert, BookOpen, Lock } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
-import { getTFValue } from "@/lib/grading";
+import { formatScore, getTFValue, gradeExam, isScale100Scoring } from "@/lib/grading";
 import { getPublishedExamAnswerKey, getAllSubmissions, isExamOfficiallyClosed } from "@/lib/studentStorage";
 import { findSampleExam } from "@/lib/sampleExams";
 import confetti from "canvas-confetti";
@@ -37,7 +37,8 @@ export default function Result() {
           setSub(submission);
           setExam(examObj);
 
-          if (submission?.score >= 5) {
+          const maxScoreVal = Number(submission?.max_score) || (isScale100Scoring(examObj?.scoring) ? 100 : 10);
+          if ((Number(submission?.score) || 0) >= maxScoreVal * 0.5) {
             try {
               confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
             } catch {}
@@ -71,9 +72,12 @@ export default function Result() {
           answers: matched.answers,
           exam_id: matched.examId,
           submitted_at: matched.submittedAt,
+          scoring_snapshot: matched.scoringSnapshot,
+          part2_summary: matched.partIISummary,
         });
         setExam({
           title: matched.examTitle,
+          scoring: matched.scoringSnapshot || sampleMatch?.scoring,
           allow_review: sampleMatch?.allow_review ?? false,
           questions: sampleMatch?.questions || null,
         });
@@ -117,7 +121,15 @@ export default function Result() {
   const isThresholdActive = isStandard && enableMinCorrect && !isExamClosed;
   const isThresholdFailed = allowReviewAnswers && isThresholdActive && correctRate < threshold - 1e-6;
   const answers = sub.answers || {};
-
+  const effectiveScoring = sub?.scoring_snapshot || sub?.scoringSnapshot || exam?.scoring || null;
+  const partIISummaryFromSub: any[] | null =
+    Array.isArray(sub?.part2_summary)
+      ? sub.part2_summary
+      : Array.isArray(sub?.partIISummary)
+      ? sub.partIISummary
+      : Array.isArray((location.state as any)?.partIISummary)
+      ? (location.state as any).partIISummary
+      : null;
 
   // Helper number matching for Part III
   const numCorrect = (sa: string, expected: string) => {
@@ -127,6 +139,90 @@ export default function Result() {
     const na = parseFloat(a.replace(",", "."));
     const nb = parseFloat(b.replace(",", "."));
     return !isNaN(na) && !isNaN(nb) && Math.abs(na - nb) < 1e-6;
+  };
+
+  /**
+   * Hiển thị trạng thái & điểm Phần II khi giáo viên KHÔNG cho phép xem đáp án
+   * (Tuyệt đối không tiết lộ nội dung câu hỏi, đáp án đúng hay lời giải).
+   */
+  const renderLockedPartIISummary = () => {
+    if (!partIISummaryFromSub || partIISummaryFromSub.length === 0) return null;
+    return (
+      <Card className="p-4 sm:p-5 space-y-3 rounded-2xl border border-indigo-500/25 bg-card/95 backdrop-blur">
+        <div className="flex items-center justify-between gap-2 border-b pb-2.5">
+          <div className="font-bold text-sm text-primary uppercase tracking-wide">
+            Chi tiết điểm Phần II — Đúng / Sai
+          </div>
+          <span className="text-[11px] text-muted-foreground font-medium">
+            Chỉ hiển thị trạng thái & điểm (ẩn đáp án)
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {partIISummaryFromSub.map((item: any, idx: number) => {
+            const qNum = item.questionIndex ?? idx + 1;
+            const statuses: Array<"correct" | "wrong" | "blank"> = Array.isArray(item.itemStatuses)
+              ? item.itemStatuses
+              : [];
+            return (
+              <div key={item.id || idx} className="rounded-xl border p-3 bg-muted/20 space-y-2 text-xs">
+                <div className="font-bold text-sm text-foreground flex items-center justify-between gap-2">
+                  <span>
+                    Câu {qNum}: {formatScore(item.earnedScore)}/{formatScore(item.maxScore)} điểm
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 text-[11px]">
+                    Hưởng {formatScore(item.ratePercent)}%
+                  </span>
+                </div>
+
+                {statuses.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    {statuses.map((st, sIdx) => (
+                      <div
+                        key={sIdx}
+                        className={`rounded-lg border px-2 py-1 flex items-center justify-between ${
+                          st === "correct"
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                            : st === "wrong"
+                            ? "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+                            : "border-border bg-muted/40 text-muted-foreground"
+                        }`}
+                      >
+                        <span className="font-semibold">Ý {String.fromCharCode(97 + sIdx)}</span>
+                        <span className="font-bold">
+                          {st === "correct" ? "Đúng" : st === "wrong" ? "Sai" : "Bỏ trống"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-2 pt-1.5 border-t border-border/60 text-center">
+                  <div>
+                    <div className="text-[11px] text-muted-foreground">Số ý đúng</div>
+                    <div className="font-bold text-foreground">
+                      {item.okItems}/{item.totalItems}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-muted-foreground">Tỷ lệ điểm được hưởng</div>
+                    <div className="font-bold text-indigo-600 dark:text-indigo-400">
+                      {formatScore(item.ratePercent)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-muted-foreground">Điểm đạt được</div>
+                    <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {formatScore(item.earnedScore)}/{formatScore(item.maxScore)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    );
   };
 
   /**
@@ -142,8 +238,10 @@ export default function Result() {
       <div className="my-6 py-7 px-4 rounded-3xl bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 text-white shadow-xl shadow-indigo-500/25 relative overflow-hidden">
         <div className="absolute inset-0 bg-white/5 backdrop-blur-[1px] pointer-events-none" />
         <div className="text-xs uppercase font-bold tracking-widest opacity-90">Tổng điểm đạt được</div>
-        <div className="text-7xl sm:text-8xl font-black leading-none mt-2 drop-shadow-md">{sub.score ?? 0}</div>
-        <div className="text-sm font-semibold opacity-90 mt-2">Thang điểm: / {sub.max_score ?? 10} điểm</div>
+        <div className="text-7xl sm:text-8xl font-black leading-none mt-2 drop-shadow-md">{formatScore(sub.score ?? 0)}</div>
+        <div className="text-sm font-semibold opacity-90 mt-2">
+          Thang điểm: / {formatScore(sub.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10))} điểm
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -210,6 +308,8 @@ export default function Result() {
 
         {renderSummaryCard()}
 
+        {renderLockedPartIISummary()}
+
         {/* Thông báo giáo viên tắt tính năng xem lại đáp án */}
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-xs text-amber-900 dark:text-amber-200 space-y-2">
           <div className="font-bold text-sm flex items-center justify-center gap-1.5">
@@ -263,6 +363,8 @@ export default function Result() {
 
         {renderSummaryCard()}
 
+        {renderLockedPartIISummary()}
+
         {/* Thông báo chưa đạt tỷ lệ đúng tối thiểu */}
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-center text-xs text-amber-950 dark:text-amber-200 space-y-3">
           <div className="font-extrabold text-base flex items-center justify-center gap-2 text-amber-800 dark:text-amber-300">
@@ -307,6 +409,13 @@ export default function Result() {
    */
   const renderReviewPage = () => {
     const ex = exam.questions;
+    const gradeBreakdown = effectiveScoring ? gradeExam(ex, answers, effectiveScoring) : null;
+    const scoreDetailMap = new Map<string, { earnedScore?: number; maxScore?: number; okItems?: number; totalItems?: number; ratePercent?: number }>(
+      (gradeBreakdown?.details || []).map((d) => [d.id, d])
+    );
+    const p2SummaryMap = new Map<string, any>(
+      (gradeBreakdown?.breakdown?.p2?.perQuestion || []).map((p: any) => [p.id, p])
+    );
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-6 px-3 relative selection:bg-primary/20">
         <QuizBackground />
@@ -385,9 +494,20 @@ export default function Result() {
                             <X className="size-4 text-rose-600 dark:text-rose-400" />
                           </div>
                         )}
-                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
-                          <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
-                          <RichText text={q.text} />
+                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed flex-1">
+                          <div className="flex items-start justify-between gap-2 flex-wrap">
+                            <div>
+                              <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                              <RichText text={q.text} />
+                            </div>
+                            {scoreDetailMap.get(q.id)?.maxScore ? (
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full border shrink-0 ${
+                                ok ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30" : "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30"
+                              }`}>
+                                {formatScore(scoreDetailMap.get(q.id)?.earnedScore)}/{formatScore(scoreDetailMap.get(q.id)?.maxScore)}đ
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
 
@@ -475,11 +595,32 @@ export default function Result() {
                 </div>
 
                 {ex.partII.map((q: any, i: number) => {
+                  const p2Info = p2SummaryMap.get(q.id);
+                  const fallbackOkItems = (q.items || []).reduce((acc: number, it: any) => {
+                    const v = getTFValue(answers[q.id], it.key);
+                    return acc + (v !== null && v === !!it.correct ? 1 : 0);
+                  }, 0);
+                  const totalItems = p2Info?.totalItems ?? (q.items?.length || 0);
+                  const okItems = p2Info?.okItems ?? fallbackOkItems;
+                  const earnedScore = p2Info?.earnedScore ?? scoreDetailMap.get(q.id)?.earnedScore;
+                  const maxScore = p2Info?.maxScore ?? scoreDetailMap.get(q.id)?.maxScore;
+                  const ratePercent =
+                    p2Info?.ratePercent ??
+                    scoreDetailMap.get(q.id)?.ratePercent ??
+                    (totalItems > 0 ? Math.round((okItems / totalItems) * 10000) / 100 : 0);
+
                   return (
                     <div key={q.id} className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-3">
-                      <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
-                        <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
-                        <RichText text={q.text} />
+                      <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed flex items-start justify-between gap-2 flex-wrap">
+                        <div>
+                          <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                          <RichText text={q.text} />
+                        </div>
+                        {maxScore ? (
+                          <span className="text-xs font-bold px-2.5 py-0.5 rounded-full border bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/30 shrink-0">
+                            {formatScore(earnedScore)}/{formatScore(maxScore)} điểm
+                          </span>
+                        ) : null}
                       </div>
 
                       <div className="space-y-2">
@@ -540,6 +681,30 @@ export default function Result() {
                         })}
                       </div>
 
+                      {/* Bảng tổng hợp kết quả chi tiết câu Đúng/Sai */}
+                      <div className="rounded-xl border bg-muted/30 overflow-hidden text-xs">
+                        <div className="grid grid-cols-3 divide-x text-center">
+                          <div className="p-2.5">
+                            <div className="text-[11px] text-muted-foreground font-medium">Số ý đúng</div>
+                            <div className="font-extrabold text-sm text-foreground mt-0.5">
+                              {okItems}/{totalItems}
+                            </div>
+                          </div>
+                          <div className="p-2.5">
+                            <div className="text-[11px] text-muted-foreground font-medium">Tỷ lệ điểm được hưởng</div>
+                            <div className="font-extrabold text-sm text-indigo-600 dark:text-indigo-400 mt-0.5">
+                              {formatScore(ratePercent)}%
+                            </div>
+                          </div>
+                          <div className="p-2.5">
+                            <div className="text-[11px] text-muted-foreground font-medium">Điểm đạt được</div>
+                            <div className="font-extrabold text-sm text-emerald-600 dark:text-emerald-400 mt-0.5">
+                              {maxScore ? `${formatScore(earnedScore)}/${formatScore(maxScore)}` : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       {q.explanation && (
                         <div className="mt-3.5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
                           <div className="text-xs font-bold text-primary mb-1 uppercase tracking-wide">
@@ -586,9 +751,20 @@ export default function Result() {
                             <X className="size-4 text-rose-600 dark:text-rose-400" />
                           </div>
                         )}
-                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed">
-                          <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
-                          <RichText text={q.text} />
+                        <div className="font-medium text-foreground text-sm sm:text-base leading-relaxed flex-1">
+                          <div className="flex items-start justify-between gap-2 flex-wrap">
+                            <div>
+                              <span className="font-bold mr-1.5 text-primary">Câu {i + 1}.</span>
+                              <RichText text={q.text} />
+                            </div>
+                            {scoreDetailMap.get(q.id)?.maxScore ? (
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full border shrink-0 ${
+                                ok ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30" : "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30"
+                              }`}>
+                                {formatScore(scoreDetailMap.get(q.id)?.earnedScore)}/{formatScore(scoreDetailMap.get(q.id)?.maxScore)}đ
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
 

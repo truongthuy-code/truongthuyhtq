@@ -5,7 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getTFValue, gradeExam, DEFAULT_SCORING } from "@/lib/grading";
+import {
+  DEFAULT_SCORING,
+  formatScore,
+  getPartIIQuestionScoreDetails,
+  getTFValue,
+  gradeExam,
+  isScale100Scoring,
+  roundFinalScore,
+} from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
 import { findSampleExam, getSampleExamByCode, getSampleExamById, SAMPLE_EXAMS } from "@/lib/sampleExams";
@@ -159,6 +167,29 @@ function normalizeExamQuestions(rawExam: any) {
   }));
 
   return [...p1, ...p2, ...p3];
+}
+
+function getStandardQuestionPart(item: any): 1 | 2 | 3 {
+  const t = String(item?.type || "").trim().toLowerCase();
+  if (t === "tf" || t === "true_false" || t === "true-false" || t === "dung_sai" || t === "part2" || t === "2") {
+    return 2;
+  }
+  if (t === "sa" || t === "short_answer" || t === "short-answer" || t === "tra_loi_ngan" || t === "part3" || t === "3") {
+    return 3;
+  }
+  if (t === "mc" || t === "mcq" || t === "multiple_choice" || t === "part1" || t === "1") {
+    return 1;
+  }
+  if (item?._part === 1 || item?._part === 2 || item?._part === 3) {
+    return item._part;
+  }
+  if (Array.isArray(item?.items) && item.items.length > 0) {
+    return 2;
+  }
+  if (Array.isArray(item?.options) && item.options.length > 0) {
+    return 1;
+  }
+  return 3;
 }
 
 export default function Take() {
@@ -462,6 +493,29 @@ export default function Take() {
       cancelled = true;
     };
   }, [id, location.search, navigate]);
+
+  // Hydrate scoring configuration for UUID exams if RPC didn't return scoring field
+  useEffect(() => {
+    if (!exam?.id || exam.scoring) return;
+    const localMatch = getLocalStoredExams().find((e) => e.id === exam.id);
+    if (localMatch?.scoring) {
+      setExam((prev: any) => (prev && !prev.scoring ? { ...prev, scoring: localMatch.scoring } : prev));
+      return;
+    }
+    if (!isUuid(exam.id)) return;
+    fetch("/api/submit-exam", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get_scoring", examId: exam.id }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.scoring) {
+          setExam((prev: any) => (prev && !prev.scoring ? { ...prev, scoring: d.scoring } : prev));
+        }
+      })
+      .catch(() => {});
+  }, [exam?.id, exam?.scoring]);
 
   // Persist progress
   useEffect(() => {
@@ -770,31 +824,64 @@ export default function Take() {
 
     let submissionId = "";
     let sInfo: any = null;
+    let apiComputed: any = null;
 
     const durSec = startedAtRef.current
       ? Math.max(0, Math.floor((Date.now() - new Date(startedAtRef.current).getTime()) / 1000))
       : 0;
 
-    try {
-      const { data, error } = await supabase.rpc("submit_student_exam", {
-        p_exam_id: currentExamId,
-        p_student_name: name || "Học sinh",
-        p_student_class: klass || "Chung",
-        p_answers: answers as any,
-        p_violations: lock.violations as any,
-        p_violation_count: lock.violationCount,
-        p_started_at: startedAtRef.current || new Date().toISOString(),
-        p_duration_seconds: durSec,
-      } as any);
+    // 1. Try unified server API (/api/submit-exam) for exact Scale-100 / legacy TypeScript grading
+    if (isUuid(currentExamId)) {
+      try {
+        const apiRes = await fetch("/api/submit-exam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            examId: currentExamId,
+            studentName: name || "Học sinh",
+            studentClass: klass || "Chung",
+            answers,
+            violations: lock.violations,
+            violationCount: lock.violationCount,
+            startedAt: startedAtRef.current || new Date().toISOString(),
+            durationSeconds: durSec,
+          }),
+        });
+        if (apiRes.ok) {
+          const apiData = await apiRes.json();
+          apiComputed = apiData?.computed || apiData;
+          if (!apiData?.fallback && apiData?.id && apiData?.submission) {
+            submissionId = apiData.id;
+            sInfo = apiData.submission;
+          }
+        }
+      } catch {}
+    }
 
-      if (!error && data) {
-        submissionId = data;
-        const { data: subData } = await supabase.rpc("get_submission_for_student", { p_submission_id: data });
-        sInfo = (subData as any)?.submission;
-      }
-    } catch {}
+    // 2. Fallback to Supabase RPC submit_student_exam
+    if (!submissionId) {
+      try {
+        const { data, error } = await supabase.rpc("submit_student_exam", {
+          p_exam_id: currentExamId,
+          p_student_name: name || "Học sinh",
+          p_student_class: klass || "Chung",
+          p_answers: answers as any,
+          p_violations: lock.violations as any,
+          p_violation_count: lock.violationCount,
+          p_started_at: startedAtRef.current || new Date().toISOString(),
+          p_duration_seconds: durSec,
+        } as any);
 
-    // Fallback: If Supabase submission failed or exam is sample/local, grade locally!
+        if (!error && data) {
+          submissionId = data;
+          const { data: subData } = await supabase.rpc("get_submission_for_student", { p_submission_id: data });
+          sInfo = (subData as any)?.submission;
+        }
+      } catch {}
+    }
+
+    // 3. Fallback: If Supabase submission failed or exam is sample/local, grade locally!
+    let localPartIISummary: any[] | undefined;
     if (!submissionId) {
       submissionId = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const gradeResult = gradeExam(
@@ -806,6 +893,7 @@ export default function Take() {
         answers,
         exam?.scoring || DEFAULT_SCORING
       );
+      localPartIISummary = gradeResult.partIISummary;
       sInfo = {
         score: gradeResult.score,
         max_score: gradeResult.maxScore,
@@ -813,6 +901,11 @@ export default function Take() {
         wrong_count: gradeResult.wrong,
       };
     }
+
+    const scoringSnapshot =
+      sInfo?.scoring_snapshot || apiComputed?.scoringSnapshot || exam?.scoring || null;
+    const partIISummary =
+      sInfo?.part2_summary || apiComputed?.partIISummary || localPartIISummary || undefined;
 
     if (doneKey) {
       try {
@@ -838,7 +931,7 @@ export default function Take() {
         studentName: name.trim() || "Học sinh",
         studentClass: klass.trim() || "Chung",
         score: sInfo?.score ?? 0,
-        maxScore: sInfo?.max_score ?? 10,
+        maxScore: sInfo?.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10),
         correctCount: sInfo?.correct_count ?? 0,
         wrongCount: sInfo?.wrong_count ?? 0,
         answers: answers as any,
@@ -848,6 +941,8 @@ export default function Take() {
         status: "completed",
         allowReview: !!exam?.allow_review,
         questions: (!!exam?.allow_review || isExamClosed) ? exam?.questions : undefined,
+        scoringSnapshot,
+        partIISummary,
       });
     } catch (e) {
       console.error("Failed to link student submission:", e);
@@ -879,11 +974,13 @@ export default function Take() {
           student_name: name.trim() || "Học sinh",
           student_class: klass.trim() || "Chung",
           score: sInfo?.score ?? 0,
-          max_score: sInfo?.max_score ?? 10,
+          max_score: sInfo?.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10),
           correct_count: sInfo?.correct_count ?? 0,
           wrong_count: sInfo?.wrong_count ?? 0,
           answers,
           exam_id: currentExamId,
+          scoring_snapshot: scoringSnapshot,
+          part2_summary: partIISummary,
         },
         exam: exam
           ? {
@@ -1584,11 +1681,24 @@ export default function Take() {
           if (ok) okItems++;
           return { key: it.key, correct: it.correct, student: stuVal };
         });
+        const p2Count = questions.filter((qq) => qq._part === 2 || qq.type === "tf").length;
+        const maxPts =
+          isScale100Scoring(exam?.scoring) && p2Count > 0
+            ? (exam.scoring.parts.p2 || 0) / p2Count
+            : undefined;
+        const qScore =
+          maxPts !== undefined && items.length > 0
+            ? getPartIIQuestionScoreDetails(okItems, items.length, maxPts, exam?.scoring)
+            : getPartIIQuestionScoreDetails(okItems, items.length, 100, exam?.scoring);
         return {
           type: "tf",
           correct: items.length > 0 && okItems === items.length,
           okItems,
           totalItems: items.length,
+          ratePercent: qScore.ratePercent,
+          ...(maxPts !== undefined
+            ? { maxPoints: roundFinalScore(maxPts), earnedPoints: qScore.earnedScore }
+            : {}),
           items: evItems,
           explanation: qData.explanation || "",
         };
@@ -2348,7 +2458,9 @@ export default function Take() {
                 {qFb.correct ? "✓ Chính xác!" : "✗ Chưa chính xác!"}
                 {qFb.type === "tf" && (
                   <span className="ml-3 text-sm sm:text-base font-bold text-foreground">
-                    (Đúng {qFb.okItems}/{qFb.totalItems} ý)
+                    (Đúng {qFb.okItems}/{qFb.totalItems} ý
+                    {qFb.ratePercent !== undefined ? ` • Hưởng ${formatScore(qFb.ratePercent)}%` : ""}
+                    {qFb.maxPoints ? ` • ${formatScore(qFb.earnedPoints)}/${formatScore(qFb.maxPoints)}đ` : ""})
                   </span>
                 )}
               </div>
@@ -2388,6 +2500,27 @@ export default function Take() {
   // =========================================================================
   // GIAO DIỆN CHẾ ĐỘ TIÊU CHUẨN: KHU VỰC BÊN TRÁI VÀ BÊN PHẢI (CHUẨN YÊU CẦU)
   // =========================================================================
+
+  const handleStandardAnswer = (targetQ: any, questionIndexOverride?: number) => {
+    if (!targetQ) return;
+    if (checkingQId === targetQ.id) return;
+
+    // 1. Kiểm tra nếu học sinh chưa chọn/nhập câu trả lời
+    if (!isAnswered(targetQ)) {
+      toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
+      return;
+    }
+
+    // 2. Nếu giáo viên BẬT tính năng instant_feedback:
+    if (instantFb) {
+      if (feedback[targetQ.id]) return;
+      checkQuestion(targetQ);
+    } else {
+      // 3. Nếu giáo viên KHÔNG BẬT tính năng instant_feedback:
+      const qNum = (questionIndexOverride ?? idx) + 1;
+      toast.success(`Đã ghi nhận câu trả lời cho Câu ${qNum}!`);
+    }
+  };
 
   // KHU VỰC BÊN TRÁI: HIỂN THỊ MỘT CÂU HỎI TẠI MỘT THỜI ĐIỂM + CÁC NÚT ĐIỀU HƯỚNG
   const renderStandardQuestionCard = (currentQ: any, questionIndex: number) => {
@@ -2438,60 +2571,31 @@ export default function Take() {
       return len < 150 && !hasTables && !hasImages && !hasCode;
     })();
 
-    const stemSizeClass = isContentShort
-      ? "!text-[32px] sm:!text-[34px] md:!text-[38px]"
-      : isContentLong
-      ? "!text-[28px] sm:!text-[30px] md:!text-[32px]"
-      : "!text-[30px] sm:!text-[32px] md:!text-[34px]";
+    const stemSizeClass = "!text-[20px]";
+    const optionTextSize = "!text-[17px]";
 
-    const optionTextSize = isContentShort
-      ? "!text-[22px] sm:!text-[24px]"
-      : isContentLong
-      ? "!text-[18px] sm:!text-[20px]"
-      : "!text-[20px] sm:!text-[22px]";
-
-    const cardPadding = isContentLong ? "p-4 sm:p-5" : isContentShort ? "p-6 sm:p-7" : "p-5 sm:p-6";
-    const itemSpacing = isContentLong ? "space-y-2" : isContentShort ? "space-y-3" : "space-y-2.5";
-
-    const handleStandardAnswer = (targetQ: any) => {
-      if (!targetQ) return;
-      if (checkingQId === targetQ.id) return;
-
-      // 1. Kiểm tra nếu học sinh chưa chọn/nhập câu trả lời
-      if (!isAnswered(targetQ)) {
-        toast.warning("Vui lòng chọn hoặc nhập câu trả lời trước khi nhấn Trả lời!");
-        return;
-      }
-
-      // 2. Nếu giáo viên BẬT tính năng instant_feedback:
-      if (instantFb) {
-        if (feedback[targetQ.id]) return;
-        checkQuestion(targetQ);
-      } else {
-        // 3. Nếu giáo viên KHÔNG BẬT tính năng instant_feedback:
-        toast.success(`Đã ghi nhận câu trả lời cho Câu ${questionIndex + 1}!`);
-      }
-    };
+    const cardPadding = "p-3 sm:p-4";
+    const itemSpacing = "space-y-1.5";
 
     return (
       <Card
         key={currentQ.id}
-        className={`w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-md ${cardPadding} flex flex-col justify-between`}
+        className={`w-full min-w-0 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm ${cardPadding} flex flex-col justify-between font-times-new-roman`}
       >
         <div className="flex-1 flex flex-col justify-start">
-          {/* Header câu hỏi: Số câu, Loại câu & Nút Đánh dấu */}
-          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-200">
+          {/* Header câu hỏi: Số câu, Tiêu đề phần thi (18px) & Nút Đánh dấu (14px) */}
+          <div className="flex items-center justify-between gap-2 mb-2 pb-1.5 border-b border-slate-200 dark:border-slate-800 flex-wrap">
+            <div className="flex items-baseline gap-1.5">
+              <span className="font-bold text-[18px] text-slate-900 dark:text-slate-100 font-times-new-roman">
                 Câu {questionIndex + 1}
               </span>
-              <span className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm font-medium">
+              <span className="text-slate-500 dark:text-slate-400 text-[14px] font-medium standard-secondary-text">
                 / {questions.length}
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs sm:text-sm border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-[18px] border border-slate-200 dark:border-slate-700 standard-part-title">
                 {currentQ._part === 1
                   ? "PHẦN I – Trắc nghiệm"
                   : currentQ._part === 2
@@ -2503,10 +2607,10 @@ export default function Take() {
               <button
                 type="button"
                 onClick={() => toggleBookmark(currentQ.id)}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[14px] font-semibold border transition-all standard-secondary-text ${
                   isCurrentMarked
                     ? "border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 shadow-xs"
-                    : "border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    : "border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
                 }`}
                 title="Đánh dấu câu hỏi để xem lại"
               >
@@ -2516,13 +2620,11 @@ export default function Take() {
             </div>
           </div>
 
-          {/* Nội dung câu hỏi (Font Times New Roman, trừ code/pre) */}
+          {/* Nội dung câu hỏi (20px, in đậm 700, Font Times New Roman, trừ code/pre/katex/table) */}
           <div
-            className={`font-times-new-roman leading-relaxed text-slate-900 dark:text-slate-100 question-content font-medium standard-sync-font-size standard-question-stem ${
+            className={`font-times-new-roman leading-[1.5] text-slate-900 dark:text-slate-100 question-content font-bold break-words standard-sync-font-size standard-question-stem ${
               isContentShort ? "is-short" : isContentLong ? "is-long" : ""
-            } ${
-              isContentLong ? "mb-3" : "mb-4 sm:mb-5"
-            } ${stemSizeClass}`}
+            } mb-2.5 ${stemSizeClass}`}
           >
             <RichText text={currentQ.text} />
           </div>
@@ -2550,7 +2652,7 @@ export default function Take() {
                   return (
                     <label
                       key={optKey}
-                      className={`group flex items-start sm:items-center gap-3 sm:gap-3.5 p-3 sm:p-3.5 rounded-xl border transition-all duration-150 select-none ${
+                      className={`group flex items-start sm:items-center gap-2.5 px-2.5 py-2 rounded-lg border transition-all duration-150 select-none ${
                         qFb
                           ? "cursor-not-allowed"
                           : "cursor-pointer"
@@ -2574,7 +2676,7 @@ export default function Take() {
                       />
                       {/* Vòng tròn radio */}
                       <div
-                        className={`size-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 transition-colors ${
+                        className={`size-[18px] rounded-full border-2 flex items-center justify-center shrink-0 mt-1 sm:mt-0 transition-colors ${
                           qFb
                             ? isCorrectOpt
                               ? "border-emerald-600 bg-emerald-600 text-white"
@@ -2591,20 +2693,20 @@ export default function Take() {
                         )}
                       </div>
 
-                      {/* Chữ cái A/B/C/D + Nội dung phương án (Font Times New Roman) */}
-                      <div className={`flex-1 font-times-new-roman leading-relaxed break-words ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}>
+                      {/* Chữ cái A/B/C/D + Nội dung phương án (17px, Font Times New Roman) */}
+                      <div className={`flex-1 font-times-new-roman leading-[1.42] break-words ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}>
                         <span className="font-bold mr-1.5">{optLetter}.</span>
                         <RichText text={opt.text} />
                       </div>
 
                       {/* Phản hồi tức thì */}
                       {isCorrectOpt && (
-                        <span className="shrink-0 px-2.5 py-0.5 rounded-md bg-emerald-500 text-white font-bold text-xs whitespace-nowrap shadow-xs">
+                        <span className="shrink-0 px-2 py-0.5 rounded-md bg-emerald-500 text-white font-bold text-[13px] whitespace-nowrap shadow-xs">
                           ✓ Đúng
                         </span>
                       )}
                       {qFb && isChosen && !isCorrectOpt && (
-                        <span className="shrink-0 px-2.5 py-0.5 rounded-md bg-rose-500 text-white font-bold text-xs whitespace-nowrap shadow-xs">
+                        <span className="shrink-0 px-2 py-0.5 rounded-md bg-rose-500 text-white font-bold text-[13px] whitespace-nowrap shadow-xs">
                           ✗ Bạn chọn
                         </span>
                       )}
@@ -2618,7 +2720,7 @@ export default function Take() {
           {/* PHẦN II: Trắc nghiệm Đúng / Sai (Nút Đúng/Sai bên TRÁI, nhận định bên PHẢI) */}
           {currentQ.type === "tf" && (
             <div className={`${itemSpacing} w-full`}>
-              <div className="text-xs sm:text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+              <div className="text-[14px] font-semibold text-slate-600 dark:text-slate-400 mb-1 standard-secondary-text">
                 Chọn <b className="text-teal-600 dark:text-teal-400">Đúng</b> hoặc{" "}
                 <b className="text-rose-600 dark:text-rose-400">Sai</b> cho từng ý:
               </div>
@@ -2640,7 +2742,7 @@ export default function Take() {
                   return (
                     <div
                       key={itemKey}
-                      className={`rounded-xl border p-3 sm:p-3.5 flex items-start sm:items-center gap-3 transition-all ${
+                      className={`rounded-lg border px-2.5 py-2 flex items-start sm:items-center gap-2.5 transition-all ${
                         itOk === true
                           ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/30"
                           : itOk === false
@@ -2656,7 +2758,7 @@ export default function Take() {
                           type="button"
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, true)}
-                          className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold border transition-all ${
+                          className={`px-2.5 sm:px-3 py-1 rounded-md text-[14px] font-bold border transition-all ${
                             qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
                           } ${
                             val === true
@@ -2670,7 +2772,7 @@ export default function Take() {
                           type="button"
                           disabled={!!qFb}
                           onClick={() => setTF(currentQ, itemKey, false)}
-                          className={`px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold border transition-all ${
+                          className={`px-2.5 sm:px-3 py-1 rounded-md text-[14px] font-bold border transition-all ${
                             qFb ? "cursor-not-allowed opacity-90" : "cursor-pointer"
                           } ${
                             val === false
@@ -2682,15 +2784,15 @@ export default function Take() {
                         </button>
                       </div>
 
-                      {/* BÊN PHẢI: Ký hiệu ý a), b)... và nội dung nhận định (Font Times New Roman) */}
+                      {/* BÊN PHẢI: Ký hiệu ý a), b)... và nội dung nhận định (17px, Font Times New Roman) */}
                       <div
-                        className={`flex-1 font-times-new-roman leading-relaxed break-words text-slate-900 dark:text-slate-100 ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}
+                        className={`flex-1 font-times-new-roman leading-[1.42] break-words text-slate-900 dark:text-slate-100 ${optionTextSize} standard-sync-font-size standard-option-text ${isContentShort ? "is-short" : isContentLong ? "is-long" : ""}`}
                       >
                         <span className="font-bold mr-1.5">{label})</span>
                         <RichText text={it.text} />
                         {fbIt && (
                           <span
-                            className={`block mt-1 text-xs font-bold ${
+                            className={`block mt-1 text-[14px] font-bold standard-secondary-text ${
                               itOk ? "text-emerald-600" : "text-rose-600"
                             }`}
                           >
@@ -2705,10 +2807,10 @@ export default function Take() {
             </div>
           )}
 
-          {/* PHẦN III: Trả lời ngắn */}
+          {/* PHẦN III: Trả lời ngắn (17px phương án trả lời, 14px thông tin phụ) */}
           {currentQ.type === "sa" && (
-            <div className="mt-3 w-full max-w-2xl">
-              <Label className="!text-[28px] sm:!text-[30px] font-bold text-slate-800 dark:text-slate-200 block mb-2 font-times-new-roman standard-sync-font-size">
+            <div className="mt-2 w-full max-w-3xl">
+              <Label className="!text-[18px] font-bold text-slate-800 dark:text-slate-200 block mb-1.5 font-times-new-roman standard-sync-font-size">
                 Nhập câu trả lời của bạn:
               </Label>
               <Input
@@ -2721,10 +2823,10 @@ export default function Take() {
                   }
                 }}
                 disabled={!!qFb}
-                className="h-12 sm:h-14 text-[22px] sm:text-[24px] font-times-new-roman font-semibold rounded-xl px-4 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
+                className="h-10 sm:h-11 !text-[17px] font-times-new-roman font-semibold rounded-lg px-3.5 border shadow-inner bg-white dark:bg-slate-900 text-foreground disabled:opacity-90 disabled:cursor-not-allowed"
                 placeholder="Nhập câu trả lời hoặc số liệu..."
               />
-              <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
+              <div className="mt-1.5 text-[14px] text-muted-foreground flex items-center justify-between standard-secondary-text">
                 <span>
                   {answers[currentQ.id] ? (
                     <span className="text-teal-600 font-bold">✓ Đã lưu câu trả lời</span>
@@ -2735,7 +2837,7 @@ export default function Take() {
                 <span>Chấm điểm tự động</span>
               </div>
               {qFb && (
-                <div className="mt-3 text-sm sm:text-base font-times-new-roman rounded-xl bg-slate-50 dark:bg-slate-800/80 p-3 border">
+                <div className="mt-2 text-[17px] font-times-new-roman rounded-lg bg-slate-50 dark:bg-slate-800/80 p-2.5 border standard-option-text">
                   {qFb.correct ? "Đáp án: " : "Đáp án đúng: "}
                   <b className="text-emerald-600">
                     <RichText text={String(qFb.answer ?? "")} />
@@ -2748,16 +2850,16 @@ export default function Take() {
           {/* HỘP HIỂN THỊ ĐÁP ÁN ĐÚNG & LỜI GIẢI (CHỈ KHI instantFb VÀ ĐÃ BẤM TRẢ LỜI -> CÓ qFb) */}
           {instantFb && qFb && (
             <div
-              className={`mt-4 rounded-2xl border p-4 sm:p-5 shadow-xs transition-all animate-fade-in ${
+              className={`mt-2.5 rounded-xl border p-3 shadow-xs transition-all animate-fade-in font-times-new-roman ${
                 qFb.correct
                   ? "border-emerald-500/70 bg-emerald-50/60 dark:bg-emerald-950/30"
                   : "border-rose-500/70 bg-rose-50/60 dark:bg-rose-950/30"
               }`}
             >
               {/* 1. Trạng thái Đúng / Sai */}
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
                 <div
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-sm sm:text-base shadow-xs ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold text-[14px] shadow-xs ${
                     qFb.correct ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"
                   }`}
                 >
@@ -2775,15 +2877,17 @@ export default function Take() {
                 </div>
 
                 {qFb.type === "tf" && (
-                  <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 px-3 py-1 rounded-lg border">
+                  <span className="text-[14px] font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 px-2.5 py-0.5 rounded-lg border standard-secondary-text">
                     Đúng {qFb.okItems}/{qFb.totalItems} ý
+                    {qFb.ratePercent !== undefined ? ` • Hưởng ${formatScore(qFb.ratePercent)}%` : ""}
+                    {qFb.maxPoints ? ` • ${formatScore(qFb.earnedPoints)}/${formatScore(qFb.maxPoints)}đ` : ""}
                   </span>
                 )}
               </div>
 
               {/* 2. Hiển thị Đáp án đúng */}
               {qFb.type === "mc" && (
-                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border text-xs sm:text-sm font-times-new-roman">
+                <div className="mt-2 p-2.5 rounded-lg bg-white dark:bg-slate-900 border text-[15px] font-times-new-roman">
                   <span className="font-semibold text-slate-500">Đáp án đúng: </span>
                   <span className="font-bold text-emerald-600">
                     {(() => {
@@ -2807,7 +2911,7 @@ export default function Take() {
               )}
 
               {qFb.type === "sa" && (
-                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border text-xs sm:text-sm font-times-new-roman">
+                <div className="mt-2 p-2.5 rounded-lg bg-white dark:bg-slate-900 border text-[15px] font-times-new-roman">
                   <span className="font-semibold text-slate-500">Đáp án đúng: </span>
                   <span className="font-bold text-emerald-600">
                     <RichText text={String(qFb.answer ?? "")} />
@@ -2816,18 +2920,18 @@ export default function Take() {
               )}
 
               {qFb.type === "tf" && qFb.items && (
-                <div className="mt-3 p-3 rounded-xl bg-white dark:bg-slate-900 border space-y-2">
-                  <div className="font-semibold text-xs text-slate-500 mb-1">
+                <div className="mt-2 p-2.5 rounded-lg bg-white dark:bg-slate-900 border space-y-1.5">
+                  <div className="font-semibold text-[14px] text-slate-500 standard-secondary-text">
                     Đáp án chi tiết từng ý:
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                     {qFb.items.map((it: any, iIdx: number) => {
                       const lbl = String.fromCharCode(97 + iIdx);
                       const isItCorrect = it.student !== null && it.student === it.correct;
                       return (
                         <div
                           key={it.key || iIdx}
-                          className={`p-2 rounded-lg border text-xs flex items-center justify-between font-times-new-roman ${
+                          className={`px-2.5 py-1.5 rounded-md border text-[14px] flex items-center justify-between font-times-new-roman ${
                             isItCorrect
                               ? "bg-emerald-50/80 border-emerald-300 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
                               : "bg-rose-50/80 border-rose-300 text-rose-800 dark:bg-rose-950/30 dark:text-rose-300"
@@ -2847,12 +2951,12 @@ export default function Take() {
 
               {/* 3. Lời giải chi tiết */}
               {qFb.explanation && typeof qFb.explanation === "string" && qFb.explanation.trim() !== "" && (
-                <div className="mt-3 rounded-xl bg-white dark:bg-slate-900 p-3 sm:p-4 border font-times-new-roman">
-                  <div className="font-bold text-teal-700 dark:text-teal-400 text-xs sm:text-sm mb-1 flex items-center gap-1.5">
+                <div className="mt-2 rounded-lg bg-white dark:bg-slate-900 p-2.5 border font-times-new-roman">
+                  <div className="font-bold text-teal-700 dark:text-teal-400 text-[14px] mb-1 flex items-center gap-1.5 standard-secondary-text">
                     <Sparkles className="size-4" />
                     <span>Lời giải chi tiết:</span>
                   </div>
-                  <div className="whitespace-pre-wrap leading-relaxed font-normal text-slate-800 dark:text-slate-200 text-xs sm:text-sm">
+                  <div className="whitespace-pre-wrap leading-relaxed font-normal text-slate-800 dark:text-slate-200 text-[15px]">
                     <RichText text={qFb.explanation} />
                   </div>
                 </div>
@@ -2860,178 +2964,247 @@ export default function Take() {
             </div>
           )}
         </div>
-
-        {/* NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Trả lời | Câu sau › */}
-        <div className="flex items-center justify-between gap-2.5 mt-5 pt-4 border-t border-slate-200 dark:border-slate-800">
-          {/* Nút Câu trước: disabled khi ở Câu 1 (idx === 0) */}
-          <Button
-            type="button"
-            variant="outline"
-            disabled={questionIndex === 0}
-            onClick={() => setIdx((prev) => Math.max(0, prev - 1))}
-            className="rounded-xl font-semibold h-10 sm:h-11 px-3 sm:px-5 text-xs sm:text-sm border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1.5"
-          >
-            <ChevronLeft className="size-4" />
-            <span>‹ Câu trước</span>
-          </Button>
-
-          {/* Giữa: Nút Trả lời (cho phép ghi nhận đáp án hoặc hiển thị phản hồi tức thì nếu instantFb) */}
-          <div className="flex items-center justify-center">
-            {qFb ? (
-              <Button
-                type="button"
-                disabled
-                className="rounded-xl font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed flex items-center gap-1.5 px-3.5 sm:px-4 h-10 sm:h-11 text-xs sm:text-sm select-none"
-              >
-                <CheckCircle2 className="size-4 text-emerald-600" />
-                <span>Đã trả lời</span>
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                onClick={() => handleStandardAnswer(currentQ)}
-                disabled={checkingQId === currentQ.id}
-                className="rounded-xl font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 px-3.5 sm:px-5 h-10 sm:h-11 text-xs sm:text-sm active:scale-95"
-              >
-                {checkingQId === currentQ.id ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    <span>Kiểm tra...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="size-4" />
-                    <span>Trả lời</span>
-                  </>
-                )}
-              </Button>
-            )}
-          </div>
-
-          {/* Nút Câu sau: ở câu cuối chuyển thành nút Nộp bài */}
-          {questionIndex >= questions.length - 1 ? (
-            <Button
-              type="button"
-              onClick={() => setConfirmOpen(true)}
-              className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold h-10 sm:h-11 px-4 sm:px-6 text-xs sm:text-sm shadow-sm flex items-center gap-1.5 transition-transform active:scale-95"
-            >
-              <span>Nộp bài</span>
-              <Send className="size-3.5" />
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={() => setIdx((prev) => Math.min(questions.length - 1, prev + 1))}
-              className="bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold h-10 sm:h-11 px-4 sm:px-6 text-xs sm:text-sm shadow-sm flex items-center gap-1.5 transition-transform active:scale-95"
-            >
-              <span>Câu sau ›</span>
-            </Button>
-          )}
-        </div>
       </Card>
     );
   };
 
-  // KHU VỰC BÊN PHẢI: DANH SÁCH CÂU + CHÚ THÍCH + NÚT NỘP BÀI (5 CỘT TRÊN MÁY TÍNH)
-  const renderStandardQuestionListCard = () => {
+  // THANH ĐIỀU KHIỂN LÀM BÀI CỐ ĐỊNH (STICKY) DƯỚI KHUNG CÂU HỎI – CHẾ ĐỘ TIÊU CHUẨN
+  const renderStandardControlsBar = (currentQ: any, questionIndex: number) => {
+    if (!currentQ) return null;
+    const qFb = feedback[currentQ.id];
+    const navBtnClass =
+      "bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold h-9 sm:h-10 px-3 sm:px-4 text-[14px] shadow-xs flex items-center gap-1 transition-transform active:scale-95 disabled:opacity-45 disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:text-slate-500 dark:disabled:text-slate-400 disabled:shadow-none disabled:cursor-not-allowed";
+
     return (
-      <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-md p-4 sm:p-5 space-y-4">
+      /* NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Trả lời | Câu sau › */
+      <div
+        data-standard-controls="true"
+        className="sticky bottom-2 z-20 w-full rounded-xl border border-slate-200/95 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-md px-2.5 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 font-times-new-roman"
+      >
+        <Button
+          type="button"
+          disabled={questionIndex === 0}
+          onClick={() => setIdx((prev) => Math.max(0, prev - 1))}
+          className={navBtnClass}
+        >
+          <span>‹ Câu trước</span>
+        </Button>
+
+        <div className="flex items-center gap-2">
+          {qFb ? (
+            <Button
+              type="button"
+              disabled
+              className="rounded-lg font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 border border-slate-200 dark:border-slate-700 cursor-not-allowed flex items-center gap-1.5 px-3 sm:px-4 h-9 sm:h-10 text-[14px] select-none"
+            >
+              <CheckCircle2 className="size-4 text-emerald-600" />
+              <span>Đã trả lời</span>
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => handleStandardAnswer(currentQ)}
+              disabled={checkingQId === currentQ.id}
+              className="rounded-lg font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 px-3 sm:px-4 h-9 sm:h-10 text-[14px] active:scale-95"
+            >
+              {checkingQId === currentQ.id ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>Kiểm tra...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="size-4" />
+                  <span>Trả lời</span>
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+
+        <Button
+          type="button"
+          disabled={questionIndex >= questions.length - 1}
+          onClick={() => setIdx((prev) => Math.min(questions.length - 1, prev + 1))}
+          className={navBtnClass}
+        >
+          <span>Câu sau ›</span>
+        </Button>
+      </div>
+    );
+  };
+
+  // KHU VỰC BÊN PHẢI: DANH SÁCH CÂU PHÂN CHIA THEO TỪNG PHẦN + CHÚ THÍCH + NÚT NỘP BÀI
+  const renderStandardQuestionListCard = () => {
+    const partDefs: Array<{
+      part: 1 | 2 | 3;
+      title: string;
+      headerClass: string;
+      badgeClass: string;
+      borderClass: string;
+      items: Array<{ item: any; index: number }>;
+    }> = [
+      {
+        part: 1,
+        title: "PHẦN I – TRẮC NGHIỆM NHIỀU LỰA CHỌN",
+        headerClass: "bg-sky-50 dark:bg-sky-950/50 text-sky-900 dark:text-sky-100 border-sky-200 dark:border-sky-800",
+        badgeClass: "bg-sky-100 dark:bg-sky-900/70 text-sky-800 dark:text-sky-200 border-sky-200 dark:border-sky-700",
+        borderClass: "border-sky-200/80 dark:border-sky-900/70",
+        items: [],
+      },
+      {
+        part: 2,
+        title: "PHẦN II – TRẮC NGHIỆM ĐÚNG/SAI",
+        headerClass: "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 border-amber-200 dark:border-amber-800",
+        badgeClass: "bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-700",
+        borderClass: "border-amber-200/80 dark:border-amber-900/70",
+        items: [],
+      },
+      {
+        part: 3,
+        title: "PHẦN III – TRẮC NGHIỆM TRẢ LỜI NGẮN",
+        headerClass: "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-100 border-indigo-200 dark:border-indigo-800",
+        badgeClass: "bg-indigo-100 dark:bg-indigo-900/70 text-indigo-800 dark:text-indigo-200 border-indigo-200 dark:border-indigo-700",
+        borderClass: "border-indigo-200/80 dark:border-indigo-900/70",
+        items: [],
+      },
+    ];
+
+    questions.forEach((item, index) => {
+      const partNum = getStandardQuestionPart(item);
+      const targetGroup = partDefs.find((g) => g.part === partNum);
+      if (targetGroup) {
+        targetGroup.items.push({ item, index });
+      }
+    });
+
+    const visibleGroups = partDefs.filter((g) => g.items.length > 0);
+    const minCellWidth = questions.length > 45 ? "36px" : "40px";
+
+    return (
+      <Card className="w-full min-w-0 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-2.5 sm:p-3 space-y-2 font-times-new-roman">
         {/* Header danh sách câu */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center justify-between pb-1.5 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <div className="size-7 rounded-lg bg-teal-50 dark:bg-teal-950/60 text-teal-600 flex items-center justify-center font-bold">
               <LayoutGrid className="size-4" />
             </div>
             <div>
-              <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
+              <h3 className="font-bold text-[18px] leading-tight text-slate-900 dark:text-slate-100 standard-part-title">
                 DANH SÁCH CÂU
               </h3>
-              <p className="text-[11px] text-slate-500 font-medium">
+              <p className="text-[14px] text-slate-500 font-medium standard-secondary-text">
                 Tổng số {questions.length} câu
               </p>
             </div>
           </div>
           <div className="text-right">
-            <span className="text-[11px] font-medium text-slate-500 block">Đã làm</span>
-            <span className="font-bold text-xs sm:text-sm text-teal-600">
+            <span className="text-[14px] font-medium text-slate-500 block leading-tight standard-secondary-text">
+              Đã làm
+            </span>
+            <span className="font-bold text-[15px] text-teal-600">
               {answeredCount}/{questions.length}
             </span>
           </div>
         </div>
 
-        {/* Lưới các số câu: 5 cột trên máy tính, click để chuyển câu */}
-        <div className="grid grid-cols-5 gap-1.5 sm:gap-2 max-h-[50vh] overflow-y-auto p-0.5 pr-1 scrollbar-thin">
-          {questions.map((item, i) => {
-            const isCurrent = i === idx;
-            const isDone = isAnswered(item);
-            const isMarked = !!bookmarks[item.id];
+        {/* Danh sách câu hỏi phân chia theo 3 phần, tự động co giãn số cột để hiển thị trọn vẹn không cần cuộn */}
+        <div
+          data-standard-question-list="true"
+          className="space-y-2"
+        >
+          {visibleGroups.map((group) => (
+            <div
+              key={group.part}
+              data-standard-part-group={group.part}
+              className={`rounded-xl border ${group.borderClass} overflow-hidden bg-slate-50/40 dark:bg-slate-900/40`}
+            >
+              <div className={`px-2.5 py-1 border-b flex items-center justify-between gap-2 ${group.headerClass}`}>
+                <span className="font-bold text-[12px] sm:text-[13px] leading-snug tracking-tight">
+                  {group.title}
+                </span>
+                <span
+                  className={`shrink-0 px-2 py-0.5 rounded-md border text-[12px] font-bold whitespace-nowrap ${group.badgeClass}`}
+                >
+                  {group.items.length} câu
+                </span>
+              </div>
 
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setIdx(i)}
-                className={`relative h-10 rounded-lg text-xs sm:text-sm font-bold transition-all duration-150 flex items-center justify-center select-none ${
-                  isCurrent
-                    ? "bg-teal-600 text-white font-bold ring-2 ring-teal-400 shadow-sm z-10"
-                    : isDone
-                    ? "bg-teal-50 border border-teal-300 text-teal-800 dark:bg-teal-950/40 dark:border-teal-700 dark:text-teal-300 hover:bg-teal-100/80"
-                    : "bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200/80 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
-                }`}
-                title={`Câu ${i + 1}${isCurrent ? " (Đang làm)" : isDone ? " (Đã làm)" : " (Chưa làm)"}${
-                  isMarked ? " - Đã đánh dấu" : ""
-                }`}
+              <div
+                className="p-1.5 grid gap-1.5"
+                style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${minCellWidth}, 1fr))` }}
               >
-                <span>{i + 1}</span>
-                {isMarked && (
-                  <span className="absolute -top-1 -right-0.5 text-amber-500 font-bold text-[10px]" title="Đã đánh dấu">
-                    ⭐
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                {group.items.map(({ item, index: i }) => {
+                  const isCurrent = i === idx;
+                  const isDone = isAnswered(item);
+                  const isMarked = !!bookmarks[item.id];
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setIdx(i)}
+                      className={`relative h-8 rounded-md text-[14px] font-bold transition-all duration-150 flex items-center justify-center select-none ${
+                        isCurrent
+                          ? "bg-teal-600 text-white font-bold ring-2 ring-teal-400 shadow-xs z-10"
+                          : isDone
+                          ? "bg-teal-50 border border-teal-300 text-teal-800 dark:bg-teal-950/40 dark:border-teal-700 dark:text-teal-300 hover:bg-teal-100/80"
+                          : "bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200/80 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
+                      }`}
+                      title={`Câu ${i + 1}${isCurrent ? " (Đang làm)" : isDone ? " (Đã làm)" : " (Chưa làm)"}${
+                        isMarked ? " - Đã đánh dấu" : ""
+                      }`}
+                    >
+                      <span>{i + 1}</span>
+                      {isMarked && (
+                        <span className="absolute -top-1 -right-0.5 text-amber-500 font-bold text-[10px]" title="Đã đánh dấu">
+                          ⭐
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Chú thích màu sắc */}
-        <div className="space-y-1.5 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs font-medium">
+        <div className="space-y-1 pt-1.5 border-t border-slate-200 dark:border-slate-800 text-[14px] font-medium standard-secondary-text">
           <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="size-3 rounded-sm bg-teal-600 ring-1 ring-teal-400 shrink-0" />
-              <span className="text-slate-800 dark:text-slate-200 font-semibold">🟩 Đang làm</span>
+              <span className="text-slate-800 dark:text-slate-200 font-semibold">Đang làm</span>
             </div>
-            <span className="text-[11px] text-slate-500">Câu {idx + 1}</span>
+            <span className="text-[14px] text-slate-500">Câu {idx + 1}</span>
           </div>
 
           <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="size-3 rounded-sm bg-teal-50 border border-teal-300 dark:bg-teal-950/60 dark:border-teal-700 shrink-0" />
-              <span>🟢 Đã làm</span>
+              <span>Đã làm</span>
             </div>
-            <span className="text-[11px] text-teal-600 font-bold">{answeredCount} câu</span>
+            <span className="text-[14px] text-teal-600 font-bold">{answeredCount} câu</span>
           </div>
 
           <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="size-3 rounded-sm bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 shrink-0" />
-              <span>⬜ Chưa làm</span>
+              <span>Chưa làm</span>
             </div>
-            <span className="text-[11px] text-slate-500 font-medium">{unansweredCount} câu</span>
+            <span className="text-[14px] text-slate-500 font-medium">{unansweredCount} câu</span>
           </div>
         </div>
 
-        {/* Nút Nộp bài lớn, nổi bật */}
-        <div className="pt-2">
+        {/* Nút Nộp bài gọn gàng, luôn vừa khung hình laptop */}
+        <div className="pt-1">
           <Button
             type="button"
             onClick={() => setConfirmOpen(true)}
-            className="w-full h-13 sm:h-14 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-bold rounded-xl shadow-lg shadow-red-500/20 flex flex-col items-center justify-center transition-all hover:scale-[1.01] active:scale-[0.99]"
+            className="w-full h-10 sm:h-11 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-bold rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.99]"
           >
-            <div className="flex items-center gap-1.5 text-sm sm:text-base font-black">
-              <Send className="size-4" />
-              <span>NỘP BÀI</span>
-            </div>
-            <span className="text-[11px] font-normal text-white/85">Nộp toàn bộ bài thi</span>
+            <Send className="size-4" />
+            <span className="text-[15px] font-black">NỘP BÀI</span>
           </Button>
         </div>
       </Card>
@@ -3050,18 +3223,18 @@ export default function Take() {
       {questionNavDrawer}
 
       {/* 2. THANH TRÊN CÙNG (HEADER) GỌN GÀNG, HIỆN ĐẠI */}
-      <header className={`border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm ${isQuiz ? "font-times-new-roman" : ""}`}>
-        <div className="w-full max-w-[96vw] 2xl:max-w-[94vw] mx-auto py-2.5 px-3 sm:px-6 flex flex-wrap items-center justify-between gap-3">
+      <header className={`border-b bg-card/95 backdrop-blur sticky top-0 z-30 shadow-sm ${isQuiz ? "font-times-new-roman" : "font-times-new-roman"}`}>
+        <div className={`w-full mx-auto flex flex-wrap items-center justify-between gap-2 sm:gap-3 ${isQuiz ? "max-w-[96vw] 2xl:max-w-[94vw] px-3 sm:px-6 py-2.5" : "max-w-none px-2.5 sm:px-4 py-1.5"}`}>
           {/* Bên trái: Logo/Tên hệ thống & Tên đề thi */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="size-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0 border border-primary/20">
-              <Award className="size-5" />
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="size-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0 border border-primary/20">
+              <Award className="size-4" />
             </div>
             <div className="min-w-0">
-              <div className="text-[11px] font-bold text-primary uppercase tracking-wider truncate max-w-[200px] sm:max-w-xs">
+              <div className={`${isQuiz ? "text-[11px]" : "text-[13px]"} font-bold text-primary uppercase tracking-wider truncate max-w-[200px] sm:max-w-xs`}>
                 Hệ thống trắc nghiệm online
               </div>
-              <div className="font-black text-sm sm:text-base lg:text-lg truncate max-w-[200px] sm:max-w-sm lg:max-w-md text-foreground">
+              <div className={`font-bold ${isQuiz ? "text-sm sm:text-base lg:text-lg" : "text-sm sm:text-base"} truncate max-w-[200px] sm:max-w-sm lg:max-w-md text-foreground`}>
                 {exam.title}
               </div>
             </div>
@@ -3070,7 +3243,7 @@ export default function Take() {
           {/* Ở giữa: Tiến độ làm bài */}
           <div className="flex items-center gap-3 flex-1 max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg mx-2">
             <div className="flex-1 flex flex-col gap-1">
-              <div className="flex justify-between items-center text-xs font-bold text-muted-foreground">
+              <div className={`flex justify-between items-center ${isQuiz ? "text-xs" : "text-[14px]"} font-bold text-muted-foreground`}>
                 <span>
                   {isQuiz ? (
                     <>
@@ -3250,15 +3423,16 @@ export default function Take() {
         </main>
       ) : (
         // ===== CHẾ ĐỘ TIÊU CHUẨN (STANDARD MODE: 2 KHU VỰC BÊN TRÁI VÀ BÊN PHẢI) =====
-        <main className="flex-1 w-full max-w-7xl 2xl:max-w-[95vw] mx-auto px-3 sm:px-6 py-4 sm:py-6 relative z-10">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* KHU VỰC BÊN TRÁI: HIỂN THỊ MỘT CÂU HỎI TẠI MỘT THỜI ĐIỂM + NÚT ĐIỀU HƯỚNG */}
-            <div className="lg:col-span-8 xl:col-span-9 flex flex-col gap-4">
+        <main className="standard-take-layout font-times-new-roman flex-1 w-full max-w-none mx-auto px-2 sm:px-3.5 lg:px-4 py-2 sm:py-3 relative z-10">
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(340px,33vw)] xl:grid-cols-[minmax(0,1fr)_minmax(390px,31vw)] 2xl:grid-cols-[minmax(0,1fr)_minmax(440px,29vw)] gap-2.5 lg:gap-3.5 items-start">
+            {/* KHU VỰC BÊN TRÁI: HIỂN THỊ MỘT CÂU HỎI TẠI MỘT THỜI ĐIỂM + THANH NÚT LỆNH CỐ ĐỊNH */}
+            <div className="min-w-0 flex flex-col gap-2.5">
               {renderStandardQuestionCard(q, idx)}
+              {renderStandardControlsBar(q, idx)}
             </div>
 
             {/* KHU VỰC BÊN PHẢI: DANH SÁCH CÂU + CHÚ THÍCH + NÚT NỘP BÀI */}
-            <div className="lg:col-span-4 xl:col-span-3 lg:sticky lg:top-20 space-y-4">
+            <div className="min-w-0 lg:sticky lg:top-[58px] space-y-2.5">
               {renderStandardQuestionListCard()}
             </div>
           </div>

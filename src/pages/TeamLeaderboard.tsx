@@ -23,6 +23,7 @@ import {
 import { useBattleMusic } from "@/hooks/useBattleMusic";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
+import { formatScore } from "@/lib/grading";
 
 export type LbTeam = {
   id: string;
@@ -113,7 +114,7 @@ export function LeaderboardBoard({
                 <div className="text-[10px] text-muted-foreground font-semibold">ĐIỂM</div>
                 <div className="text-base font-black text-amber-500 flex items-center justify-end gap-0.5">
                   <Star className="size-3.5 fill-amber-400 text-amber-400 inline" />
-                  {Number(t.score).toFixed(t.score % 1 === 0 ? 0 : 2)}
+                  {formatScore(t.score)}
                 </div>
               </div>
             </div>
@@ -693,7 +694,7 @@ export default function TeamLeaderboard({
                             fontSize: scoreValFont,
                           }}
                         >
-                          <span>{Number(team.score).toFixed(team.score % 1 === 0 ? 0 : 2)}</span>
+                          <span>{formatScore(team.score)}</span>
                           <span
                             className="font-bold text-amber-200/90 text-xs"
                           >
@@ -755,7 +756,7 @@ export default function TeamLeaderboard({
                     ⭐ ĐIỂM SỐ
                   </div>
                   <div className="text-3xl sm:text-5xl font-black text-amber-400 drop-shadow-[0_2px_0_#000]">
-                    {Number(champion.score).toFixed(champion.score % 1 === 0 ? 0 : 2)}
+                    {formatScore(champion.score)}
                   </div>
                 </div>
                 <div className="text-center pl-2">

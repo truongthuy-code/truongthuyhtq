@@ -12,9 +12,21 @@ import { toast } from "sonner";
 import { parseDocx, ParsedExam, hasRichContent, getMissingAnswerQuestions } from "@/lib/docxParser";
 import { parseTextExam } from "@/lib/textExamParser";
 import { parsePdfExam } from "@/lib/pdfParser";
-import { DEFAULT_SCORING, ScoringConfig } from "@/lib/grading";
+import {
+  attachQuestionScores,
+  buildScale100Scoring,
+  detectExamStructure,
+  formatScore,
+  getPartIIMethod,
+  getPartIISampleItemCount,
+  isScale100Scoring,
+  reconcileScale100Scoring,
+  ScoringConfig,
+  validateScale100Config,
+} from "@/lib/grading";
+import ScoringConfigPanel from "@/components/ScoringConfigPanel";
 import { supabase } from "@/integrations/supabase/client";
-import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard, CheckCircle2, Folder } from "lucide-react";
+import { Upload, Loader2, FileText, ArrowLeft, AlertTriangle, Download, Image as ImageIcon, Keyboard, CheckCircle2, Folder, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import RichText from "@/components/RichText";
 import LockModeSettings from "@/components/LockModeSettings";
@@ -102,7 +114,9 @@ export default function Teacher() {
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [shuffleQ, setShuffleQ] = useState({ p1: false, p2: false, p3: false });
   const [shuffleO, setShuffleO] = useState({ p1: false, p2: false, p3: false });
-  const [scoring, setScoring] = useState<ScoringConfig>(DEFAULT_SCORING);
+  const [scoring, setScoring] = useState<ScoringConfig>(() =>
+    buildScale100Scoring({ partI: [], partII: [], partIII: [] })
+  );
   const [allowReview, setAllowReview] = useState(false);
   const [enableMinCorrect, setEnableMinCorrect] = useState<boolean>(false);
   const [minCorrectPercentage, setMinCorrectPercentage] = useState<number>(70);
@@ -115,10 +129,32 @@ export default function Teacher() {
   const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
   const [saving, setSaving] = useState(false);
 
+  const examCounts = useMemo(() => detectExamStructure(exam), [exam]);
+  const itemCountP2 = useMemo(() => getPartIISampleItemCount(exam), [exam]);
+  const scoringValidation = useMemo(() => {
+    if (!isScale100Scoring(scoring)) return { valid: true, total: 100, diff: 0, message: null };
+    return validateScale100Config(scoring, examCounts);
+  }, [scoring, examCounts]);
+
+  useEffect(() => {
+    if (!exam) return;
+    setScoring((prev) => reconcileScale100Scoring(exam, prev));
+  }, [examCounts.p1, examCounts.p2, examCounts.p3, itemCountP2]);
+
   const issues = useMemo(() => (exam ? validateExam(exam) : []), [exam]);
   const missingQuestions = useMemo(() => (exam ? getMissingAnswerQuestions(exam) : []), [exam]);
   const issueKey = (part: "I" | "II" | "III", idx: number) => `${part}-${idx}`;
   const issueSet = useMemo(() => new Set(issues.map((i) => issueKey(i.part, i.idx))), [issues]);
+
+  const handleDeleteQuestion = (part: "I" | "II" | "III", qId: string) => {
+    setExam((prev) => {
+      if (!prev) return prev;
+      if (part === "I") return { ...prev, partI: prev.partI.filter((q) => q.id !== qId) };
+      if (part === "II") return { ...prev, partII: prev.partII.filter((q) => q.id !== qId) };
+      return { ...prev, partIII: prev.partIII.filter((q) => q.id !== qId) };
+    });
+    toast.success("Đã xóa câu hỏi và tự động cập nhật lại phân bổ điểm");
+  };
 
   const handleUpdateMCAnswer = (qId: string, ans: "A" | "B" | "C" | "D") => {
     setExam((prev) => {
@@ -185,6 +221,7 @@ export default function Teacher() {
 
   const applyParsed = (parsed: ParsedExam, name: string, file: File | null) => {
     setExam(parsed);
+    setScoring((prev) => reconcileScale100Scoring(parsed, prev));
     setOriginalFile(file);
     setTitle(name);
     const total = parsed.partI.length + parsed.partII.length + parsed.partIII.length;
@@ -298,7 +335,28 @@ export default function Teacher() {
       return;
     }
 
+    if (isScale100Scoring(scoring)) {
+      const check = validateScale100Config(scoring, examCounts);
+      if (!check.valid) {
+        toast.error(check.message || "Cấu hình thang điểm 100 chưa hợp lệ!");
+        return;
+      }
+    }
+
     setSaving(true);
+
+    const finalScoring: ScoringConfig = isScale100Scoring(scoring)
+      ? {
+          ...reconcileScale100Scoring(exam, scoring),
+          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+        }
+      : {
+          ...(scoring as any),
+          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+        };
+    const examToSave = attachQuestionScores(exam, finalScoring);
 
     // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
     let activeUserId = await ensureSupabaseSession(currentUser as any);
@@ -356,18 +414,14 @@ export default function Teacher() {
 
       const insertPayload: any = {
         title,
-        questions: exam as any,
+        questions: examToSave as any,
         duration_minutes: duration,
         max_attempts: maxAttempts,
         shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
         shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
         shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
         shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-        scoring: {
-          ...(scoring as any),
-          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-        } as any,
+        scoring: finalScoring as any,
         allow_review: allowReview,
         display_mode: displayMode,
         instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
@@ -460,7 +514,7 @@ export default function Teacher() {
     saveUnifiedExam({
       id: data.id,
       title,
-      questions: exam as any,
+      questions: examToSave as any,
       duration_minutes: duration,
       created_at: new Date().toISOString(),
       created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
@@ -471,11 +525,7 @@ export default function Teacher() {
       display_mode: displayMode,
       allow_back: displayMode === "quizizz" ? allowBack : true,
       instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-      scoring: {
-        ...(scoring as any),
-        enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-        min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-      } as any,
+      scoring: finalScoring as any,
       allow_review: allowReview,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
@@ -683,34 +733,12 @@ export default function Teacher() {
               </div>
             </div>
 
-            <div className="space-y-3 rounded-lg border p-4 bg-muted/30">
-              <div className="text-sm font-medium">Cài đặt điểm</div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs">Phần I — điểm / câu</Label>
-                  <Input type="number" step="0.05" min={0} value={scoring.p1}
-                    onChange={(e) => setScoring({ ...scoring, p1: +e.target.value })} className="mt-1" />
-                </div>
-                <div>
-                  <Label className="text-xs">Phần III — điểm / câu</Label>
-                  <Input type="number" step="0.05" min={0} value={scoring.p3}
-                    onChange={(e) => setScoring({ ...scoring, p3: +e.target.value })} className="mt-1" />
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-medium mb-1">Phần II — điểm theo số ý đúng (mỗi câu 4 ý)</div>
-                <div className="grid grid-cols-4 gap-2">
-                  {(["1","2","3","4"] as const).map((k) => (
-                    <div key={k}>
-                      <Label className="text-xs">Đúng {k} ý</Label>
-                      <Input type="number" step="0.05" min={0} value={scoring.p2[k]}
-                        onChange={(e) => setScoring({ ...scoring, p2: { ...scoring.p2, [k]: +e.target.value } })}
-                        className="mt-1" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <ScoringConfigPanel
+              counts={examCounts}
+              itemCountP2={itemCountP2}
+              scoring={scoring}
+              onChange={setScoring}
+            />
 
             <div className="rounded-lg border p-4 space-y-2">
               <Label className="text-sm font-medium">🖥️ Hình thức hiển thị bài kiểm tra</Label>
@@ -925,11 +953,15 @@ export default function Teacher() {
 
             <Button
               onClick={onCreate}
-              disabled={saving || !title || missingQuestions.length > 0}
+              disabled={saving || !title || missingQuestions.length > 0 || !scoringValidation.valid}
               className="w-full bg-gradient-primary disabled:opacity-50"
             >
               {saving ? <Loader2 className="size-4 animate-spin mr-2" /> : null}
-              {missingQuestions.length > 0 ? "Vui lòng bổ sung đáp án trước khi tạo link" : "Tạo link bài thi"}
+              {missingQuestions.length > 0
+                ? "Vui lòng bổ sung đáp án trước khi tạo link"
+                : !scoringValidation.valid
+                ? "Vui lòng hoàn thiện cấu hình thang điểm 100 & tỷ lệ Phần II"
+                : "Tạo link bài thi"}
             </Button>
           </Card>
         )}
@@ -1015,15 +1047,32 @@ export default function Teacher() {
                             <div className="font-medium text-foreground">
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
-                            {isMissing ? (
-                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
-                                ⚠ Chưa xác định đáp án
-                              </span>
-                            ) : (
-                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                                ✓ Đáp án: {q.answer}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {isScale100Scoring(scoring) && scoring.perQuestion.p1 > 0 && (
+                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                  {formatScore(scoring.perQuestion.p1)}đ
+                                </span>
+                              )}
+                              {isMissing ? (
+                                <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                  ⚠ Chưa xác định đáp án
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                  ✓ Đáp án: {q.answer}
+                                </span>
+                              )}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteQuestion("I", q.id)}
+                                title="Xóa câu hỏi này"
+                                className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           </div>
 
                           <div className="mt-2 space-y-1">
@@ -1114,15 +1163,36 @@ export default function Teacher() {
                             <div className="font-medium text-foreground">
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
-                            {isMissing ? (
-                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
-                                ⚠ Còn ý chưa xác định Đúng/Sai
-                              </span>
-                            ) : (
-                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                                ✓ Đã có đủ đáp án
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {isScale100Scoring(scoring) && scoring.perQuestion.p2 > 0 && (
+                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                  {formatScore(scoring.perQuestion.p2)}đ (
+                                  {getPartIIMethod(scoring) === "custom_rates"
+                                    ? "Theo tỷ lệ %"
+                                    : `${formatScore(scoring.perItemP2)}đ/ý`}
+                                  )
+                                </span>
+                              )}
+                              {isMissing ? (
+                                <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                  ⚠ Còn ý chưa xác định Đúng/Sai
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                  ✓ Đã có đủ đáp án
+                                </span>
+                              )}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteQuestion("II", q.id)}
+                                title="Xóa câu hỏi này"
+                                className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           </div>
 
                           <div className="mt-2 space-y-1.5">
@@ -1207,15 +1277,32 @@ export default function Teacher() {
                             <div className="font-medium text-foreground">
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
-                            {isMissing ? (
-                              <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
-                                ⚠ Chưa có đáp án ngắn
-                              </span>
-                            ) : (
-                              <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                                ✓ Đã có đáp án
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {isScale100Scoring(scoring) && scoring.perQuestion.p3 > 0 && (
+                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                  {formatScore(scoring.perQuestion.p3)}đ
+                                </span>
+                              )}
+                              {isMissing ? (
+                                <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                                  ⚠ Chưa có đáp án ngắn
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                  ✓ Đã có đáp án
+                                </span>
+                              )}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteQuestion("III", q.id)}
+                                title="Xóa câu hỏi này"
+                                className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           </div>
 
                           <div className="mt-2 flex items-center gap-2">

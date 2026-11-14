@@ -24,6 +24,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
 import { getExamPublicOrigin } from "@/lib/examAssignments";
+import { formatScore, isScale100Scoring } from "@/lib/grading";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
@@ -75,34 +76,66 @@ export default function Reports() {
     return subs.filter(s => (s.student_name || "").toLowerCase().includes(q) || (s.student_class || "").toLowerCase().includes(q));
   }, [subs, query]);
 
+  const getSubMaxScore = (s: any) => {
+    const ms = Number(s?.max_score);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+    const ex = exams.find((e) => e.id === s.exam_id);
+    return isScale100Scoring(ex?.scoring) ? 100 : 10;
+  };
+
+  const selectedExam = useMemo(() => exams.find((e) => e.id === examId), [exams, examId]);
+
+  const isScale100View = useMemo(() => {
+    if (examId !== "all" && selectedExam && isScale100Scoring(selectedExam.scoring)) {
+      return true;
+    }
+    if (filtered.length > 0 && filtered.every((s) => getSubMaxScore(s) > 10)) {
+      return true;
+    }
+    return false;
+  }, [examId, selectedExam, filtered, exams]);
+
   const stats = useMemo(() => {
     if (!filtered.length) return { avg: 0, max: 0, min: 0, passRate: 0, count: 0, classCount: 0 };
     const scores = filtered.map(s => Number(s.score) || 0);
     const max = Math.max(...scores);
     const min = Math.min(...scores);
     const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const pass = scores.filter(s => s >= 5).length;
+    const pass = filtered.filter(s => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length;
     const classes = new Set(filtered.map(s => s.student_class));
     return { avg: +avg.toFixed(2), max, min, passRate: Math.round((pass / scores.length) * 100), count: filtered.length, classCount: classes.size };
-  }, [filtered]);
+  }, [filtered, exams]);
 
   const distribution = useMemo(() => {
-    const buckets = [
-      { range: "0–2", count: 0 }, { range: "2–4", count: 0 },
-      { range: "4–6", count: 0 }, { range: "6–8", count: 0 }, { range: "8–10", count: 0 },
-    ];
+    const buckets = isScale100View
+      ? [
+          { range: "0–20", count: 0 },
+          { range: "20–40", count: 0 },
+          { range: "40–60", count: 0 },
+          { range: "60–80", count: 0 },
+          { range: "80–100", count: 0 },
+        ]
+      : [
+          { range: "0–2", count: 0 },
+          { range: "2–4", count: 0 },
+          { range: "4–6", count: 0 },
+          { range: "6–8", count: 0 },
+          { range: "8–10", count: 0 },
+        ];
     filtered.forEach(s => {
       const v = Number(s.score) || 0;
-      const i = Math.min(4, Math.floor(v / 2));
+      const ms = getSubMaxScore(s);
+      const pct = ms > 0 ? (v / ms) * 100 : 0;
+      const i = Math.min(4, Math.max(0, Math.floor(pct / 20)));
       buckets[i].count++;
     });
     return buckets;
-  }, [filtered]);
+  }, [filtered, isScale100View, exams]);
 
   const passData = useMemo(() => [
-    { name: "Đạt (≥5)", value: filtered.filter(s => Number(s.score) >= 5).length },
-    { name: "Chưa đạt", value: filtered.filter(s => Number(s.score) < 5).length },
-  ], [filtered]);
+    { name: "Đạt (≥50%)", value: filtered.filter(s => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length },
+    { name: "Chưa đạt", value: filtered.filter(s => (Number(s.score) || 0) < getSubMaxScore(s) * 0.5).length },
+  ], [filtered, exams]);
 
   const timeline = useMemo(() => {
     const map = new Map<string, number>();
@@ -141,7 +174,8 @@ export default function Reports() {
     if (!filtered.length) return toast.info("Không có dữ liệu");
     const rows = filtered.map((s, i) => ({
       TOP: i + 1, "Họ tên": s.student_name, "Lớp": s.student_class,
-      "Điểm": s.score, "Đúng": s.correct_count, "Sai": s.wrong_count,
+      "Điểm": formatScore(s.score), "Thang điểm": formatScore(getSubMaxScore(s)),
+      "Đúng": s.correct_count, "Sai": s.wrong_count,
       "Vi phạm": s.violation_count || 0,
       "Tổng thời gian làm bài": fmtDuration(s),
       "Thời gian nộp": new Date(s.submitted_at).toLocaleString("vi-VN"),
@@ -188,9 +222,9 @@ export default function Reports() {
       {/* Class report cards */}
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: "Điểm trung bình", value: stats.avg, icon: Award, tint: "from-teal-500 to-emerald-500" },
-          { label: "Điểm cao nhất", value: stats.max, icon: Trophy, tint: "from-amber-500 to-orange-500" },
-          { label: "Điểm thấp nhất", value: stats.min, icon: ShieldAlert, tint: "from-rose-500 to-red-500" },
+          { label: "Điểm trung bình", value: formatScore(stats.avg), icon: Award, tint: "from-teal-500 to-emerald-500" },
+          { label: "Điểm cao nhất", value: formatScore(stats.max), icon: Trophy, tint: "from-amber-500 to-orange-500" },
+          { label: "Điểm thấp nhất", value: formatScore(stats.min), icon: ShieldAlert, tint: "from-rose-500 to-red-500" },
           { label: "Tỉ lệ đạt", value: `${stats.passRate}%`, icon: Award, tint: "from-sky-500 to-blue-600" },
           { label: "Số HS tham gia", value: stats.count, icon: Users, tint: "from-violet-500 to-fuchsia-500" },
           { label: "Số lớp", value: stats.classCount, icon: Users, tint: "from-cyan-500 to-teal-600" },
@@ -282,9 +316,15 @@ export default function Reports() {
                   <TableCell className="font-medium">{s.student_name}</TableCell>
                   <TableCell>{s.student_class}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={Number(s.score) >= 5 ? "bg-success/10 text-success border-success/30" : "bg-destructive/10 text-destructive border-destructive/30"}>
-                      {s.score} / {s.max_score}
-                    </Badge>
+                    {(() => {
+                      const ms = getSubMaxScore(s);
+                      const passed = (Number(s.score) || 0) >= ms * 0.5;
+                      return (
+                        <Badge variant="outline" className={passed ? "bg-success/10 text-success border-success/30" : "bg-destructive/10 text-destructive border-destructive/30"}>
+                          {formatScore(s.score)} / {formatScore(ms)}
+                        </Badge>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell className="text-xs">
                     <span className="text-success">{s.correct_count}</span> / <span className="text-destructive">{s.wrong_count}</span>
@@ -320,11 +360,11 @@ export default function Reports() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-xl bg-muted/40 p-3 text-center">
                   <div className="text-xs text-muted-foreground">Điểm</div>
-                  <div className="text-2xl font-bold text-primary">{detail.score}</div>
+                  <div className="text-2xl font-bold text-primary">{formatScore(detail.score)}</div>
                 </div>
                 <div className="rounded-xl bg-muted/40 p-3 text-center">
                   <div className="text-xs text-muted-foreground">Trên tối đa</div>
-                  <div className="text-2xl font-bold">{detail.max_score}</div>
+                  <div className="text-2xl font-bold">{formatScore(getSubMaxScore(detail))}</div>
                 </div>
                 <div className="rounded-xl bg-success/10 p-3 text-center">
                   <div className="text-xs text-muted-foreground">Đúng</div>

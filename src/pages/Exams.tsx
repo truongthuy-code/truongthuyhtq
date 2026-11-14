@@ -31,6 +31,7 @@ import {
 import { isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { fetchAllExamsForAdmin } from "@/lib/allExamsStorage";
+import { attachQuestionScores, isScale100Scoring, reconcileScale100Scoring } from "@/lib/grading";
 
 const PAGE_SIZE = 10;
 
@@ -223,6 +224,14 @@ export default function Exams() {
       primary_code: newExamCode,
     };
 
+    const syncedScoring = isScale100Scoring(rest.scoring)
+      ? reconcileScale100Scoring(rest.questions, rest.scoring)
+      : rest.scoring;
+    const syncedQuestions =
+      rest.questions && isScale100Scoring(syncedScoring) && !Array.isArray(rest.questions) && (rest.questions.partI || rest.questions.partII || rest.questions.partIII)
+        ? attachQuestionScores(rest.questions, syncedScoring)
+        : rest.questions;
+
     const { error } = await withSupabaseAuthRetry(async (uid) => {
       const currentAuthUser = (await supabase.auth.getUser()).data.user;
       const createdByUuid = currentAuthUser?.id || (isUuid(uid)
@@ -231,6 +240,8 @@ export default function Exams() {
 
       return await supabase.from("exams").insert({
         ...rest,
+        scoring: syncedScoring,
+        questions: syncedQuestions,
         team_config: finalTeamConfigWithCode,
         title: `${exam.title} (Bản sao)`,
         created_by: createdByUuid,

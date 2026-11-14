@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
+import { formatScore } from "@/lib/grading";
 
 export default function Results() {
   const { id } = useParams();
@@ -47,7 +48,8 @@ export default function Results() {
       "Lớp": s.student_class,
       "Số câu đúng": s.correct_count,
       "Số câu sai": s.wrong_count,
-      "Điểm": s.score,
+      "Điểm": formatScore(s.score),
+      "Thang điểm": formatScore(s.max_score || 10),
       "Vi phạm": s.violation_count ?? 0,
       "Trạng thái": (s.violation_count ?? 0) === 0 ? "Tốt" : (s.violation_count ?? 0) < 3 ? "Cảnh báo" : "Nghi ngờ gian lận",
       "Tổng thời gian làm bài": fmtDuration(s),
@@ -115,7 +117,10 @@ export default function Results() {
                     <TableCell>{s.student_class}</TableCell>
                     <TableCell className="text-center text-success">{s.correct_count}</TableCell>
                     <TableCell className="text-center text-destructive">{s.wrong_count}</TableCell>
-                    <TableCell className="text-center font-bold">{s.score}</TableCell>
+                    <TableCell className="text-center font-bold">
+                      {formatScore(s.score)}
+                      <span className="text-xs font-normal text-muted-foreground"> / {formatScore(s.max_score || 10)}</span>
+                    </TableCell>
                     <TableCell className="text-center">
                       {vc > 0 ? (
                         <details className="inline-block text-left">

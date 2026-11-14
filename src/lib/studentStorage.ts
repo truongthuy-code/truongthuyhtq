@@ -35,6 +35,8 @@ export interface StudentSubmissionRecord {
   isExamClosed?: boolean;
   allowReview?: boolean;
   questions?: any;
+  scoringSnapshot?: any;
+  partIISummary?: any[];
 }
 
 /**

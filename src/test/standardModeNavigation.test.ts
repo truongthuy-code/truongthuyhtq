@@ -15,21 +15,35 @@ describe("Standard Mode Navigation UI - Skip Button Removal", () => {
     expect(takeCode).not.toContain("Bỏ qua câu này");
   });
 
-  it("should preserve standard navigation buttons: ‹ Câu trước, Trả lời, Câu sau ›, Nộp bài", () => {
+  it("should preserve standard navigation buttons (‹ Câu trước, Trả lời, Câu sau ›) without duplicate Nộp bài beside Câu sau", () => {
+    const controlsSection = takeCode.slice(
+      takeCode.indexOf("const renderStandardControlsBar ="),
+      takeCode.indexOf("// KHU VỰC BÊN PHẢI: DANH SÁCH CÂU")
+    );
+    const listCardSection = takeCode.slice(
+      takeCode.indexOf("const renderStandardQuestionListCard ="),
+      takeCode.indexOf("GIAO DIỆN CHÍNH")
+    );
+
     // ‹ Câu trước
-    expect(takeCode).toContain("‹ Câu trước");
+    expect(controlsSection).toContain("‹ Câu trước");
 
     // Trả lời & Đã trả lời
-    expect(takeCode).toContain("handleStandardAnswer(currentQ)");
-    expect(takeCode).toContain("<span>Trả lời</span>");
-    expect(takeCode).toContain("<span>Đã trả lời</span>");
+    expect(controlsSection).toContain("handleStandardAnswer(currentQ)");
+    expect(controlsSection).toContain("<span>Trả lời</span>");
+    expect(controlsSection).toContain("<span>Đã trả lời</span>");
 
-    // Câu sau & Nộp bài
-    expect(takeCode).toContain("<span>Câu sau ›</span>");
-    expect(takeCode).toContain("<span>Nộp bài</span>");
+    // Câu sau present, Nộp bài removed from controls bar beside Câu sau
+    expect(controlsSection).toContain("<span>Câu sau ›</span>");
+    expect(controlsSection).not.toContain("setConfirmOpen");
+    expect(controlsSection).not.toMatch(/Nộp bài|NỘP BÀI/i);
+
+    // NỘP BÀI preserved at the bottom of DANH SÁCH CÂU
+    expect(listCardSection).toContain("NỘP BÀI");
+    expect(listCardSection).toContain("setConfirmOpen(true)");
   });
 
-  it("should have balanced flex justify-between alignment for the 3 controls (Previous, Answer, Next/Submit)", () => {
+  it("should have balanced flex justify-between alignment for the 3 controls (Previous, Answer, Next)", () => {
     expect(takeCode).toContain("NÚT ĐIỀU HƯỚNG DƯỚI CÂU HỎI: ‹ Câu trước | Trả lời | Câu sau ›");
   });
 });

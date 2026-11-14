@@ -19,7 +19,7 @@ import { findAssignmentOrExamByCode, ExamAssignment } from "@/lib/examAssignment
 
 import QRScannerModal from "@/components/QRScannerModal";
 import { supabase } from "@/integrations/supabase/client";
-import { getTFValue } from "@/lib/grading";
+import { formatScore, getTFValue, gradeExam } from "@/lib/grading";
 import { stripRich } from "@/lib/docxParser";
 import RichText from "@/components/RichText";
 import { toast } from "sonner";
@@ -205,6 +205,8 @@ export default function StudentDashboard() {
 
       // 2. Fetch from Supabase RPC get_submission_for_student
       let rpcHandled = false;
+      let rpcPart2Summary: any[] | null = null;
+      let rpcScoring: any = null;
       try {
         const { data, error } = await supabase.rpc("get_submission_for_student", {
           p_submission_id: sub.id,
@@ -213,6 +215,8 @@ export default function StudentDashboard() {
         if (!error && data) {
           const payload: any = data;
           const examObj = payload.exam || {};
+          rpcPart2Summary = Array.isArray(payload.submission?.part2_summary) ? payload.submission.part2_summary : null;
+          rpcScoring = payload.submission?.scoring_snapshot || examObj.scoring || null;
           const isClosed =
             examObj.is_closed === true ||
             examObj.status === "closed" ||
@@ -226,6 +230,8 @@ export default function StudentDashboard() {
               title: examObj.title || sub.examTitle,
               isClosed,
               questions: examObj.questions,
+              scoring: sub.scoringSnapshot || rpcScoring || null,
+              part2Summary: sub.partIISummary || rpcPart2Summary || null,
               allowReview,
               displayMode: examObj.display_mode || "standard",
               enableMinCorrect: !!(
@@ -273,6 +279,8 @@ export default function StudentDashboard() {
         title: (matchedExam as any)?.title || sub.examTitle,
         isClosed,
         questions,
+        scoring: sub.scoringSnapshot || rpcScoring || (matchedExam as any)?.scoring || null,
+        part2Summary: sub.partIISummary || rpcPart2Summary || null,
         allowReview,
         displayMode: (matchedExam as any)?.display_mode || "standard",
         enableMinCorrect: !!(
@@ -408,7 +416,7 @@ export default function StudentDashboard() {
               <Award className="size-4 text-amber-500" />
             </div>
             <div className="text-2xl font-bold mt-2 text-amber-600 dark:text-amber-400">
-              {stats.avg}
+              {formatScore(stats.avg)}
             </div>
           </Card>
           <Card className="p-4 rounded-xl shadow-soft">
@@ -417,7 +425,7 @@ export default function StudentDashboard() {
               <Award className="size-4 text-emerald-500" />
             </div>
             <div className="text-2xl font-bold mt-2 text-emerald-600 dark:text-emerald-400">
-              {stats.max}
+              {formatScore(stats.max)}
             </div>
           </Card>
           <Card className="p-4 rounded-xl shadow-soft">
@@ -659,9 +667,9 @@ export default function StudentDashboard() {
                     <div className="flex sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0">
                       <div className="text-left sm:text-right">
                         <div className="text-2xl font-black text-primary leading-none">
-                          {sub.score}{" "}
+                          {formatScore(sub.score)}{" "}
                           <span className="text-xs font-normal text-muted-foreground">
-                            / {sub.maxScore || 10}đ
+                            / {formatScore(sub.maxScore || 10)}đ
                           </span>
                         </div>
                         <div className="text-[11px] text-muted-foreground mt-0.5 flex gap-2">
@@ -712,8 +720,8 @@ export default function StudentDashboard() {
               {/* Score header */}
               <div className="rounded-xl bg-gradient-primary text-primary-foreground p-4 text-center">
                 <div className="text-xs uppercase tracking-wider opacity-90 font-medium">Tổng điểm</div>
-                <div className="text-5xl font-extrabold my-1">{selectedSub.score}</div>
-                <div className="text-xs opacity-90">/ {selectedSub.maxScore || 10} điểm</div>
+                <div className="text-5xl font-extrabold my-1">{formatScore(selectedSub.score)}</div>
+                <div className="text-xs opacity-90">/ {formatScore(selectedSub.maxScore || 10)} điểm</div>
                 <div className="mt-2 text-xs flex justify-center gap-4">
                   <span className="bg-white/20 px-2 py-0.5 rounded">
                     ✓ Đúng: {selectedSub.correctCount} câu
@@ -738,30 +746,68 @@ export default function StudentDashboard() {
                   const isThresholdFailed = isThresholdActive && correctRate < threshold - 1e-6;
 
                   if (isThresholdFailed) {
+                    const lockedP2: any[] = Array.isArray(reviewExamData?.part2Summary)
+                      ? reviewExamData.part2Summary
+                      : Array.isArray(selectedSub.partIISummary)
+                        ? selectedSub.partIISummary
+                        : [];
                     return (
-                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-center text-xs text-amber-950 dark:text-amber-200 space-y-3">
-                        <div className="font-extrabold text-base flex items-center justify-center gap-2 text-amber-800 dark:text-amber-300">
-                          <Lock className="size-5 text-amber-600 dark:text-amber-400" />
-                          <span>Chưa đạt tỷ lệ đúng tối thiểu để xem đáp án</span>
-                        </div>
-
-                        <div className="bg-card/90 rounded-2xl p-4 border border-amber-500/25 max-w-sm mx-auto space-y-2 text-xs text-foreground shadow-xs">
-                          <div className="flex justify-between items-center py-1 border-b border-border/50">
-                            <span className="text-muted-foreground font-medium">Tỷ lệ trả lời đúng của bạn:</span>
-                            <span className="font-black text-rose-600 dark:text-rose-400 text-sm">
-                              {correctRate.toFixed(1)}% ({selectedSub.correctCount ?? 0}/{totalQ} câu)
-                            </span>
+                      <div className="space-y-4">
+                        {lockedP2.length > 0 && (
+                          <div className="rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-muted/30 p-3.5 space-y-2.5 text-left">
+                            <div className="text-xs font-bold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+                              Chi tiết điểm Phần II – Đúng/Sai
+                            </div>
+                            {lockedP2.map((item, idx) => (
+                              <div key={item.id || idx} className="rounded-lg border bg-background/80 p-2.5 space-y-2">
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="font-bold">Câu {item.questionIndex ?? idx + 1}</span>
+                                  <span className="font-bold text-indigo-700 dark:text-indigo-300">
+                                    {formatScore(item.earnedScore)} / {formatScore(item.maxScore)} điểm
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                  <div className="rounded bg-muted/60 px-2 py-1">
+                                    <div className="text-[10px] text-muted-foreground">Số ý đúng</div>
+                                    <div className="font-bold">{item.okItems}/{item.totalItems} ý</div>
+                                  </div>
+                                  <div className="rounded bg-muted/60 px-2 py-1">
+                                    <div className="text-[10px] text-muted-foreground">Tỷ lệ điểm được hưởng</div>
+                                    <div className="font-bold text-indigo-700 dark:text-indigo-300">{formatScore(item.ratePercent)}%</div>
+                                  </div>
+                                  <div className="rounded bg-muted/60 px-2 py-1">
+                                    <div className="text-[10px] text-muted-foreground">Điểm đạt được</div>
+                                    <div className="font-bold text-emerald-700 dark:text-emerald-300">{formatScore(item.earnedScore)}/{formatScore(item.maxScore)} điểm</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                          <div className="flex justify-between items-center py-1">
-                            <span className="text-muted-foreground font-medium">Yêu cầu tối thiểu để xem đáp án:</span>
-                            <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm">
-                              ≥ {threshold}%
-                            </span>
+                        )}
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-center text-xs text-amber-950 dark:text-amber-200 space-y-3">
+                          <div className="font-extrabold text-base flex items-center justify-center gap-2 text-amber-800 dark:text-amber-300">
+                            <Lock className="size-5 text-amber-600 dark:text-amber-400" />
+                            <span>Chưa đạt tỷ lệ đúng tối thiểu để xem đáp án</span>
                           </div>
-                        </div>
 
-                        <div className="leading-relaxed text-muted-foreground text-xs max-w-md mx-auto">
-                          Giáo viên đã quy định: Sau khi nộp bài, học sinh chỉ được xem <b>Đáp án</b> và <b>Lời giải</b> khi tỷ lệ trả lời đúng đạt từ <b>{threshold}%</b> trở lên.
+                          <div className="bg-card/90 rounded-2xl p-4 border border-amber-500/25 max-w-sm mx-auto space-y-2 text-xs text-foreground shadow-xs">
+                            <div className="flex justify-between items-center py-1 border-b border-border/50">
+                              <span className="text-muted-foreground font-medium">Tỷ lệ trả lời đúng của bạn:</span>
+                              <span className="font-black text-rose-600 dark:text-rose-400 text-sm">
+                                {correctRate.toFixed(1)}% ({selectedSub.correctCount ?? 0}/{totalQ} câu)
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center py-1">
+                              <span className="text-muted-foreground font-medium">Yêu cầu tối thiểu để xem đáp án:</span>
+                              <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm">
+                                ≥ {threshold}%
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="leading-relaxed text-muted-foreground text-xs max-w-md mx-auto">
+                            Giáo viên đã quy định: Sau khi nộp bài, học sinh chỉ được xem <b>Đáp án</b> và <b>Lời giải</b> khi tỷ lệ trả lời đúng đạt từ <b>{threshold}%</b> trở lên.
+                          </div>
                         </div>
                       </div>
                     );
@@ -795,21 +841,56 @@ export default function StudentDashboard() {
                       <ExamReviewQuestions
                         questions={reviewExamData.questions}
                         answers={selectedSub.answers || {}}
+                        scoring={reviewExamData.scoring}
                       />
                     </div>
                   );
                 })()
               ) : (
-                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-300 text-xs space-y-2">
-                  <div className="flex items-center gap-2 font-semibold text-sm text-amber-900 dark:text-amber-200">
-                    <AlertCircle className="size-4" /> Đề thi chưa đóng và chưa mở quyền xem đáp án
+                <div className="space-y-4">
+                  {Array.isArray(reviewExamData?.part2Summary || selectedSub.partIISummary) &&
+                    (reviewExamData?.part2Summary || selectedSub.partIISummary).length > 0 && (
+                      <div className="rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-muted/30 p-3.5 space-y-2.5 text-left">
+                        <div className="text-xs font-bold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+                          Chi tiết điểm Phần II – Đúng/Sai
+                        </div>
+                        {(reviewExamData?.part2Summary || selectedSub.partIISummary).map((item: any, idx: number) => (
+                          <div key={item.id || idx} className="rounded-lg border bg-background/80 p-2.5 space-y-2">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span className="font-bold">Câu {item.questionIndex ?? idx + 1}</span>
+                              <span className="font-bold text-indigo-700 dark:text-indigo-300">
+                                {formatScore(item.earnedScore)} / {formatScore(item.maxScore)} điểm
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div className="rounded bg-muted/60 px-2 py-1">
+                                <div className="text-[10px] text-muted-foreground">Số ý đúng</div>
+                                <div className="font-bold">{item.okItems}/{item.totalItems} ý</div>
+                              </div>
+                              <div className="rounded bg-muted/60 px-2 py-1">
+                                <div className="text-[10px] text-muted-foreground">Tỷ lệ điểm được hưởng</div>
+                                <div className="font-bold text-indigo-700 dark:text-indigo-300">{formatScore(item.ratePercent)}%</div>
+                              </div>
+                              <div className="rounded bg-muted/60 px-2 py-1">
+                                <div className="text-[10px] text-muted-foreground">Điểm đạt được</div>
+                                <div className="font-bold text-emerald-700 dark:text-emerald-300">{formatScore(item.earnedScore)}/{formatScore(item.maxScore)} điểm</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-300 text-xs space-y-2">
+                    <div className="flex items-center gap-2 font-semibold text-sm text-amber-900 dark:text-amber-200">
+                      <AlertCircle className="size-4" /> Đề thi chưa đóng và chưa mở quyền xem đáp án
+                    </div>
+                    <p>
+                      Theo quy định của đề thi này, đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ <b>tự động hiển thị tại đây sau khi Giáo viên bấm "Đóng đề thi"</b>.
+                    </p>
+                    <p className="text-[11px] opacity-80">
+                      Điểm số và câu trả lời của bạn đã được ghi nhận an toàn trên hệ thống.
+                    </p>
                   </div>
-                  <p>
-                    Theo quy định của đề thi này, đáp án chính thức, lời giải chi tiết và đối chiếu câu đúng/sai sẽ <b>tự động hiển thị tại đây sau khi Giáo viên bấm "Đóng đề thi"</b>.
-                  </p>
-                  <p className="text-[11px] opacity-80">
-                    Điểm số và câu trả lời của bạn đã được ghi nhận an toàn trên hệ thống.
-                  </p>
                 </div>
               )}
             </div>
@@ -958,10 +1039,22 @@ export default function StudentDashboard() {
 }
 
 /** Component to render questions, answers, and explanations */
-function ExamReviewQuestions({ questions, answers }: { questions: any; answers: Record<string, any> }) {
+function ExamReviewQuestions({
+  questions,
+  answers,
+  scoring,
+}: {
+  questions: any;
+  answers: Record<string, any>;
+  scoring?: any;
+}) {
   const p1 = questions.partI || [];
   const p2 = questions.partII || [];
   const p3 = questions.partIII || [];
+  const gradeRes = scoring ? gradeExam(questions, answers, scoring) : null;
+  const p2Map = new Map<string, any>(
+    (gradeRes?.breakdown?.p2?.perQuestion || []).map((p: any) => [p.id, p])
+  );
 
   const numCorrect = (sa: string, expected: string) => {
     const a = String(sa ?? "").trim().toLowerCase();
@@ -1041,53 +1134,90 @@ function ExamReviewQuestions({ questions, answers }: { questions: any; answers: 
       {p2.length > 0 && (
         <section className="space-y-3">
           <h3 className="font-bold text-sm text-primary uppercase">PHẦN II — Trắc nghiệm Đúng / Sai</h3>
-          {p2.map((q: any, i: number) => (
-            <div key={q.id || i} className="rounded-xl border p-3.5 space-y-2.5">
-              <div className="text-sm font-medium">
-                <span className="font-bold mr-1">Câu {i + 1}.</span>
-                <RichText text={q.text} />
-              </div>
+          {p2.map((q: any, i: number) => {
+            const p2Info = p2Map.get(q.id);
+            const fallbackOk = (q.items || []).reduce((acc: number, it: any) => {
+              const v = getTFValue(answers[q.id], it.key);
+              return acc + (v !== null && v === !!it.correct ? 1 : 0);
+            }, 0);
+            const totalItems = p2Info?.totalItems ?? (q.items?.length || 0);
+            const okItems = p2Info?.okItems ?? fallbackOk;
+            const ratePercent = p2Info?.ratePercent ?? (totalItems > 0 ? Math.round((okItems / totalItems) * 10000) / 100 : 0);
+            const earnedScore = p2Info?.earnedScore;
+            const maxScore = p2Info?.maxScore;
 
-              <div className="space-y-1.5 pl-4">
-                {(q.items || []).map((it: any) => {
-                  const val = getTFValue(answers[q.id], it.key);
-                  const ok = val !== null && val === !!it.correct;
-                  const borderCls = val === null ? "border-border" : ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-rose-500/40 bg-rose-500/5";
-                  return (
-                    <div key={it.key} className={`flex items-start justify-between gap-2 rounded-lg border p-2 text-xs ${borderCls}`}>
-                      <div className="flex items-start gap-1.5 flex-1">
-                        <b className="min-w-4">{it.key})</b>
-                        <RichText text={it.text} />
-                      </div>
-                      <div className="text-[11px] shrink-0 font-medium flex items-center gap-1.5">
-                        <span>
-                          Đáp án đúng:{" "}
-                          <b className={it.correct ? "text-emerald-600" : "text-rose-600"}>
-                            {it.correct ? "Đúng" : "Sai"}
-                          </b>
-                        </span>
-                        <span>•</span>
-                        <span>
-                          Bạn chọn:{" "}
-                          <b>{val === null ? "Chưa làm" : val ? "Đúng" : "Sai"}</b>
-                        </span>
-                        {val !== null && (
-                          ok ? <Check className="size-3.5 text-emerald-600" /> : <X className="size-3.5 text-rose-600" />
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {q.explanation && (
-                <div className="mt-2.5 ml-4 rounded-lg border-l-2 border-primary bg-primary/5 p-2.5 text-xs">
-                  <div className="font-bold text-primary mb-0.5">💡 Lời giải / Hướng dẫn:</div>
-                  <RichText text={q.explanation} />
+            return (
+              <div key={q.id || i} className="rounded-xl border p-3.5 space-y-2.5">
+                <div className="text-sm font-medium flex items-start justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="font-bold mr-1">Câu {i + 1}.</span>
+                    <RichText text={q.text} />
+                  </div>
+                  {maxScore ? (
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 shrink-0">
+                      {formatScore(earnedScore)}/{formatScore(maxScore)} điểm
+                    </span>
+                  ) : null}
                 </div>
-              )}
-            </div>
-          ))}
+
+                <div className="space-y-1.5 pl-4">
+                  {(q.items || []).map((it: any) => {
+                    const val = getTFValue(answers[q.id], it.key);
+                    const ok = val !== null && val === !!it.correct;
+                    const borderCls = val === null ? "border-border" : ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-rose-500/40 bg-rose-500/5";
+                    return (
+                      <div key={it.key} className={`flex items-start justify-between gap-2 rounded-lg border p-2 text-xs ${borderCls}`}>
+                        <div className="flex items-start gap-1.5 flex-1">
+                          <b className="min-w-4">{it.key})</b>
+                          <RichText text={it.text} />
+                        </div>
+                        <div className="text-[11px] shrink-0 font-medium flex items-center gap-1.5">
+                          <span>
+                            Đáp án đúng:{" "}
+                            <b className={it.correct ? "text-emerald-600" : "text-rose-600"}>
+                              {it.correct ? "Đúng" : "Sai"}
+                            </b>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            Bạn chọn:{" "}
+                            <b>{val === null ? "Chưa làm" : val ? "Đúng" : "Sai"}</b>
+                          </span>
+                          {val !== null && (
+                            ok ? <Check className="size-3.5 text-emerald-600" /> : <X className="size-3.5 text-rose-600" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="ml-4 rounded-lg border bg-muted/30 grid grid-cols-3 divide-x text-center text-[11px]">
+                  <div className="p-2">
+                    <div className="text-muted-foreground">Số ý đúng</div>
+                    <div className="font-bold text-foreground">{okItems}/{totalItems}</div>
+                  </div>
+                  <div className="p-2">
+                    <div className="text-muted-foreground">Tỷ lệ điểm được hưởng</div>
+                    <div className="font-bold text-indigo-600 dark:text-indigo-400">{formatScore(ratePercent)}%</div>
+                  </div>
+                  <div className="p-2">
+                    <div className="text-muted-foreground">Điểm đạt được</div>
+                    <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {maxScore ? `${formatScore(earnedScore)}/${formatScore(maxScore)}` : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {q.explanation && (
+                  <div className="mt-2.5 ml-4 rounded-lg border-l-2 border-primary bg-primary/5 p-2.5 text-xs">
+                    <div className="font-bold text-primary mb-0.5">💡 Lời giải / Hướng dẫn:</div>
+                    <RichText text={q.explanation} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </section>
       )}
 
