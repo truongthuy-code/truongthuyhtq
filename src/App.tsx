@@ -10,6 +10,7 @@ import NotFound from "./pages/NotFound.tsx";
 import Teacher from "./pages/Teacher.tsx";
 import Share from "./pages/Share.tsx";
 import Take from "./pages/Take.tsx";
+import ShortLinkRedirect from "./pages/ShortLinkRedirect.tsx";
 import Result from "./pages/Result.tsx";
 import Results from "./pages/Results.tsx";
 import Auth from "./pages/Auth.tsx";
@@ -46,6 +47,7 @@ const App = () => (
             <Route path="/assistant" element={<AiLearningAssistantStudent />} />
             <Route path="/take" element={<Take />} />
             <Route path="/take/:id" element={<Take />} />
+            <Route path="/e/:code" element={<ShortLinkRedirect />} />
             <Route path="/exam/:id" element={<Take />} />
             <Route path="/exam/:id/take" element={<Take />} />
             <Route path="/join" element={<Take />} />

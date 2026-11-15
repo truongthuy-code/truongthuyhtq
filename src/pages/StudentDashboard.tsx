@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,10 +16,19 @@ import {
 import { getLocalStoredExams } from "@/lib/allExamsStorage";
 import { findSampleExam } from "@/lib/sampleExams";
 import { findAssignmentOrExamByCode, ExamAssignment } from "@/lib/examAssignments";
+import type { ExamAccessErrorType } from "@/lib/examAccessLogger";
 
 import QRScannerModal from "@/components/QRScannerModal";
 import { supabase } from "@/integrations/supabase/client";
-import { formatScore, getTFValue, gradeExam } from "@/lib/grading";
+import {
+  formatScore,
+  getTFValue,
+  gradeExam,
+  normalizePart2SummaryToScale10,
+  normalizeScoringToScale10,
+  normalizeSubmissionToScale10,
+  roundFinalScore,
+} from "@/lib/grading";
 import { stripRich } from "@/lib/docxParser";
 import RichText from "@/components/RichText";
 import { toast } from "sonner";
@@ -48,6 +57,7 @@ import {
   UserCheck,
   Bot,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react";
 
 export default function StudentDashboard() {
@@ -59,6 +69,11 @@ export default function StudentDashboard() {
   const [filterClosed, setFilterClosed] = useState<"all" | "closed" | "open">("all");
   const [examInput, setExamInput] = useState("");
   const [checkingCode, setCheckingCode] = useState(false);
+  const [codeError, setCodeError] = useState<{
+    message: string;
+    errorType?: ExamAccessErrorType;
+    lastCode: string;
+  } | null>(null);
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [confirmExamModal, setConfirmExamModal] = useState<{
     open: boolean;
@@ -66,6 +81,8 @@ export default function StudentDashboard() {
     assignment?: ExamAssignment;
     code: string;
   } | null>(null);
+  const checkingCodeRef = useRef(false);
+  const codeRequestSeqRef = useRef(0);
 
   // Review modal state
   const [selectedSub, setSelectedSub] = useState<StudentSubmissionRecord | null>(null);
@@ -83,7 +100,7 @@ export default function StudentDashboard() {
   const loadSubmissions = () => {
     if (!student) return;
     setLoading(true);
-    const list = getStudentSubmissions(student.account);
+    const list = getStudentSubmissions(student.account).map((item) => normalizeSubmissionToScale10(item));
     setSubmissions(list);
     setLoading(false);
   };
@@ -97,7 +114,7 @@ export default function StudentDashboard() {
       window.removeEventListener("student_submissions_change", handleSubChange);
       window.removeEventListener("exam_answers_published", handleSubChange);
     };
-  }, [student]);
+  }, [student?.account]);
 
   // Check URL params for ?join=CODE or ?code=CODE
   useEffect(() => {
@@ -110,18 +127,28 @@ export default function StudentDashboard() {
     // eslint-disable-next-line
   }, []);
 
-  // Process exam code or QR content
+  // Process exam code or QR content with race-condition & double-submit protection
   const handleProcessCode = async (rawCode: string) => {
     const val = (rawCode || "").trim();
     if (!val) {
       toast.error("Vui lòng nhập mã bài thi hoặc quét mã QR");
       return;
     }
+    if (checkingCodeRef.current) return;
+
+    checkingCodeRef.current = true;
+    const reqId = ++codeRequestSeqRef.current;
     setCheckingCode(true);
+    setCodeError(null);
+
     try {
       const res = await findAssignmentOrExamByCode(val);
+      if (reqId !== codeRequestSeqRef.current) return;
+
       if (!res.success || !res.exam) {
-        toast.error("Mã bài thi không hợp lệ hoặc không tồn tại.");
+        const msg = res.error || "Mã bài thi không hợp lệ hoặc không tồn tại.";
+        setCodeError({ message: msg, errorType: res.errorType, lastCode: val });
+        toast.error(msg);
         return;
       }
 
@@ -154,9 +181,15 @@ export default function StudentDashboard() {
         code: resolvedCode,
       });
     } catch (e: any) {
-      toast.error("Lỗi kiểm tra mã bài thi: " + e.message);
+      if (reqId !== codeRequestSeqRef.current) return;
+      const msg = "Không thể kết nối máy chủ để kiểm tra mã bài thi. Vui lòng thử lại.";
+      setCodeError({ message: msg, errorType: "network", lastCode: val });
+      toast.error(msg);
     } finally {
-      setCheckingCode(false);
+      if (reqId === codeRequestSeqRef.current) {
+        checkingCodeRef.current = false;
+        setCheckingCode(false);
+      }
     }
   };
 
@@ -215,8 +248,14 @@ export default function StudentDashboard() {
         if (!error && data) {
           const payload: any = data;
           const examObj = payload.exam || {};
-          rpcPart2Summary = Array.isArray(payload.submission?.part2_summary) ? payload.submission.part2_summary : null;
-          rpcScoring = payload.submission?.scoring_snapshot || examObj.scoring || null;
+          const rawRpcSub = payload.submission || null;
+          const normRpcSub = rawRpcSub ? normalizeSubmissionToScale10(rawRpcSub, examObj) : null;
+          rpcPart2Summary = Array.isArray(normRpcSub?.part2_summary)
+            ? normRpcSub.part2_summary
+            : Array.isArray(rawRpcSub?.part2_summary)
+              ? normalizePart2SummaryToScale10(rawRpcSub.part2_summary, Number(rawRpcSub?.max_score) > 10.5 ? 10 : 1)
+              : null;
+          rpcScoring = normalizeScoringToScale10(rawRpcSub?.scoring_snapshot || examObj.scoring || null);
           const isClosed =
             examObj.is_closed === true ||
             examObj.status === "closed" ||
@@ -230,7 +269,7 @@ export default function StudentDashboard() {
               title: examObj.title || sub.examTitle,
               isClosed,
               questions: examObj.questions,
-              scoring: sub.scoringSnapshot || rpcScoring || null,
+              scoring: normalizeScoringToScale10(sub.scoringSnapshot || rpcScoring || null),
               part2Summary: sub.partIISummary || rpcPart2Summary || null,
               allowReview,
               displayMode: examObj.display_mode || "standard",
@@ -279,7 +318,7 @@ export default function StudentDashboard() {
         title: (matchedExam as any)?.title || sub.examTitle,
         isClosed,
         questions,
-        scoring: sub.scoringSnapshot || rpcScoring || (matchedExam as any)?.scoring || null,
+        scoring: normalizeScoringToScale10(sub.scoringSnapshot || rpcScoring || (matchedExam as any)?.scoring || null),
         part2Summary: sub.partIISummary || rpcPart2Summary || null,
         allowReview,
         displayMode: (matchedExam as any)?.display_mode || "standard",
@@ -327,8 +366,8 @@ export default function StudentDashboard() {
     const closedCount = submissions.filter((s) => s.isExamClosed || isExamOfficiallyClosed(s.examId)).length;
     return {
       total,
-      avg: Math.round((totalScore / total) * 10) / 10,
-      max: maxScore,
+      avg: roundFinalScore(totalScore / total),
+      max: roundFinalScore(maxScore),
       closedCount,
     };
   }, [submissions]);
@@ -485,25 +524,19 @@ export default function StudentDashboard() {
           <form onSubmit={handleOpenExam} className="flex flex-col sm:flex-row gap-3 items-stretch">
             <div className="relative flex-1">
               <Input
-                placeholder="Nhập mã bài thi (gồm 6 chữ số, ví dụ: 583214) hoặc dán link..."
+                placeholder="Nhập mã bài thi (ví dụ: 583214, A8K29X, TIN12-7A3K9) hoặc dán link..."
                 value={examInput}
                 onChange={(e) => {
                   const val = e.target.value;
-                  // If user pasted a URL, keep it
-                  if (val.includes("http://") || val.includes("https://") || val.includes("/")) {
+                  setCodeError(null);
+                  if (val.includes("http://") || val.includes("https://") || val.includes("/") || val.includes("?")) {
                     setExamInput(val.trim());
-                  } else if (/[a-zA-Z]/.test(val) && val.length > 5 && val.includes("-")) {
-                    // Legacy code paste support (e.g. TIN12-7A3K9)
-                    setExamInput(val.trim().toUpperCase());
                   } else {
-                    // Only numbers 0-9 allowed, max 6 digits, preserves leading 0 (e.g. 012345)
-                    const onlyNums = val.replace(/\D/g, "").slice(0, 6);
-                    setExamInput(onlyNums);
+                    setExamInput(val.replace(/^\s+/, "").toUpperCase());
                   }
                 }}
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={100}
+                inputMode="text"
+                maxLength={120}
                 className="h-13 rounded-2xl text-base font-bold font-mono tracking-widest pl-4 border-2 bg-background placeholder:font-normal placeholder:tracking-normal placeholder:text-sm"
                 disabled={checkingCode}
               />
@@ -535,6 +568,29 @@ export default function StudentDashboard() {
               <span>Quét mã QR</span>
             </Button>
           </form>
+
+          {codeError && (
+            <div className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-destructive font-semibold">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0" />
+                <span>{codeError.message}</span>
+              </div>
+              {(codeError.errorType === "network" ||
+                codeError.errorType === "server" ||
+                codeError.errorType === "unauthorized") && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleProcessCode(codeError.lastCode)}
+                  disabled={checkingCode}
+                  className="h-7 px-3 rounded-lg text-xs border-destructive/40 text-destructive gap-1 shrink-0"
+                >
+                  <RefreshCw className="size-3" /> Thử lại
+                </Button>
+              )}
+            </div>
+          )}
 
           <div className="mt-3 text-[11px] text-muted-foreground flex items-center gap-1.5">
             <UserCheck className="size-3.5 text-primary" />
@@ -1024,7 +1080,9 @@ export default function StudentDashboard() {
                 disabled={
                   confirmExamModal.exam.manual_closed === true ||
                   confirmExamModal.exam.status === "closed" ||
-                  confirmExamModal.exam.status === "not_open"
+                  confirmExamModal.exam.status === "not_open" ||
+                  (confirmExamModal.exam.close_at && new Date() > new Date(confirmExamModal.exam.close_at)) ||
+                  (confirmExamModal.exam.open_at && new Date() < new Date(confirmExamModal.exam.open_at))
                 }
                 className="rounded-xl font-black bg-gradient-to-r from-primary to-sky-600 text-white shadow-md gap-1.5"
               >

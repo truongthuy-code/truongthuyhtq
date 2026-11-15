@@ -16,6 +16,9 @@ import {
   Trash2,
   Sparkles,
   CheckCircle2,
+  Link2,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { saveAs } from "file-saver";
@@ -26,10 +29,12 @@ import {
   createAssignment,
   deleteAssignment,
   getExamPrimaryCode,
+  getExamPrimaryShortCode,
   getExamShareUrl,
   syncExamAssignmentCodes,
   getExamPublicOrigin,
 } from "@/lib/examAssignments";
+import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 
 interface QuickExamShareModalProps {
   open: boolean;
@@ -44,9 +49,12 @@ export default function QuickExamShareModal({
 }: QuickExamShareModalProps) {
   const [assignments, setAssignments] = useState<ExamAssignment[]>([]);
   const [primaryCode, setPrimaryCode] = useState("");
+  const [shortCode, setShortCode] = useState("");
   const [newClass, setNewClass] = useState("");
   const [newCustomCode, setNewCustomCode] = useState("");
   const [creatingAssign, setCreatingAssign] = useState(false);
+  const [syncingCodes, setSyncingCodes] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const [selectedQR, setSelectedQR] = useState<{
     open: boolean;
@@ -61,14 +69,49 @@ export default function QuickExamShareModal({
     url: "",
   });
 
+  const syncModalResources = async (targetExam: any) => {
+    setSyncingCodes(true);
+    setSyncError(null);
+    const errors: string[] = [];
+
+    const syncRes = await syncExamAssignmentCodes(targetExam);
+    if (!syncRes.success) {
+      errors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
+    }
+
+    try {
+      const sl = await ensureExamShortLink({ exam: targetExam });
+      if (sl?.shortCode) setShortCode(sl.shortCode);
+    } catch (err: any) {
+      errors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
+    }
+
+    const list = await getAssignmentsForExam(targetExam.id, targetExam);
+    const enrichedList = await Promise.all(
+      list.map(async (item) => {
+        if (item.shortCode) return item;
+        try {
+          const sl = await ensureExamShortLink({ exam: targetExam, assignment: item });
+          return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
+        } catch {
+          return item;
+        }
+      })
+    );
+    setAssignments(enrichedList);
+    if (errors.length > 0) {
+      setSyncError(errors[0]);
+    }
+    setSyncingCodes(false);
+  };
+
   useEffect(() => {
     if (open && exam?.id) {
       const pCode = getExamPrimaryCode(exam);
       setPrimaryCode(pCode);
-      syncExamAssignmentCodes(exam).catch(() => {});
-      getAssignmentsForExam(exam.id, exam).then((list) => {
-        setAssignments(list);
-      });
+      const existingShort = getExamPrimaryShortCode(exam);
+      setShortCode(existingShort);
+      syncModalResources(exam);
     }
   }, [open, exam]);
 
@@ -78,15 +121,18 @@ export default function QuickExamShareModal({
   const mainUrl = primaryCode
     ? `${publicOrigin}/take/${exam.id}?code=${encodeURIComponent(primaryCode)}`
     : `${publicOrigin}/take/${exam.id}`;
+  const shortUrl = shortCode ? getShortExamUrl(shortCode) : "";
+  const qrUrl = shortUrl || mainUrl;
 
   const copyCode = (code: string) => {
     navigator.clipboard.writeText(code);
     toast.success(`Đã sao chép mã bài thi: ${code}`);
   };
 
-  const copyLink = (url: string) => {
+  const copyShortLink = (url: string) => {
+    if (!url) return;
     navigator.clipboard.writeText(url);
-    toast.success("Đã sao chép link làm bài");
+    toast.success("Đã sao chép link ngắn bài thi");
   };
 
   const downloadQR = (codeToDownload: string, titleToDownload: string, urlToDownload: string, classLabel?: string) => {
@@ -211,13 +257,32 @@ export default function QuickExamShareModal({
           </DialogHeader>
 
           <div className="space-y-6 my-2">
+            {syncError && (
+              <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive text-xs font-semibold flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="size-4 shrink-0" />
+                  <span>{syncError}</span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={syncingCodes}
+                  onClick={() => syncModalResources(exam)}
+                  className="h-7 px-2.5 text-xs border-destructive/40 text-destructive shrink-0 gap-1"
+                >
+                  <RefreshCw className={`size-3 ${syncingCodes ? "animate-spin" : ""}`} /> Thử lại
+                </Button>
+              </div>
+            )}
+
             {/* 1. THÔNG TIN BÀI THI CHÍNH */}
             <div className="p-5 rounded-2xl bg-muted/40 border-2 flex flex-col md:flex-row items-center gap-5 justify-between">
               {/* QR Code */}
               <div className="p-3 bg-white rounded-2xl border shadow-sm flex flex-col items-center shrink-0">
                 <QRCodeSVG
                   id="quick-qr-svg"
-                  value={mainUrl}
+                  value={qrUrl}
                   size={150}
                   level="H"
                   includeMargin={false}
@@ -250,39 +315,65 @@ export default function QuickExamShareModal({
                   </div>
                 </div>
 
-                <div>
-                  <Label className="text-[11px] text-muted-foreground font-bold">Link làm bài trực tiếp:</Label>
-                  <div className="flex gap-2 mt-1">
-                    <Input readOnly value={mainUrl} className="font-mono text-xs h-9 rounded-xl select-all" />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => copyLink(mainUrl)}
-                      className="h-9 px-3 rounded-xl shrink-0 gap-1 font-bold text-xs"
-                    >
-                      <Copy className="size-3" /> Sao chép link
-                    </Button>
+                {/* Link làm bài ngắn (duy nhất) */}
+                <div className="p-3 rounded-xl bg-primary/10 border border-primary/30 space-y-1.5">
+                  <Label className="text-[11px] font-black uppercase tracking-wider text-primary flex items-center gap-1">
+                    <Link2 className="size-3" /> LINK LÀM BÀI NGẮN
+                  </Label>
+                  <div className="flex flex-col sm:flex-row gap-1.5">
+                    <Input
+                      readOnly
+                      value={shortUrl || "Đang tạo link ngắn..."}
+                      aria-label="Link làm bài ngắn"
+                      className="font-mono text-xs font-bold text-primary bg-background h-9 rounded-xl select-all"
+                    />
+                    <div className="flex gap-1.5 shrink-0">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!shortUrl}
+                        onClick={() => copyShortLink(shortUrl)}
+                        className="h-9 px-2.5 rounded-xl gap-1 font-bold text-xs bg-primary text-primary-foreground flex-1 sm:flex-initial"
+                      >
+                        <Copy className="size-3" /> Sao chép link ngắn
+                      </Button>
+                      {shortCode && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          asChild
+                          className="h-9 px-2.5 rounded-xl gap-1 font-bold text-xs border-primary/30 bg-background"
+                        >
+                          <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="size-3" /> Mở link
+                          </Link>
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* Nút Hiển thị mã QR (Phóng to) & Tải mã QR */}
+                {/* Nút Tạo QR Code (Phóng to) & Tải mã QR từ link ngắn */}
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <Button
+                    disabled={!shortUrl}
                     onClick={() =>
                       setSelectedQR({
                         open: true,
                         title: exam.title,
                         code: primaryCode,
-                        url: mainUrl,
+                        url: qrUrl,
                       })
                     }
                     className="rounded-xl font-bold text-xs bg-gradient-to-r from-primary to-sky-600 text-white shadow gap-1.5 h-10"
                   >
-                    <Maximize2 className="size-3.5" /> Hiển thị mã QR
+                    <Maximize2 className="size-3.5" /> Tạo QR Code
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => downloadQR(primaryCode, exam.title, mainUrl)}
+                    disabled={!shortUrl}
+                    onClick={() => downloadQR(primaryCode, exam.title, qrUrl)}
                     className="rounded-xl font-bold text-xs border-2 gap-1.5 h-10"
                   >
                     <Download className="size-3.5" /> Tải mã QR
@@ -333,15 +424,46 @@ export default function QuickExamShareModal({
                 <div className="divide-y rounded-xl border max-h-48 overflow-y-auto bg-card text-xs">
                   {assignments.map((a) => {
                     const aUrl = getExamShareUrl(a.examId, a.code);
+                    const aShortUrl = a.shortCode ? getShortExamUrl(a.shortCode) : "";
+                    const aQrUrl = aShortUrl || aUrl;
                     return (
                       <div key={a.id} className="p-2.5 flex items-center justify-between gap-2 hover:bg-muted/30">
-                        <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-bold">Lớp {a.className}</span>:{" "}
                           <span className="font-mono font-black text-primary px-1.5 py-0.5 rounded bg-primary/10">
                             {a.code}
                           </span>
+                          {a.shortCode && (
+                            <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded bg-emerald-500/10 text-[11px]">
+                              /e/{a.shortCode}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1">
+                          {aShortUrl && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => copyShortLink(aShortUrl)}
+                              className="h-7 px-2 text-[11px] text-primary gap-1"
+                              title="Sao chép link ngắn"
+                            >
+                              <Link2 className="size-3" /> Link ngắn
+                            </Button>
+                          )}
+                          {a.shortCode && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              asChild
+                              className="h-7 px-2 text-[11px]"
+                              title="Mở link"
+                            >
+                              <Link to={`/e/${a.shortCode}`} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="size-3" />
+                              </Link>
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -359,7 +481,7 @@ export default function QuickExamShareModal({
                                 open: true,
                                 title: exam.title,
                                 code: a.code,
-                                url: aUrl,
+                                url: aQrUrl,
                                 className: a.className,
                               })
                             }

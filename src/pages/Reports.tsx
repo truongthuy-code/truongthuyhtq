@@ -24,7 +24,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
 import { getExamPublicOrigin } from "@/lib/examAssignments";
-import { formatScore, isScale100Scoring } from "@/lib/grading";
+import { formatScore, normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
@@ -70,72 +70,63 @@ export default function Reports() {
   };
   useEffect(() => { load(); }, [examId, isAdmin, user]);
 
+  const normalizedSubs = useMemo(() => {
+    return subs
+      .map((s) => {
+        const ex = exams.find((e) => e.id === s.exam_id);
+        return normalizeSubmissionToScale10(s, ex);
+      })
+      .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+  }, [subs, exams]);
+
   const filtered = useMemo(() => {
-    if (!query) return subs;
+    if (!query) return normalizedSubs;
     const q = query.toLowerCase();
-    return subs.filter(s => (s.student_name || "").toLowerCase().includes(q) || (s.student_class || "").toLowerCase().includes(q));
-  }, [subs, query]);
+    return normalizedSubs.filter(
+      (s) =>
+        (s.student_name || "").toLowerCase().includes(q) ||
+        (s.student_class || "").toLowerCase().includes(q)
+    );
+  }, [normalizedSubs, query]);
 
   const getSubMaxScore = (s: any) => {
-    const ms = Number(s?.max_score);
-    if (Number.isFinite(ms) && ms > 0) return ms;
-    const ex = exams.find((e) => e.id === s.exam_id);
-    return isScale100Scoring(ex?.scoring) ? 100 : 10;
+    const ms = Number(s?.max_score ?? s?.maxScore);
+    return Number.isFinite(ms) && ms > 0 ? ms : 10;
   };
-
-  const selectedExam = useMemo(() => exams.find((e) => e.id === examId), [exams, examId]);
-
-  const isScale100View = useMemo(() => {
-    if (examId !== "all" && selectedExam && isScale100Scoring(selectedExam.scoring)) {
-      return true;
-    }
-    if (filtered.length > 0 && filtered.every((s) => getSubMaxScore(s) > 10)) {
-      return true;
-    }
-    return false;
-  }, [examId, selectedExam, filtered, exams]);
 
   const stats = useMemo(() => {
     if (!filtered.length) return { avg: 0, max: 0, min: 0, passRate: 0, count: 0, classCount: 0 };
-    const scores = filtered.map(s => Number(s.score) || 0);
+    const scores = filtered.map((s) => Number(s.score) || 0);
     const max = Math.max(...scores);
     const min = Math.min(...scores);
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const pass = filtered.filter(s => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length;
-    const classes = new Set(filtered.map(s => s.student_class));
-    return { avg: +avg.toFixed(2), max, min, passRate: Math.round((pass / scores.length) * 100), count: filtered.length, classCount: classes.size };
-  }, [filtered, exams]);
+    const avg = roundFinalScore(scores.reduce((a, b) => a + b, 0) / scores.length);
+    const pass = filtered.filter((s) => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length;
+    const classes = new Set(filtered.map((s) => s.student_class));
+    return { avg, max, min, passRate: Math.round((pass / scores.length) * 100), count: filtered.length, classCount: classes.size };
+  }, [filtered]);
 
   const distribution = useMemo(() => {
-    const buckets = isScale100View
-      ? [
-          { range: "0–20", count: 0 },
-          { range: "20–40", count: 0 },
-          { range: "40–60", count: 0 },
-          { range: "60–80", count: 0 },
-          { range: "80–100", count: 0 },
-        ]
-      : [
-          { range: "0–2", count: 0 },
-          { range: "2–4", count: 0 },
-          { range: "4–6", count: 0 },
-          { range: "6–8", count: 0 },
-          { range: "8–10", count: 0 },
-        ];
-    filtered.forEach(s => {
+    const buckets = [
+      { range: "0–2", count: 0 },
+      { range: "2–4", count: 0 },
+      { range: "4–6", count: 0 },
+      { range: "6–8", count: 0 },
+      { range: "8–10", count: 0 },
+    ];
+    filtered.forEach((s) => {
       const v = Number(s.score) || 0;
       const ms = getSubMaxScore(s);
-      const pct = ms > 0 ? (v / ms) * 100 : 0;
-      const i = Math.min(4, Math.max(0, Math.floor(pct / 20)));
+      const scaled10 = ms > 0 ? (v / ms) * 10 : v;
+      const i = Math.min(4, Math.max(0, Math.floor(scaled10 / 2)));
       buckets[i].count++;
     });
     return buckets;
-  }, [filtered, isScale100View, exams]);
+  }, [filtered]);
 
   const passData = useMemo(() => [
-    { name: "Đạt (≥50%)", value: filtered.filter(s => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length },
-    { name: "Chưa đạt", value: filtered.filter(s => (Number(s.score) || 0) < getSubMaxScore(s) * 0.5).length },
-  ], [filtered, exams]);
+    { name: "Đạt (≥50%)", value: filtered.filter((s) => (Number(s.score) || 0) >= getSubMaxScore(s) * 0.5).length },
+    { name: "Chưa đạt", value: filtered.filter((s) => (Number(s.score) || 0) < getSubMaxScore(s) * 0.5).length },
+  ], [filtered]);
 
   const timeline = useMemo(() => {
     const map = new Map<string, number>();

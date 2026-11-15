@@ -3,15 +3,15 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import {
   attachQuestionScores,
-  buildScale100Scoring,
+  buildScale10Scoring,
   DEFAULT_PART_II_RATES,
   getPartIIMethod,
   getPartIIQuestionScoreDetails,
   gradeExam,
   normalizePartIIRates,
-  reconcileScale100Scoring,
+  reconcileScale10Scoring,
   validatePartIIRates,
-  validateScale100Config,
+  validateScale10Config,
 } from "@/lib/grading";
 import type { ParsedExam } from "@/lib/docxParser";
 import ScoringConfigPanel from "@/components/ScoringConfigPanel";
@@ -112,40 +112,40 @@ function createMockRes() {
   return res;
 }
 
-describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/Sai (Mục 8 - 13 test case)", () => {
+describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/Sai trên thang điểm 10 (13 test case)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("Test 1: Phương thức mặc định ('equal') giữ nguyên kết quả chia đều 25%/50%/75%/100%", () => {
     const exam = makeSampleExam(0, 1, 0);
-    const scoring = buildScale100Scoring(exam, { p1: 0, p2: 100, p3: 0 }); // p2Method mặc định là 'equal'
+    const scoring = buildScale10Scoring(exam, { p1: 0, p2: 10, p3: 0 }); // p2Method mặc định là 'equal'
     expect(getPartIIMethod(scoring)).toBe("equal");
 
     expect(gradeExam(exam, { p2_1: makeTFSelection(0) }, scoring).score).toBe(0);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring).score).toBe(25);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring).score).toBe(50);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring).score).toBe(75);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(4) }, scoring).score).toBe(100);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring).score).toBe(2.5);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring).score).toBe(5);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring).score).toBe(7.5);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(4) }, scoring).score).toBe(10);
   });
 
-  it("Test 2: Phương thức 'custom_rates' mặc định 10%-25%-50%-100% trên câu 10 điểm (40đ / 4 câu)", () => {
+  it("Test 2: Phương thức 'custom_rates' mặc định 10%-25%-50%-100% trên câu 1 điểm (4đ / 4 câu)", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     expect(scoring.p2Method).toBe("custom_rates");
-    expect(scoring.perQuestion.p2).toBe(10);
+    expect(scoring.perQuestion.p2).toBe(1);
     expect(scoring.p2Rates).toEqual({ "1": 10, "2": 25, "3": 50, "4": 100 });
   });
 
   it("Test 3: Đúng 0/4 ý -> 0 điểm (0%)", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const res = gradeExam(exam, { p2_1: makeTFSelection(0) }, scoring);
@@ -155,98 +155,98 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
       totalItems: 4,
       ratePercent: 0,
       earnedScore: 0,
-      maxScore: 10,
+      maxScore: 1,
       method: "custom_rates",
     });
   });
 
-  it("Test 4: Đúng 1/4 ý -> 1 điểm (10% của 10đ)", () => {
+  it("Test 4: Đúng 1/4 ý -> 0.1 điểm (10% của 1đ)", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const res = gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring);
-    expect(res.score).toBe(1);
+    expect(res.score).toBe(0.1);
     expect(res.partIISummary?.[0]).toMatchObject({
       okItems: 1,
       totalItems: 4,
       ratePercent: 10,
-      earnedScore: 1,
-      maxScore: 10,
+      earnedScore: 0.1,
+      maxScore: 1,
     });
   });
 
-  it("Test 5: Đúng 2/4 ý -> 2.5 điểm (25% của 10đ)", () => {
+  it("Test 5: Đúng 2/4 ý -> 0.25 điểm (25% của 1đ)", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const res = gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring);
-    expect(res.score).toBe(2.5);
+    expect(res.score).toBe(0.25);
     expect(res.partIISummary?.[0]).toMatchObject({
       okItems: 2,
       totalItems: 4,
       ratePercent: 25,
-      earnedScore: 2.5,
-      maxScore: 10,
+      earnedScore: 0.25,
+      maxScore: 1,
     });
   });
 
-  it("Test 6: Đúng 3/4 ý -> 5 điểm (50% của 10đ)", () => {
+  it("Test 6: Đúng 3/4 ý -> 0.5 điểm (50% của 1đ)", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const res = gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring);
-    expect(res.score).toBe(5);
+    expect(res.score).toBe(0.5);
     expect(res.partIISummary?.[0]).toMatchObject({
       okItems: 3,
       totalItems: 4,
       ratePercent: 50,
-      earnedScore: 5,
-      maxScore: 10,
+      earnedScore: 0.5,
+      maxScore: 1,
     });
   });
 
-  it("Test 7: Đúng 4/4 ý -> 10 điểm (100% của 10đ) & đúng cả đề đạt chính xác 100", () => {
+  it("Test 7: Đúng 4/4 ý -> 1 điểm (100% của 1đ) & đúng cả đề đạt chính xác 10", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const res1 = gradeExam(exam, { p2_1: makeTFSelection(4) }, scoring);
-    expect(res1.score).toBe(10);
+    expect(res1.score).toBe(1);
     expect(res1.partIISummary?.[0]).toMatchObject({
       okItems: 4,
       totalItems: 4,
       ratePercent: 100,
-      earnedScore: 10,
-      maxScore: 10,
+      earnedScore: 1,
+      maxScore: 1,
     });
 
     const fullRes = gradeExam(exam, makeAllCorrectAnswers(exam), scoring);
-    expect(fullRes.score).toBe(100);
-    expect(fullRes.maxScore).toBe(100);
+    expect(fullRes.score).toBe(10);
+    expect(fullRes.maxScore).toBe(10);
   });
 
   it("Test 8: Giáo viên chỉnh tỷ lệ tùy ý (15/35/70/100), kiểm tra range, cảnh báo không tăng dần & nút khôi phục mặc định trên ScoringConfigPanel", () => {
     const exam = makeSampleExam(12, 4, 5);
-    const customScoring = buildScale100Scoring(
+    const customScoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: { "1": 15, "2": 35, "3": 70, "4": 100 } }
     );
 
-    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, customScoring).score).toBe(1.5);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, customScoring).score).toBe(3.5);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, customScoring).score).toBe(7);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, customScoring).score).toBe(0.15);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, customScoring).score).toBe(0.35);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, customScoring).score).toBe(0.7);
 
     // Validation tests
     expect(validatePartIIRates({ "1": -5, "2": 25, "3": 50, "4": 100 }).valid).toBe(false);
@@ -259,18 +259,24 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
       valid: true,
       isNonMonotonic: true,
     });
-    expect(validateScale100Config(
-      buildScale100Scoring(exam, { p1: 30, p2: 40, p3: 30 }, {
-        p2Method: "custom_rates",
-        p2Rates: { "1": 40, "2": 20, "3": 50, "4": 100 },
-        allowNonMonotonicP2Rates: false,
-      }),
-      { p1: 12, p2: 4, p3: 5 }
-    ).valid).toBe(false);
+    expect(
+      validateScale10Config(
+        buildScale10Scoring(
+          exam,
+          { p1: 3, p2: 4, p3: 3 },
+          {
+            p2Method: "custom_rates",
+            p2Rates: { "1": 40, "2": 20, "3": 50, "4": 100 },
+            allowNonMonotonicP2Rates: false,
+          }
+        ),
+        { p1: 12, p2: 4, p3: 5 }
+      ).valid
+    ).toBe(false);
 
     // UI interaction with ScoringConfigPanel
     const counts = { p1: 12, p2: 4, p3: 5 };
-    let current = buildScale100Scoring(exam, { p1: 30, p2: 40, p3: 30 });
+    let current = buildScale10Scoring(exam, { p1: 3, p2: 4, p3: 3 });
     const onChange = vi.fn((next) => {
       current = next;
     });
@@ -310,55 +316,55 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     expect(current.allowNonMonotonicP2Rates).toBe(false);
   });
 
-  it("Test 9: Điểm mỗi câu là số lẻ vô hạn tuần hoàn (40 / 3 = 13.3333...) vẫn đạt tổng đúng 100 điểm khi làm đúng hết", () => {
+  it("Test 9: Điểm mỗi câu là số lẻ vô hạn tuần hoàn (4 / 3 = 1.3333...) vẫn đạt tổng đúng 10 điểm khi làm đúng hết", () => {
     const exam = makeSampleExam(12, 3, 7);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
-    expect(Math.abs(scoring.perQuestion.p2 - 40 / 3)).toBeLessThan(1e-12);
+    expect(Math.abs(scoring.perQuestion.p2 - 4 / 3)).toBeLessThan(1e-12);
 
     const fullRes = gradeExam(exam, makeAllCorrectAnswers(exam), scoring);
-    expect(fullRes.score).toBe(100);
-    expect(fullRes.maxScore).toBe(100);
+    expect(fullRes.score).toBe(10);
+    expect(fullRes.maxScore).toBe(10);
   });
 
-  it("Test 10: Số lẻ 40/3 và đúng 3/4 ý (50%) giữ chính xác nội bộ, không vượt 100 và cộng chính xác nhiều câu lẻ", () => {
-    const exam = makeSampleExam(0, 3, 0); // 100đ / 3 câu = 33.3333.../câu
-    const scoring = buildScale100Scoring(
+  it("Test 10: Số lẻ 10/3 và đúng 3/4 ý (50%) giữ chính xác nội bộ, không vượt 10 và cộng chính xác nhiều câu lẻ", () => {
+    const exam = makeSampleExam(0, 3, 0); // 10đ / 3 câu = 3.3333.../câu
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 0, p2: 100, p3: 0 },
+      { p1: 0, p2: 10, p3: 0 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
 
-    // 1 câu đúng 3/4 (50% của 100/3 = 16.6666... -> hiển thị 16.67)
+    // 1 câu đúng 3/4 (50% của 10/3 = 1.6666... -> hiển thị 1.67)
     const onePartial = gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring);
-    expect(onePartial.score).toBe(16.67);
+    expect(onePartial.score).toBe(1.67);
 
-    // 2 câu mỗi câu đúng 3/4 (50% + 50% = 100% của 1 câu = 33.3333... -> hiển thị 33.33, KHÔNG phải 16.67+16.67=33.34)
+    // 2 câu mỗi câu đúng 3/4 (50% + 50% = 100% của 1 câu = 3.3333... -> hiển thị 3.33, KHÔNG phải 1.67+1.67=3.34)
     const twoPartial = gradeExam(
       exam,
       { p2_1: makeTFSelection(3), p2_2: makeTFSelection(3) },
       scoring
     );
-    expect(twoPartial.score).toBe(33.33);
+    expect(twoPartial.score).toBe(3.33);
 
-    // Cả 3 câu đều đúng 3/4 (50% mỗi câu = đúng 50 điểm tròn)
+    // Cả 3 câu đều đúng 3/4 (50% mỗi câu = đúng 5 điểm tròn)
     const threePartial = gradeExam(
       exam,
       { p2_1: makeTFSelection(3), p2_2: makeTFSelection(3), p2_3: makeTFSelection(3) },
       scoring
     );
-    expect(threePartial.score).toBe(50);
-    expect(threePartial.score).toBeLessThanOrEqual(100);
+    expect(threePartial.score).toBe(5);
+    expect(threePartial.score).toBeLessThanOrEqual(10);
   });
 
   it("Test 11: Giao diện kết quả học sinh hiển thị Số ý đúng, Tỷ lệ điểm được hưởng, Điểm đạt được và bảo mật khi khóa xem đáp án", () => {
     const exam = makeSampleExam(0, 2, 0);
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       exam,
-      { p1: 0, p2: 100, p3: 0 },
+      { p1: 0, p2: 10, p3: 0 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const answers = { p2_1: makeTFSelection(2), p2_2: makeTFSelection(3) };
@@ -402,10 +408,10 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     expect(screen.getAllByText(/Điểm đạt được/i).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("2/4")).toBeTruthy();
     expect(screen.getByText("25%")).toBeTruthy();
-    expect(screen.getByText("12.5/50")).toBeTruthy();
+    expect(screen.getByText("1.25/5")).toBeTruthy();
     expect(screen.getByText("3/4")).toBeTruthy();
     expect(screen.getByText("50%")).toBeTruthy();
-    expect(screen.getByText("25/50")).toBeTruthy();
+    expect(screen.getByText("2.5/5")).toBeTruthy();
     unmount();
 
     // 11b. Allow review = false (locked) -> hiển thị bảng tóm tắt điểm & tỷ lệ KHÔNG lộ nội dung câu hỏi/đáp án gốc
@@ -430,16 +436,16 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     expect(screen.getByText(/Chi tiết điểm Phần II — Đúng \/ Sai/i)).toBeTruthy();
     expect(screen.getByText("2/4")).toBeTruthy();
     expect(screen.getByText("25%")).toBeTruthy();
-    expect(screen.getByText("12.5/50")).toBeTruthy();
+    expect(screen.getByText("1.25/5")).toBeTruthy();
     expect(screen.queryByText(/Nội dung bí mật câu đúng sai/i)).toBeNull();
     expect(screen.queryByText(/Nội dung ý a câu 1/i)).toBeNull();
   });
 
   it("Test 12: Snapshot JSON roundtrip & sửa cấu hình đề thi sau khi đã có bài nộp không làm biến đổi kết quả lịch sử", () => {
     const exam = makeSampleExam(4, 2, 2);
-    const oldScoring = buildScale100Scoring(
+    const oldScoring = buildScale10Scoring(
       exam,
-      { p1: 40, p2: 40, p3: 20 },
+      { p1: 4, p2: 4, p3: 2 },
       { p2Method: "custom_rates", p2Rates: { "1": 10, "2": 25, "3": 50, "4": 100 } }
     );
     const attached = attachQuestionScores(exam, oldScoring);
@@ -455,7 +461,7 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     expect(storedPart2Summary).toHaveLength(2);
 
     // Sau đó giáo viên sửa lại đề (đổi sang chia đều hoặc tăng tỷ lệ khác)
-    const editedExam = reconcileScale100Scoring(attached, {
+    const editedExam = reconcileScale10Scoring(attached, {
       ...oldScoring,
       p2Method: "equal",
     });
@@ -468,21 +474,21 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
 
     // Helpers normalization test
     expect(normalizePartIIRates(undefined)).toEqual(DEFAULT_PART_II_RATES);
-    expect(getPartIIQuestionScoreDetails(2, 4, 10, storedScoringSnapshot)).toMatchObject({
+    expect(getPartIIQuestionScoreDetails(2, 4, 1, storedScoringSnapshot)).toMatchObject({
       ratePercent: 25,
-      earnedScore: 2.5,
+      earnedScore: 0.25,
       method: "custom_rates",
     });
   });
 
-  it("Test 13: API check-question-answer & submit-exam chấm chuẩn xác câu Phần II với phương thức custom_rates", async () => {
+  it("Test 13: API check-question-answer & submit-exam chấm chuẩn xác câu Phần II với phương thức custom_rates trên thang 10", async () => {
     const sample = SAMPLE_EXAMS[0];
     const p2Q = sample.questions.partII[0];
     expect(p2Q).toBeTruthy();
 
-    const customScoring = buildScale100Scoring(
+    const customScoring = buildScale10Scoring(
       sample.questions,
-      { p1: 30, p2: 40, p3: 30 },
+      { p1: 3, p2: 4, p3: 3 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
 
@@ -528,6 +534,7 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     const submitJson = resSubmit._getBody();
     expect(submitJson.id).toBeTruthy();
     expect(submitJson.submission?.score).toBeGreaterThan(0);
+    expect(submitJson.submission?.score).toBeLessThanOrEqual(10);
     expect(Array.isArray(submitJson.partIISummary)).toBe(true);
     expect(submitJson.partIISummary.length).toBe(sample.questions.partII.length);
   });

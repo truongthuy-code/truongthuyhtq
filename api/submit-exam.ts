@@ -1,6 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { findSampleExam, getSampleExamByCode, getSampleExamById } from "../src/lib/sampleExams";
-import { DEFAULT_SCORING, gradeExam, isScale100Scoring, roundFinalScore } from "../src/lib/grading";
+import {
+  DEFAULT_SCORING,
+  gradeExam,
+  isScale10Scoring,
+  normalizeScoringToScale10,
+  roundFinalScore,
+} from "../src/lib/grading";
 
 const SUPABASE_URL =
   process.env.VITE_SUPABASE_URL ||
@@ -176,7 +182,9 @@ export default async function handler(req: any, res: any) {
 
     // Action 1: lightweight scoring config lookup (safe - exposes no answers)
     if (action === "get_scoring") {
-      return res.json({ scoring: examRow?.scoring || null });
+      return res.json({
+        scoring: examRow?.scoring ? normalizeScoringToScale10(examRow.scoring) : null,
+      });
     }
 
     if (!examRow) {
@@ -202,7 +210,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const parsedQuestions = parseQuestionsObject(examRow.questions);
-    const activeScoring = examRow.scoring || DEFAULT_SCORING;
+    const activeScoring = normalizeScoringToScale10(examRow.scoring || DEFAULT_SCORING);
     const gradeResult = gradeExam(parsedQuestions as any, answers, activeScoring);
 
     let finalScore = gradeResult.score;
@@ -215,7 +223,7 @@ export default async function handler(req: any, res: any) {
     // For sample exams or if no service key, return computed grade cleanly
     if (sample || !SUPABASE_SERVICE_KEY) {
       // If no SUPABASE_SERVICE_KEY, client uses Supabase RPC submit_student_exam
-      // unless Scale-100 RPC hasn't been migrated yet — let's try bridge insert or return fallback
+      // unless Scale-10 RPC hasn't been migrated yet — let's try bridge insert or return fallback
       if (sample) {
         return res.json({
           id: `sample_${Date.now()}`,
@@ -232,7 +240,8 @@ export default async function handler(req: any, res: any) {
           breakdown: gradeResult.breakdown,
           partIISummary: gradeResult.partIISummary,
           scoringSnapshot: activeScoring,
-          isScale100: isScale100Scoring(activeScoring),
+          isScale10: isScale10Scoring(activeScoring),
+          isScale100: false,
         });
       }
       return res.json({
@@ -314,7 +323,8 @@ export default async function handler(req: any, res: any) {
       breakdown: gradeResult.breakdown,
       partIISummary: gradeResult.partIISummary,
       scoringSnapshot: activeScoring,
-      isScale100: isScale100Scoring(activeScoring),
+      isScale10: isScale10Scoring(activeScoring),
+      isScale100: false,
     });
   } catch (err: any) {
     console.error("[submit-exam] error:", err);

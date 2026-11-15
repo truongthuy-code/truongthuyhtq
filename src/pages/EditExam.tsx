@@ -13,10 +13,10 @@ import {
   DEFAULT_SCORING,
   detectExamStructure,
   getPartIISampleItemCount,
-  isScale100Scoring,
-  reconcileScale100Scoring,
+  isScale10Scoring,
+  reconcileScale10Scoring,
   ScoringConfig,
-  validateScale100Config,
+  validateScale10Config,
 } from "@/lib/grading";
 import ScoringConfigPanel from "@/components/ScoringConfigPanel";
 import { AlertTriangle, ArrowLeft, Loader2, Save } from "lucide-react";
@@ -65,8 +65,8 @@ export default function EditExam() {
   const examCounts = useMemo(() => detectExamStructure(examQuestions), [examQuestions]);
   const itemCountP2 = useMemo(() => getPartIISampleItemCount(examQuestions), [examQuestions]);
   const scoringValidation = useMemo(() => {
-    if (!isScale100Scoring(scoring)) return { valid: true, total: 100, diff: 0, message: null };
-    return validateScale100Config(scoring, examCounts);
+    if (!isScale10Scoring(scoring)) return { valid: true, total: 10, diff: 0, message: null };
+    return validateScale10Config(scoring, examCounts);
   }, [scoring, examCounts]);
 
   const hasScoringChanged = useMemo(() => {
@@ -118,8 +118,8 @@ export default function EditExam() {
       setShuffleQ({ p1: !!examData.shuffle_q_p1, p2: !!examData.shuffle_q_p2, p3: !!examData.shuffle_q_p3 });
       setShuffleO({ p1: !!examData.shuffle_o_p1, p2: !!examData.shuffle_o_p2, p3: !!examData.shuffle_o_p3 });
       const rawScoring = examData.scoring as any;
-      const loadedScoring = isScale100Scoring(rawScoring)
-        ? reconcileScale100Scoring(parsedQs, rawScoring)
+      const loadedScoring = isScale10Scoring(rawScoring)
+        ? reconcileScale10Scoring(parsedQs, rawScoring)
         : (rawScoring || DEFAULT_SCORING);
       setScoring(loadedScoring);
       setInitialScoringSnapshot(JSON.stringify(loadedScoring));
@@ -187,7 +187,7 @@ export default function EditExam() {
 
       setLoading(false);
     })();
-  }, [id, navigate, isAdmin, user]);
+  }, [id, navigate, isAdmin, user?.id]);
 
   const onSave = async () => {
     if (!id) return;
@@ -197,8 +197,8 @@ export default function EditExam() {
       return;
     }
 
-    if (isScale100Scoring(scoring) && !scoringValidation.valid) {
-      toast.error(scoringValidation.message || "Cấu hình thang điểm 100 chưa hợp lệ!");
+    if (isScale10Scoring(scoring) && !scoringValidation.valid) {
+      toast.error(scoringValidation.message || "Cấu hình thang điểm 10 chưa hợp lệ!");
       return;
     }
 
@@ -216,8 +216,8 @@ export default function EditExam() {
       ? encryptExamPassword(passwordConfig.password.trim(), id)
       : "";
 
-    const baseScoring = isScale100Scoring(scoring)
-      ? reconcileScale100Scoring(examQuestions, scoring)
+    const baseScoring = isScale10Scoring(scoring)
+      ? reconcileScale10Scoring(examQuestions, scoring)
       : (scoring as any);
 
     const finalScoring: any = {
@@ -227,7 +227,7 @@ export default function EditExam() {
     };
 
     const syncedQuestions =
-      examQuestions && isScale100Scoring(finalScoring) && !Array.isArray(examQuestions) && (examQuestions.partI || examQuestions.partII || examQuestions.partIII)
+      examQuestions && isScale10Scoring(finalScoring) && !Array.isArray(examQuestions) && (examQuestions.partI || examQuestions.partII || examQuestions.partIII)
         ? attachQuestionScores(examQuestions, finalScoring)
         : examQuestions;
 
@@ -290,17 +290,21 @@ export default function EditExam() {
       folder_id: targetFolderId,
     } as any);
 
-    syncExamAssignmentCodes({
+    const syncRes = await syncExamAssignmentCodes({
       id,
       title,
       duration_minutes: duration,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
       team_config: teamConfig as any,
-    }).catch(() => {});
+    });
 
     setSaving(false);
-    toast.success("Đã lưu cài đặt đề thi thành công!");
+    if (!syncRes.success) {
+      toast.warning("Đã lưu cài đặt đề thi nhưng đồng bộ mã bài thi gặp lỗi: " + (syncRes.error || "Vui lòng kiểm tra lại ở mục Chia sẻ."));
+    } else {
+      toast.success("Đã lưu cài đặt đề thi thành công!");
+    }
     navigate(isAdmin ? "/admin" : targetFolderId ? `/?folder=${targetFolderId}` : "/");
   };
 

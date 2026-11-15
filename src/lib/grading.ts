@@ -3,7 +3,7 @@ import { stripRich } from "./docxParser";
 
 export type StudentAnswers = Record<string, any>;
 
-export const DEFAULT_TOTAL_SCALE = 100;
+export const DEFAULT_TOTAL_SCALE = 10;
 
 export type PartPoints = {
   p1: number;
@@ -45,8 +45,8 @@ export type PartIIQuestionSummary = {
   itemStatuses: Array<"correct" | "wrong" | "blank">;
 };
 
-export type Scale100ScoringConfig = {
-  mode: "scale_100";
+export type Scale10ScoringConfig = {
+  mode: "scale_10";
   totalScale: number;
   parts: PartPoints;
   counts: ExamStructureCounts;
@@ -67,11 +67,14 @@ export type Scale100ScoringConfig = {
   min_correct_percentage_for_review?: number;
 };
 
+/** @deprecated Alias kept for backward compatibility; configs now normalize to Scale10ScoringConfig. */
+export type Scale100ScoringConfig = Scale10ScoringConfig;
+
 export type ScoringConfig = {
   p1: number;
   p2: { "1": number; "2": number; "3": number; "4": number };
   p3: number;
-  mode?: "scale_100" | "legacy";
+  mode?: "scale_10" | "scale_100" | "legacy";
   totalScale?: number;
   parts?: PartPoints;
   counts?: ExamStructureCounts;
@@ -177,7 +180,7 @@ export function getPartIIQuestionScoreDetails(
   }
 
   let ratePercent: number;
-  if (isScale100Scoring(scoring) && method === "custom_rates") {
+  if (isScale10Scoring(scoring) && method === "custom_rates") {
     const rates = normalizePartIIRates(scoring.p2Rates);
     if (okItems >= totalItems) {
       ratePercent = rates["4"];
@@ -211,7 +214,7 @@ export function getPartIIQuestionScoreDetails(
 
 /**
  * Làm tròn an toàn ở kết quả tổng cuối cùng (tối đa 2 chữ số thập phân),
- * xử lý sai số dấu phẩy động (ví dụ 99.99999999999999 -> 100).
+ * xử lý sai số dấu phẩy động (ví dụ 9.99999999999999 -> 10).
  */
 export function roundFinalScore(raw: number): number {
   if (!Number.isFinite(raw)) return 0;
@@ -229,8 +232,192 @@ export function formatScore(val: number | null | undefined, maxDecimals = 2): st
   return Object.is(rounded, -0) ? "0" : rounded.toString();
 }
 
-export function isScale100Scoring(scoring: any): scoring is Scale100ScoringConfig {
-  return Boolean(scoring && scoring.mode === "scale_100" && scoring.parts && typeof scoring.parts === "object");
+export function isScale10Scoring(scoring: any): scoring is Scale10ScoringConfig {
+  return Boolean(
+    scoring &&
+      (scoring.mode === "scale_10" || scoring.mode === "scale_100") &&
+      scoring.parts &&
+      typeof scoring.parts === "object"
+  );
+}
+
+/** @deprecated Alias kept for backward compatibility; checks part-allocated scoring configs. */
+export const isScale100Scoring = isScale10Scoring;
+
+export function isLegacyScale100Config(scoring: any): boolean {
+  if (!scoring || scoring.mode !== "scale_100" || !scoring.parts || typeof scoring.parts !== "object") {
+    return false;
+  }
+  const declaredScale = Number(scoring.totalScale);
+  if (declaredScale === 100) return true;
+  if (declaredScale === 10) return false;
+  const partsSum =
+    (Number(scoring.parts.p1) || 0) +
+    (Number(scoring.parts.p2) || 0) +
+    (Number(scoring.parts.p3) || 0);
+  return partsSum > 10.5;
+}
+
+/**
+ * Quy đổi an toàn cấu hình thang điểm 100 cũ sang thang điểm 10 (tối đa 1 lần - idempotent).
+ * Giữ nguyên tuyệt đối tỷ lệ % Phần II (10%, 25%, 50%, 100%) và các cài đặt khác.
+ */
+export function normalizeScoringToScale10<T = any>(scoring: T): T {
+  if (!scoring || typeof scoring !== "object") return scoring;
+  const s = scoring as any;
+  if (s.mode === "scale_10") {
+    return scoring;
+  }
+  if (isLegacyScale100Config(s)) {
+    const scaleFactor = Number(s.totalScale) > 10.5 ? Number(s.totalScale) / 10 : 10;
+    const div = (v: any) => {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return Math.round((n / scaleFactor) * 1e10) / 1e10;
+    };
+    const p2Legacy =
+      s.p2 && typeof s.p2 === "object"
+        ? {
+            "1": div(s.p2["1"]),
+            "2": div(s.p2["2"]),
+            "3": div(s.p2["3"]),
+            "4": div(s.p2["4"]),
+          }
+        : { "1": 0.1, "2": 0.25, "3": 0.5, "4": 1 };
+    return {
+      ...s,
+      mode: "scale_10",
+      totalScale: DEFAULT_TOTAL_SCALE,
+      parts: {
+        p1: div(s.parts?.p1),
+        p2: div(s.parts?.p2),
+        p3: div(s.parts?.p3),
+      },
+      perQuestion: {
+        p1: div(s.perQuestion?.p1),
+        p2: div(s.perQuestion?.p2),
+        p3: div(s.perQuestion?.p3),
+      },
+      perItemP2: div(s.perItemP2),
+      p1: div(s.p1),
+      p2: p2Legacy,
+      p3: div(s.p3),
+    } as T;
+  }
+  if (s.mode === "scale_100" && s.parts && typeof s.parts === "object") {
+    return {
+      ...s,
+      mode: "scale_10",
+      totalScale: DEFAULT_TOTAL_SCALE,
+    } as T;
+  }
+  return scoring;
+}
+
+export function isLegacyScale100Submission(sub: any, exam?: any): boolean {
+  if (!sub || typeof sub !== "object" || sub._normalizedToScale10 === true) return false;
+  const rawMax = Number(sub.max_score ?? sub.maxScore);
+  if (Number.isFinite(rawMax) && rawMax > 0) {
+    return rawMax > 10.5;
+  }
+  const snap = sub.scoring_snapshot ?? sub.scoringSnapshot ?? exam?.scoring;
+  if (isLegacyScale100Config(snap)) return true;
+  const rawScore = Number(sub.score);
+  return Number.isFinite(rawScore) && rawScore > 10.5;
+}
+
+export function normalizePart2SummaryToScale10(summary: any, scaleFactor: number): any {
+  if (!Array.isArray(summary) || !(scaleFactor > 1)) return summary;
+  return summary.map((item: any) => {
+    if (!item || typeof item !== "object") return item;
+    const rawMax = Number(item.maxScore);
+    const rawEarned = Number(item.earnedScore);
+    return {
+      ...item,
+      maxScore: Number.isFinite(rawMax) ? roundFinalScore(rawMax / scaleFactor) : item.maxScore,
+      earnedScore: Number.isFinite(rawEarned) ? roundFinalScore(rawEarned / scaleFactor) : item.earnedScore,
+    };
+  });
+}
+
+/**
+ * Chuẩn hóa bản ghi bài nộp (từ Supabase hoặc localStorage) sang thang điểm 10 để hiển thị & thống kê.
+ * Chỉ quy đổi khi max_score/snapshot gốc thuộc thang 100 (tuyệt đối không chia 10 hai lần).
+ */
+export function normalizeSubmissionToScale10<T extends Record<string, any>>(
+  sub: T,
+  exam?: any
+): T & { score: number; max_score: number; maxScore: number; wasLegacyScale100: boolean; _normalizedToScale10: true } {
+  if (!sub || typeof sub !== "object") {
+    return {
+      ...(sub as any),
+      score: 0,
+      max_score: DEFAULT_TOTAL_SCALE,
+      maxScore: DEFAULT_TOTAL_SCALE,
+      wasLegacyScale100: false,
+      _normalizedToScale10: true,
+    };
+  }
+  if ((sub as any)._normalizedToScale10 === true) {
+    const curMax = Number((sub as any).max_score ?? (sub as any).maxScore) || DEFAULT_TOTAL_SCALE;
+    return {
+      ...sub,
+      score: Number(sub.score) || 0,
+      max_score: curMax,
+      maxScore: curMax,
+      wasLegacyScale100: Boolean((sub as any).wasLegacyScale100),
+      _normalizedToScale10: true,
+    };
+  }
+
+  const rawMax = Number(sub.max_score ?? sub.maxScore);
+  const rawScore = Number(sub.score) || 0;
+  const isLegacy100 = isLegacyScale100Submission(sub, exam);
+
+  if (isLegacy100) {
+    const scaleFactor =
+      Number.isFinite(rawMax) && rawMax > 10.5
+        ? Math.abs(rawMax - 100) <= 1
+          ? 10
+          : rawMax / DEFAULT_TOTAL_SCALE
+        : 10;
+    const convertedScore = roundFinalScore(rawScore / scaleFactor);
+    const convertedMax =
+      Number.isFinite(rawMax) && rawMax > 10.5
+        ? roundFinalScore(rawMax / scaleFactor)
+        : DEFAULT_TOTAL_SCALE;
+    const rawSnap = (sub as any).scoring_snapshot ?? (sub as any).scoringSnapshot;
+    const normSnap = rawSnap ? normalizeScoringToScale10(rawSnap) : rawSnap;
+    const rawP2 = (sub as any).part2_summary ?? (sub as any).partIISummary;
+    const normP2 = Array.isArray(rawP2) ? normalizePart2SummaryToScale10(rawP2, scaleFactor) : rawP2;
+
+    return {
+      ...sub,
+      score: convertedScore,
+      max_score: convertedMax,
+      maxScore: convertedMax,
+      ...((sub as any).scoring_snapshot !== undefined ? { scoring_snapshot: normSnap } : {}),
+      ...((sub as any).scoringSnapshot !== undefined ? { scoringSnapshot: normSnap } : {}),
+      ...((sub as any).part2_summary !== undefined ? { part2_summary: normP2 } : {}),
+      ...((sub as any).partIISummary !== undefined ? { partIISummary: normP2 } : {}),
+      wasLegacyScale100: true,
+      _normalizedToScale10: true,
+    };
+  }
+
+  const effectiveMax = Number.isFinite(rawMax) && rawMax > 0 ? roundFinalScore(rawMax) : DEFAULT_TOTAL_SCALE;
+  const rawSnap = (sub as any).scoring_snapshot ?? (sub as any).scoringSnapshot;
+  const normSnap = rawSnap ? normalizeScoringToScale10(rawSnap) : rawSnap;
+  return {
+    ...sub,
+    score: roundFinalScore(rawScore),
+    max_score: effectiveMax,
+    maxScore: effectiveMax,
+    ...((sub as any).scoring_snapshot !== undefined ? { scoring_snapshot: normSnap } : {}),
+    ...((sub as any).scoringSnapshot !== undefined ? { scoringSnapshot: normSnap } : {}),
+    wasLegacyScale100: false,
+    _normalizedToScale10: true,
+  };
 }
 
 function normalizeQuestionsContainer(examOrQuestions: any): { partI: any[]; partII: any[]; partIII: any[] } {
@@ -299,7 +486,7 @@ export function getPartIISampleItemCount(examOrQuestions: any): number {
 }
 
 /**
- * Phân bổ mặc định hợp lý đạt tổng 100 điểm dựa trên các phần hiện có trong đề.
+ * Phân bổ mặc định hợp lý đạt tổng 10 điểm dựa trên các phần hiện có trong đề.
  */
 export function suggestDefaultPartPoints(counts: ExamStructureCounts, totalScale = DEFAULT_TOTAL_SCALE): PartPoints {
   const has1 = counts.p1 > 0;
@@ -345,14 +532,14 @@ function sanitizePointValue(v: any): number {
 }
 
 /**
- * Tạo cấu hình thang điểm 100 đầy đủ kèm điểm tự động phân bổ cho từng câu và từng ý Phần II.
+ * Tạo cấu hình thang điểm 10 đầy đủ kèm điểm tự động phân bổ cho từng câu và từng ý Phần II.
  * Giữ giá trị số thực chính xác nội bộ (không làm tròn sớm từng câu trước khi cộng).
  */
-export function buildScale100Scoring(
+export function buildScale10Scoring(
   examOrQuestions: any,
   customParts?: Partial<PartPoints>,
   preserveExtra?: Record<string, any>
-): Scale100ScoringConfig {
+): Scale10ScoringConfig {
   const counts = detectExamStructure(examOrQuestions);
   const suggested = suggestDefaultPartPoints(counts, DEFAULT_TOTAL_SCALE);
 
@@ -388,8 +575,8 @@ export function buildScale100Scoring(
           "4": roundHigh(perItemP2 * 4),
         };
 
-  const config: Scale100ScoringConfig = {
-    mode: "scale_100",
+  const config: Scale10ScoringConfig = {
+    mode: "scale_10",
     totalScale: DEFAULT_TOTAL_SCALE,
     parts: rawParts,
     counts,
@@ -419,20 +606,25 @@ export function buildScale100Scoring(
   return config;
 }
 
+/** @deprecated Alias kept for compatibility; builds Scale-10 scoring config. */
+export const buildScale100Scoring = buildScale10Scoring;
+
 /**
  * Tự động đồng bộ cấu hình điểm khi số lượng câu hỏi hoặc cấu trúc đề thi thay đổi.
+ * - Tự động quy đổi cấu hình thang điểm 100 cũ sang thang điểm 10 (1 lần duy nhất).
  * - Nếu chỉ số câu trong các phần đang có thay đổi (vd: 12 -> 15 câu), giữ nguyên điểm giáo viên đặt cho từng phần và chia lại điểm mỗi câu.
- * - Nếu có phần chuyển từ 0 -> >0 hoặc >0 -> 0 làm tổng lệch khỏi 100, tự cân bằng lại đạt tổng 100.
+ * - Nếu có phần chuyển từ 0 -> >0 hoặc >0 -> 0 làm tổng lệch khỏi 10, tự cân bằng lại đạt tổng 10.
  */
-export function reconcileScale100Scoring(examOrQuestions: any, prevScoring?: any): Scale100ScoringConfig {
+export function reconcileScale10Scoring(examOrQuestions: any, prevScoring?: any): Scale10ScoringConfig {
   const newCounts = detectExamStructure(examOrQuestions);
+  const normalizedPrev = normalizeScoringToScale10(prevScoring);
 
-  if (!isScale100Scoring(prevScoring)) {
-    return buildScale100Scoring(examOrQuestions, undefined, prevScoring);
+  if (!isScale10Scoring(normalizedPrev)) {
+    return buildScale10Scoring(examOrQuestions, undefined, normalizedPrev);
   }
 
-  const prevCounts = prevScoring.counts || { p1: 0, p2: 0, p3: 0 };
-  const prevParts = prevScoring.parts || { p1: 0, p2: 0, p3: 0 };
+  const prevCounts = normalizedPrev.counts || { p1: 0, p2: 0, p3: 0 };
+  const prevParts = normalizedPrev.parts || { p1: 0, p2: 0, p3: 0 };
 
   const activeChanged =
     (prevCounts.p1 > 0) !== (newCounts.p1 > 0) ||
@@ -459,13 +651,16 @@ export function reconcileScale100Scoring(examOrQuestions: any, prevScoring?: any
     }
   }
 
-  return buildScale100Scoring(examOrQuestions, nextParts, prevScoring);
+  return buildScale10Scoring(examOrQuestions, nextParts, normalizedPrev);
 }
 
+/** @deprecated Alias kept for compatibility; reconciles to Scale-10 scoring config. */
+export const reconcileScale100Scoring = reconcileScale10Scoring;
+
 /**
- * Kiểm tra tổng điểm các phần có đúng bằng 100 hay không.
+ * Kiểm tra tổng điểm các phần có đúng bằng 10 hay không.
  */
-export function validateScale100Parts(
+export function validateScale10Parts(
   parts: PartPoints,
   counts: ExamStructureCounts
 ): { valid: boolean; total: number; diff: number; message: string | null } {
@@ -494,29 +689,33 @@ export function validateScale100Parts(
       diff,
       message:
         diff > 0
-          ? `Tổng điểm các phần đang là ${formatScore(total)}/100 (còn thiếu ${absDiff} điểm). Vui lòng điều chỉnh để tổng bằng đúng 100 điểm.`
-          : `Tổng điểm các phần đang là ${formatScore(total)}/100 (vượt quá ${absDiff} điểm). Vui lòng điều chỉnh để tổng bằng đúng 100 điểm.`,
+          ? `Tổng điểm các phần đang là ${formatScore(total)}/10 (còn thiếu ${absDiff} điểm). Vui lòng điều chỉnh để tổng bằng đúng 10 điểm.`
+          : `Tổng điểm các phần đang là ${formatScore(total)}/10 (vượt quá ${absDiff} điểm). Vui lòng điều chỉnh để tổng bằng đúng 10 điểm.`,
     };
   }
 
   return { valid: true, total: DEFAULT_TOTAL_SCALE, diff: 0, message: null };
 }
 
+/** @deprecated Alias kept for compatibility; validates against Scale 10. */
+export const validateScale100Parts = validateScale10Parts;
+
 /**
- * Kiểm tra toàn diện cấu hình thang điểm 100 (bao gồm tổng 100 điểm và tỷ lệ Phần II).
+ * Kiểm tra toàn diện cấu hình thang điểm 10 (bao gồm tổng 10 điểm và tỷ lệ Phần II).
  */
-export function validateScale100Config(
+export function validateScale10Config(
   scoring: ScoringConfig,
   counts: ExamStructureCounts
 ): { valid: boolean; total: number; diff: number; message: string | null } {
-  if (!isScale100Scoring(scoring)) {
-    return { valid: true, total: 100, diff: 0, message: null };
+  const normalized = normalizeScoringToScale10(scoring);
+  if (!isScale10Scoring(normalized)) {
+    return { valid: true, total: DEFAULT_TOTAL_SCALE, diff: 0, message: null };
   }
-  const partCheck = validateScale100Parts(scoring.parts, counts);
+  const partCheck = validateScale10Parts(normalized.parts, counts);
   if (!partCheck.valid) return partCheck;
 
-  if (counts.p2 > 0 && getPartIIMethod(scoring) === "custom_rates") {
-    const rateCheck = validatePartIIRates(scoring.p2Rates, Boolean(scoring.allowNonMonotonicP2Rates));
+  if (counts.p2 > 0 && getPartIIMethod(normalized) === "custom_rates") {
+    const rateCheck = validatePartIIRates(normalized.p2Rates, Boolean(normalized.allowNonMonotonicP2Rates));
     if (!rateCheck.valid) {
       return {
         valid: false,
@@ -530,22 +729,26 @@ export function validateScale100Config(
   return partCheck;
 }
 
+/** @deprecated Alias kept for compatibility; validates against Scale 10. */
+export const validateScale100Config = validateScale10Config;
+
 /**
  * Gắn metadata điểm tối đa vào từng câu hỏi và từng ý Phần II để lưu đồng bộ,
  * tuyệt đối không làm biến đổi nội dung câu hỏi hay đáp án.
  */
 export function attachQuestionScores<T extends ParsedExam>(exam: T, scoring: ScoringConfig): T {
-  if (!exam || !isScale100Scoring(scoring)) return exam;
+  const normalized = normalizeScoringToScale10(scoring);
+  if (!exam || !isScale10Scoring(normalized)) return exam;
 
   const n1 = (exam.partI || []).length;
   const n2 = (exam.partII || []).length;
   const n3 = (exam.partIII || []).length;
 
-  const perQ1 = n1 > 0 ? scoring.parts.p1 / n1 : 0;
-  const perQ2 = n2 > 0 ? scoring.parts.p2 / n2 : 0;
-  const perQ3 = n3 > 0 ? scoring.parts.p3 / n3 : 0;
-  const p2Method = getPartIIMethod(scoring);
-  const p2Rates = normalizePartIIRates(scoring.p2Rates);
+  const perQ1 = n1 > 0 ? normalized.parts.p1 / n1 : 0;
+  const perQ2 = n2 > 0 ? normalized.parts.p2 / n2 : 0;
+  const perQ3 = n3 > 0 ? normalized.parts.p3 / n3 : 0;
+  const p2Method = getPartIIMethod(normalized);
+  const p2Rates = normalizePartIIRates(normalized.p2Rates);
 
   return {
     ...exam,
@@ -599,14 +802,16 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
   const partII = (exam?.partII || []) as TFQuestion[];
   const partIII = (exam?.partIII || []) as SAQuestion[];
 
-  if (isScale100Scoring(scoring)) {
+  const normalizedScoring = normalizeScoringToScale10(scoring);
+
+  if (isScale10Scoring(normalizedScoring)) {
     const n1 = partI.length;
     const n2 = partII.length;
     const n3 = partIII.length;
 
-    const ptsP1 = n1 > 0 ? sanitizePointValue(scoring.parts.p1) : 0;
-    const ptsP2 = n2 > 0 ? sanitizePointValue(scoring.parts.p2) : 0;
-    const ptsP3 = n3 > 0 ? sanitizePointValue(scoring.parts.p3) : 0;
+    const ptsP1 = n1 > 0 ? sanitizePointValue(normalizedScoring.parts.p1) : 0;
+    const ptsP2 = n2 > 0 ? sanitizePointValue(normalizedScoring.parts.p2) : 0;
+    const ptsP3 = n3 > 0 ? sanitizePointValue(normalizedScoring.parts.p3) : 0;
 
     const perQ1 = n1 > 0 ? ptsP1 / n1 : 0;
     const perQ2 = n2 > 0 ? ptsP2 / n2 : 0;
@@ -656,7 +861,7 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
         }
       }
       const denom = itemLen > 0 ? itemLen : 4;
-      const qScore = getPartIIQuestionScoreDetails(okItems, denom, perQ2, scoring);
+      const qScore = getPartIIQuestionScoreDetails(okItems, denom, perQ2, normalizedScoring);
       p2RatioSum += qScore.rawRatio;
 
       const ok = itemLen > 0 && okItems === itemLen;

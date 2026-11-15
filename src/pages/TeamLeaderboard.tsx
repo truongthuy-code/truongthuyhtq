@@ -23,7 +23,7 @@ import {
 import { useBattleMusic } from "@/hooks/useBattleMusic";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
-import { formatScore } from "@/lib/grading";
+import { formatScore, normalizeSubmissionToScale10 } from "@/lib/grading";
 
 export type LbTeam = {
   id: string;
@@ -58,7 +58,7 @@ export function LeaderboardBoard({
   totalQuestions: number;
   ended?: boolean;
 }) {
-  const ranked = rankTeams(teams);
+  const ranked = rankTeams(teams.map((t) => normalizeSubmissionToScale10(t)));
   if (!ranked.length) {
     return (
       <div className="text-center text-muted-foreground py-8 font-medium">
@@ -295,7 +295,10 @@ export default function TeamLeaderboard({
   }, [handleClose]);
 
   // Dữ liệu xếp hạng
-  const teams: LbTeam[] = useMemo(() => (data?.teams || []) as LbTeam[], [data?.teams]);
+  const teams: LbTeam[] = useMemo(
+    () => ((data?.teams || []) as LbTeam[]).map((t) => normalizeSubmissionToScale10(t)),
+    [data?.teams]
+  );
   const ended = !!data?.exam?.ended;
   const ranked = useMemo(() => rankTeams(teams), [teams]);
   const champion = ranked[0];

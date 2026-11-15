@@ -11,7 +11,7 @@ import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
 import { normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { LeaderboardBoard, rankTeams, LbTeam } from "./TeamLeaderboard";
-import { formatScore } from "@/lib/grading";
+import { formatScore, normalizeSubmissionToScale10 } from "@/lib/grading";
 import {
   ChevronLeft,
   ChevronRight,
@@ -102,7 +102,7 @@ export default function TeamTake() {
   const questions = useMemo(() => flatten(exam?.questions), [exam]);
   const answers: Record<string, any> = state?.answers || {};
   const answeredCount = Object.keys(answers).length;
-  const team = state?.team;
+  const team = state?.team ? normalizeSubmissionToScale10(state.team, exam) : state?.team;
 
   const loadLb = useCallback(async () => {
     const { data } = await supabase.rpc("get_team_leaderboard", { p_exam_id: id! } as any);
@@ -369,7 +369,7 @@ export default function TeamTake() {
     );
   }
 
-  const teams: LbTeam[] = (lb?.teams || []) as LbTeam[];
+  const teams: LbTeam[] = ((lb?.teams || []) as LbTeam[]).map((t) => normalizeSubmissionToScale10(t, exam));
   const myRank = rankTeams(teams).findIndex((t) => t.id === teamId) + 1;
   const members = (state?.members || []) as any[];
   const ended = !!lb?.exam?.ended;
@@ -388,7 +388,7 @@ export default function TeamTake() {
             <h2 className="text-3xl font-black text-foreground">Nhóm {teamName} đã hoàn thành!</h2>
             <div className="mt-4 flex flex-wrap justify-center gap-4 text-base">
               <span className="px-4 py-2 rounded-2xl bg-primary/10 text-primary font-black border border-primary/20">
-                Tổng điểm: {formatScore(team?.score || 0)}{team?.max_score ? ` / ${formatScore(team.max_score)}` : ""}
+                Tổng điểm: {formatScore(team?.score || 0)} / {formatScore(team?.max_score || 10)} điểm
               </span>
               <span className="px-4 py-2 rounded-2xl bg-emerald-500/10 text-emerald-600 font-black border border-emerald-500/20">
                 Số câu đúng: {team?.correct_count || 0} / {questions.length}

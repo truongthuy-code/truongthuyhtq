@@ -26,12 +26,12 @@ import {
   syncExamAssignmentCodes,
   getExamPrimaryCode,
   generateUniqueNumericExamCode,
-  getExamShareUrl,
 } from "@/lib/examAssignments";
+import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { fetchAllExamsForAdmin } from "@/lib/allExamsStorage";
-import { attachQuestionScores, isScale100Scoring, reconcileScale100Scoring } from "@/lib/grading";
+import { attachQuestionScores, isScale10Scoring, reconcileScale10Scoring } from "@/lib/grading";
 
 const PAGE_SIZE = 10;
 
@@ -179,9 +179,15 @@ export default function Exams() {
     }
   };
 
-  const copyLink = (id: string, code?: string) => {
-    navigator.clipboard.writeText(getExamShareUrl(id, code));
-    toast.success("Đã copy link bài thi");
+  const copyLink = async (examObj: any) => {
+    try {
+      await syncExamAssignmentCodes(examObj);
+      const sl = await ensureExamShortLink({ exam: examObj });
+      await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      toast.success("Đã sao chép link ngắn bài thi");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tạo link ngắn bài thi");
+    }
   };
   const deleteExam = async (exam: any) => {
     if (!confirm(`Xóa đề "${exam.title}"?`)) return;
@@ -224,11 +230,11 @@ export default function Exams() {
       primary_code: newExamCode,
     };
 
-    const syncedScoring = isScale100Scoring(rest.scoring)
-      ? reconcileScale100Scoring(rest.questions, rest.scoring)
+    const syncedScoring = isScale10Scoring(rest.scoring)
+      ? reconcileScale10Scoring(rest.questions, rest.scoring)
       : rest.scoring;
     const syncedQuestions =
-      rest.questions && isScale100Scoring(syncedScoring) && !Array.isArray(rest.questions) && (rest.questions.partI || rest.questions.partII || rest.questions.partIII)
+      rest.questions && isScale10Scoring(syncedScoring) && !Array.isArray(rest.questions) && (rest.questions.partI || rest.questions.partII || rest.questions.partIII)
         ? attachQuestionScores(rest.questions, syncedScoring)
         : rest.questions;
 
@@ -453,7 +459,7 @@ export default function Exams() {
                       <Lock className="size-3.5 mr-1" /> Đóng đề
                     </Button>
                   )}
-                  <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e.id)}>
+                  <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e)}>
                     <Copy className="size-3.5 mr-1" /> Copy link
                   </Button>
                   <Button size="sm" variant="outline" className="rounded-lg" asChild>

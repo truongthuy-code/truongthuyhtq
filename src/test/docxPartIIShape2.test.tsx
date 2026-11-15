@@ -11,7 +11,7 @@ import {
   type SAQuestion,
 } from "@/lib/docxParser";
 import {
-  buildScale100Scoring,
+  buildScale10Scoring,
   DEFAULT_PART_II_RATES,
   gradeExam,
 } from "@/lib/grading";
@@ -337,7 +337,7 @@ describe("DOCX Parser - Bảng đáp án Phần II Hình 2 & Tương thích ngư
     expect(parsed.partIII.map((q) => q.answer)).toEqual(["2025", "-4,5"]);
   });
 
-  it("Kiểm thử 4: Tích hợp chấm điểm (thang điểm 100, chia đều 4 ý và tỷ lệ theo số ý đúng) hoạt động chính xác với dữ liệu từ Hình 2", async () => {
+  it("Kiểm thử 4: Tích hợp chấm điểm (thang điểm 10, chia đều 4 ý và tỷ lệ theo số ý đúng) hoạt động chính xác với dữ liệu từ Hình 2", async () => {
     const parsed = await parseDocxXmlNodes([
       paraXml(runXml("PHẦN II. TRẮC NGHIỆM ĐÚNG SAI")),
       ...tfQuestionBody(1),
@@ -355,38 +355,38 @@ describe("DOCX Parser - Bảng đáp án Phần II Hình 2 & Tương thích ngư
       ]),
     ]);
 
-    // 4 câu Phần II = 100 điểm -> 25 điểm/câu
+    // 4 câu Phần II = 10 điểm -> 2.5 điểm/câu
     const studentAnswers: Record<string, any> = {
-      // Câu 1: đúng 4/4 -> 100% của 25 = 25đ
+      // Câu 1: đúng 4/4 -> 100% của 2.5 = 2.5đ
       [parsed.partII[0].id]: { a: true, b: true, c: true, d: true },
-      // Câu 2: đáp án [S, Đ, Đ, S], chọn đúng 3/4 (a,b,c đúng; d chọn Đ sai) -> 50% của 25 = 12.5đ
+      // Câu 2: đáp án [S, Đ, Đ, S], chọn đúng 3/4 (a,b,c đúng; d chọn Đ sai) -> 50% của 2.5 = 1.25đ
       [parsed.partII[1].id]: { a: false, b: true, c: true, d: true },
-      // Câu 3: đáp án [Đ, Đ, S, Đ], chọn đúng 2/4 -> 25% của 25 = 6.25đ
+      // Câu 3: đáp án [Đ, Đ, S, Đ], chọn đúng 2/4 -> 25% của 2.5 = 0.625đ (làm tròn hiển thị 0.63)
       [parsed.partII[2].id]: { a: true, b: true, c: true, d: false },
-      // Câu 4: đáp án [S, S, Đ, Đ], chọn đúng 1/4 -> 10% của 25 = 2.5đ
+      // Câu 4: đáp án [S, S, Đ, Đ], chọn đúng 1/4 -> 10% của 2.5 = 0.25đ
       [parsed.partII[3].id]: { a: false, b: true, c: false, d: false },
     };
 
-    // Chế độ 1: Chia đều (4 ý -> 6.25đ/ý)
-    const equalScoring = buildScale100Scoring(parsed, { p1: 0, p2: 100, p3: 0 }, { p2Method: "equal" });
+    // Chế độ 1: Chia đều (4 ý -> 0.625đ/ý)
+    const equalScoring = buildScale10Scoring(parsed, { p1: 0, p2: 10, p3: 0 }, { p2Method: "equal" });
     const equalGrade = gradeExam(parsed, studentAnswers, equalScoring);
-    // Tổng số ý đúng: 4 + 3 + 2 + 1 = 10/16 ý -> 10 * 6.25 = 62.5đ
-    expect(equalGrade.score).toBe(62.5);
-    expect(equalGrade.maxScore).toBe(100);
+    // Tổng số ý đúng: 4 + 3 + 2 + 1 = 10/16 ý -> 10 * 0.625 = 6.25đ
+    expect(equalGrade.score).toBe(6.25);
+    expect(equalGrade.maxScore).toBe(10);
     expect(equalGrade.partIISummary.map((s) => s.okItems)).toEqual([4, 3, 2, 1]);
 
     // Chế độ 2: Tỷ lệ theo số ý đúng (10% / 25% / 50% / 100%)
-    const customScoring = buildScale100Scoring(
+    const customScoring = buildScale10Scoring(
       parsed,
-      { p1: 0, p2: 100, p3: 0 },
+      { p1: 0, p2: 10, p3: 0 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const customGrade = gradeExam(parsed, studentAnswers, customScoring);
-    // 25 + 12.5 + 6.25 + 2.5 = 46.25đ
-    expect(customGrade.score).toBe(46.25);
-    expect(customGrade.maxScore).toBe(100);
+    // 2.5 + 1.25 + 0.625 + 0.25 = 4.625 -> 4.63đ
+    expect(customGrade.score).toBe(4.63);
+    expect(customGrade.maxScore).toBe(10);
     expect(customGrade.partIISummary.map((s) => s.ratePercent)).toEqual([100, 50, 25, 10]);
-    expect(customGrade.partIISummary.map((s) => s.earnedScore)).toEqual([25, 12.5, 6.25, 2.5]);
+    expect(customGrade.partIISummary.map((s) => s.earnedScore)).toEqual([2.5, 1.25, 0.63, 0.25]);
   });
 
   it("Kiểm thử 5: Giao diện kết quả học sinh hiển thị chính xác từng ý a,b,c,d, số ý đúng, tỷ lệ và điểm khi đề dùng bảng Hình 2", async () => {
@@ -403,14 +403,14 @@ describe("DOCX Parser - Bảng đáp án Phần II Hình 2 & Tương thích ngư
       ]),
     ]);
 
-    const scoring = buildScale100Scoring(
+    const scoring = buildScale10Scoring(
       parsed,
-      { p1: 0, p2: 100, p3: 0 },
+      { p1: 0, p2: 10, p3: 0 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const answers = {
-      [parsed.partII[0].id]: { a: true, b: true, c: true, d: false }, // 3/4 -> 50% -> 25/50
-      [parsed.partII[1].id]: { a: false, b: true, c: false, d: true }, // 2/4 -> 25% -> 12.5/50
+      [parsed.partII[0].id]: { a: true, b: true, c: true, d: false }, // 3/4 -> 50% -> 2.5/5
+      [parsed.partII[1].id]: { a: false, b: true, c: false, d: true }, // 2/4 -> 25% -> 1.25/5
     };
     const graded = gradeExam(parsed, answers, scoring);
 
@@ -452,10 +452,10 @@ describe("DOCX Parser - Bảng đáp án Phần II Hình 2 & Tương thích ngư
 
     expect(screen.getByText("3/4")).toBeTruthy();
     expect(screen.getByText("50%")).toBeTruthy();
-    expect(screen.getByText("25/50")).toBeTruthy();
+    expect(screen.getByText("2.5/5")).toBeTruthy();
     expect(screen.getByText("2/4")).toBeTruthy();
     expect(screen.getByText("25%")).toBeTruthy();
-    expect(screen.getByText("12.5/50")).toBeTruthy();
+    expect(screen.getByText("1.25/5")).toBeTruthy();
     expect(screen.getByText(/Mệnh đề a của câu 1/i)).toBeTruthy();
     expect(screen.getByText(/Mệnh đề d của câu 2/i)).toBeTruthy();
   });

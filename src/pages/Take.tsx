@@ -11,7 +11,9 @@ import {
   getPartIIQuestionScoreDetails,
   getTFValue,
   gradeExam,
-  isScale100Scoring,
+  isScale10Scoring,
+  normalizeScoringToScale10,
+  normalizeSubmissionToScale10,
   roundFinalScore,
 } from "@/lib/grading";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -19,6 +21,7 @@ import { toast } from "sonner";
 import { findSampleExam, getSampleExamByCode, getSampleExamById, SAMPLE_EXAMS } from "@/lib/sampleExams";
 import { getLocalStoredExams } from "@/lib/allExamsStorage";
 import { findAssignmentOrExamByCode, isUuid, normalizeExamCode } from "@/lib/examAssignments";
+import { classifySupabaseError, logExamAccessEvent, ExamAccessErrorType } from "@/lib/examAccessLogger";
 import {
   ChevronLeft,
   ChevronRight,
@@ -37,6 +40,7 @@ import {
   AlertTriangle,
   AlertCircle,
   RotateCcw,
+  RefreshCw,
   Eye,
   EyeOff,
   UserCheck,
@@ -236,7 +240,10 @@ export default function Take() {
     return false;
   });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorType, setErrorType] = useState<ExamAccessErrorType | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [manualCodeInput, setManualCodeInput] = useState("");
+  const loadSeqRef = useRef(0);
 
   const [started, setStarted] = useState(false);
   const [name, setName] = useState(() => student?.fullName || "");
@@ -391,8 +398,15 @@ export default function Take() {
   // Fetch or resolve exam data
   useEffect(() => {
     let cancelled = false;
+    const seq = ++loadSeqRef.current;
+
     (async () => {
-      const rawParam = decodeURIComponent(id || "").trim();
+      let rawParam = "";
+      try {
+        rawParam = decodeURIComponent(id || "").trim();
+      } catch {
+        rawParam = String(id || "").trim();
+      }
       const uuidMatch = rawParam.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       const cleanUuid = uuidMatch ? uuidMatch[0] : "";
       const searchParams = new URLSearchParams(location.search || window.location.search);
@@ -400,106 +414,161 @@ export default function Take() {
 
       // If we already have the exam loaded with the same UUID or code AND it has questions, do not re-fetch
       const hasQuestions = exam && normalizeExamQuestions(exam).length > 0;
-      if (exam && cleanUuid && exam.id === cleanUuid && hasQuestions) {
-        if (!cancelled) {
+      if (retryNonce === 0 && exam && cleanUuid && exam.id === cleanUuid && hasQuestions) {
+        if (!cancelled && seq === loadSeqRef.current) {
           setLoading(false);
           setErrorMsg(null);
+          setErrorType(null);
         }
         return;
       }
 
       // If neither id nor code is provided (e.g. visiting /take or /join directly)
       if (!rawParam && !codeParam) {
-        if (!cancelled) {
+        if (!cancelled && seq === loadSeqRef.current) {
           setLoading(false);
           setErrorMsg(null);
+          setErrorType(null);
         }
         return;
       }
 
       setLoading(true);
       setErrorMsg(null);
+      setErrorType(null);
+
+      let directUuidFailure: { type: ExamAccessErrorType; message: string } | null = null;
 
       // TRƯỜNG HỢP A — URL CHỨA UUID HỢP LỆ (Cách 1: /take/<UUID> hoặc Cách 2: /take/<UUID>?code=<CODE>)
-      // Chỉ khi xác nhận đúng định dạng UUID mới truyền vào get_exam_for_student(p_exam_id uuid)
       if (cleanUuid && isUuid(cleanUuid)) {
         try {
           const { data, error } = await supabase.rpc("get_exam_for_student", { p_exam_id: cleanUuid });
+          if (cancelled || seq !== loadSeqRef.current) return;
+
           if (!error && data) {
             if ((data as any)?.display_mode === "team") {
               navigate(`/team/${cleanUuid}`, { replace: true });
               return;
             }
-            if (!cancelled) {
-              setExam(data);
-              setLoading(false);
-              setErrorMsg(null);
-            }
+            setExam(data);
+            setLoading(false);
+            setErrorMsg(null);
+            setErrorType(null);
             return;
           }
+
+          if (error) {
+            const c = classifySupabaseError(error);
+            directUuidFailure = { type: c.type, message: c.message };
+            if (c.type === "network" || c.type === "server" || c.type === "unauthorized") {
+              logExamAccessEvent({
+                examId: cleanUuid,
+                rawCode: codeParam || cleanUuid,
+                accessType: "url_uuid",
+                outcome: c.type === "network" ? "network_error" : c.type === "unauthorized" ? "unauthorized" : "server_error",
+                errorCategory: c.type,
+                errorDetail: c.technicalDetail,
+              });
+            }
+          }
         } catch (e) {
-          console.warn("Direct RPC by cleanUuid note:", e);
+          if (cancelled || seq !== loadSeqRef.current) return;
+          const c = classifySupabaseError(e);
+          directUuidFailure = { type: c.type, message: c.message };
+          logExamAccessEvent({
+            examId: cleanUuid,
+            rawCode: codeParam || cleanUuid,
+            accessType: "url_uuid",
+            outcome: c.type === "network" ? "network_error" : "server_error",
+            errorCategory: c.type,
+            errorDetail: c.technicalDetail,
+          });
         }
       }
 
-      // Kiểm tra đề mẫu tích hợp (nếu mở đề mẫu thử nghiệm)
+      // Kiểm tra đề mẫu tích hợp
       const sample =
         (rawParam ? findSampleExam(rawParam) || getSampleExamById(rawParam) || getSampleExamByCode(rawParam) : null) ||
         (cleanUuid ? findSampleExam(cleanUuid) || getSampleExamById(cleanUuid) : null) ||
         (codeParam ? findSampleExam(codeParam) || getSampleExamByCode(codeParam) : null);
 
       if (sample) {
-        if (!cancelled) {
+        if (!cancelled && seq === loadSeqRef.current) {
           setExam(sample);
           setLoading(false);
           setErrorMsg(null);
+          setErrorType(null);
         }
         return;
       }
 
-      // TRƯỜNG HỢP B & C — URL CHỨA MÃ BÀI THI SỐ (Ví dụ /take/844059), MÃ CHỮ CŨ HOẶC NHẬP MÃ (Cách 3)
-      // TUYỆT ĐỐI KHÔNG truyền mã số/chữ vào tham số kiểu UUID của PostgreSQL.
-      // Luồng: Mã bài thi -> tìm assignment/exam -> lấy UUID thật -> lấy đề thi bằng UUID thật.
+      // TRƯỜNG HỢP B & C — URL CHỨA MÃ BÀI THI SỐ, MÃ CHỮ CŨ HOẶC MÃ NGẮN
       const targetCodeQuery = codeParam || (cleanUuid ? "" : rawParam);
       if (targetCodeQuery) {
         try {
           const res = await findAssignmentOrExamByCode(targetCodeQuery);
+          if (cancelled || seq !== loadSeqRef.current) return;
+
           if (res.success && res.exam) {
             const actualUuid = res.exam.id || res.assignment?.examId;
             if ((res.exam as any)?.display_mode === "team" && actualUuid) {
               navigate(`/team/${actualUuid}`, { replace: true });
               return;
             }
-            if (!cancelled) {
-              setExam(res.exam);
-              setLoading(false);
-              setErrorMsg(null);
-            }
+            setExam(res.exam);
+            setLoading(false);
+            setErrorMsg(null);
+            setErrorType(null);
+            return;
+          }
+
+          if (!res.success && res.error) {
+            setLoading(false);
+            setErrorType(res.errorType || "not_found");
+            setErrorMsg(res.error);
             return;
           }
         } catch (e) {
-          console.warn("Error finding exam by code query:", e);
+          if (cancelled || seq !== loadSeqRef.current) return;
+          const c = classifySupabaseError(e);
+          setLoading(false);
+          setErrorType(c.type);
+          setErrorMsg(c.message);
+          return;
         }
       }
 
-      // Không tìm thấy theo cả 3 phương thức
-      if (!cancelled) {
+      // Không tìm thấy hoặc gặp lỗi kết nối/máy chủ ở bước tra cứu UUID
+      if (!cancelled && seq === loadSeqRef.current) {
         setLoading(false);
-        setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại.");
+        if (
+          directUuidFailure &&
+          (directUuidFailure.type === "network" ||
+            directUuidFailure.type === "server" ||
+            directUuidFailure.type === "unauthorized")
+        ) {
+          setErrorType(directUuidFailure.type);
+          setErrorMsg(directUuidFailure.message);
+        } else {
+          setErrorType("not_found");
+          setErrorMsg("Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại.");
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [id, location.search, navigate]);
+  }, [id, location.search, navigate, retryNonce]);
 
   // Hydrate scoring configuration for UUID exams if RPC didn't return scoring field
   useEffect(() => {
     if (!exam?.id || exam.scoring) return;
     const localMatch = getLocalStoredExams().find((e) => e.id === exam.id);
     if (localMatch?.scoring) {
-      setExam((prev: any) => (prev && !prev.scoring ? { ...prev, scoring: localMatch.scoring } : prev));
+      setExam((prev: any) =>
+        prev && !prev.scoring ? { ...prev, scoring: normalizeScoringToScale10(localMatch.scoring) } : prev
+      );
       return;
     }
     if (!isUuid(exam.id)) return;
@@ -511,7 +580,9 @@ export default function Take() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.scoring) {
-          setExam((prev: any) => (prev && !prev.scoring ? { ...prev, scoring: d.scoring } : prev));
+          setExam((prev: any) =>
+            prev && !prev.scoring ? { ...prev, scoring: normalizeScoringToScale10(d.scoring) } : prev
+          );
         }
       })
       .catch(() => {});
@@ -715,27 +786,43 @@ export default function Take() {
       }
     } catch {}
 
-    let qs = normalizeExamQuestions(exam);
+    let activeExam = exam;
+    let qs = normalizeExamQuestions(activeExam);
     if (!qs || qs.length === 0) {
       // If questions are missing from state, resolve either by UUID or by code
-      const targetUuid = isUuid(currentExamId) ? currentExamId : (isUuid(exam?.id) ? exam.id : "");
+      const targetUuid = isUuid(currentExamId) ? currentExamId : (isUuid(activeExam?.id) ? activeExam.id : "");
       if (targetUuid) {
         try {
-          const { data: fresh } = await supabase.rpc("get_exam_for_student", { p_exam_id: targetUuid });
+          const { data: fresh, error: freshErr } = await supabase.rpc("get_exam_for_student", { p_exam_id: targetUuid });
           if (fresh) {
+            activeExam = fresh;
             setExam(fresh);
             qs = normalizeExamQuestions(fresh);
+          } else if (freshErr) {
+            const c = classifySupabaseError(freshErr);
+            if (c.type === "network" || c.type === "server" || c.type === "unauthorized") {
+              toast.error(c.message);
+              return;
+            }
           }
-        } catch {}
+        } catch (e) {
+          const c = classifySupabaseError(e);
+          toast.error(c.message);
+          return;
+        }
       } else {
         // If we only have an examCode, resolve via findAssignmentOrExamByCode to get the real UUID & questions
-        const searchCode = (new URLSearchParams(location.search)).get("code") || id || exam?.code || (exam?.team_config as any)?.primary_code;
+        const searchCode = (new URLSearchParams(location.search)).get("code") || id || activeExam?.code || (activeExam?.team_config as any)?.primary_code;
         if (searchCode) {
           try {
             const res = await findAssignmentOrExamByCode(searchCode);
             if (res.success && res.exam) {
+              activeExam = res.exam;
               setExam(res.exam);
               qs = normalizeExamQuestions(res.exam);
+            } else if (!res.success && res.error) {
+              toast.error(res.error);
+              return;
             }
           } catch {}
         }
@@ -743,8 +830,9 @@ export default function Take() {
     }
     if (!qs || qs.length === 0) {
       // Fallback check if this corresponds to a sample exam
-      const sample = findSampleExam(exam?.id) || findSampleExam(exam?.code || "") || (currentExamId ? findSampleExam(currentExamId) : null);
+      const sample = findSampleExam(activeExam?.id) || findSampleExam(activeExam?.code || "") || (currentExamId ? findSampleExam(currentExamId) : null);
       if (sample) {
+        activeExam = sample;
         qs = normalizeExamQuestions(sample);
       }
     }
@@ -755,9 +843,9 @@ export default function Take() {
     }
 
     const sO = {
-      p1: exam.shuffle_o_p1 ?? exam.shuffle_options,
-      p2: exam.shuffle_o_p2 ?? exam.shuffle_options,
-      p3: exam.shuffle_o_p3 ?? exam.shuffle_options,
+      p1: activeExam.shuffle_o_p1 ?? activeExam.shuffle_options,
+      p2: activeExam.shuffle_o_p2 ?? activeExam.shuffle_options,
+      p3: activeExam.shuffle_o_p3 ?? activeExam.shuffle_options,
     };
 
     const oo: Record<string, string[]> = {};
@@ -772,7 +860,7 @@ export default function Take() {
 
     setOptionOrders(oo);
     setQuestions(qs);
-    setTimeLeft((exam.duration_minutes || 45) * 60);
+    setTimeLeft((activeExam.duration_minutes || 45) * 60);
     startedAtRef.current = new Date().toISOString();
     setStarted(true);
   };
@@ -902,8 +990,11 @@ export default function Take() {
       };
     }
 
-    const scoringSnapshot =
-      sInfo?.scoring_snapshot || apiComputed?.scoringSnapshot || exam?.scoring || null;
+    const normalizedSub = sInfo ? normalizeSubmissionToScale10(sInfo, exam) : null;
+    if (normalizedSub) sInfo = normalizedSub;
+
+    const rawSnapshot = sInfo?.scoring_snapshot || apiComputed?.scoringSnapshot || exam?.scoring || null;
+    const scoringSnapshot = rawSnapshot ? normalizeScoringToScale10(rawSnapshot) : null;
     const partIISummary =
       sInfo?.part2_summary || apiComputed?.partIISummary || localPartIISummary || undefined;
 
@@ -931,7 +1022,7 @@ export default function Take() {
         studentName: name.trim() || "Học sinh",
         studentClass: klass.trim() || "Chung",
         score: sInfo?.score ?? 0,
-        maxScore: sInfo?.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10),
+        maxScore: sInfo?.max_score ?? 10,
         correctCount: sInfo?.correct_count ?? 0,
         wrongCount: sInfo?.wrong_count ?? 0,
         answers: answers as any,
@@ -974,7 +1065,7 @@ export default function Take() {
           student_name: name.trim() || "Học sinh",
           student_class: klass.trim() || "Chung",
           score: sInfo?.score ?? 0,
-          max_score: sInfo?.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10),
+          max_score: sInfo?.max_score ?? 10,
           correct_count: sInfo?.correct_count ?? 0,
           wrong_count: sInfo?.wrong_count ?? 0,
           answers,
@@ -985,6 +1076,7 @@ export default function Take() {
         exam: exam
           ? {
               ...exam,
+              scoring: exam.scoring ? normalizeScoringToScale10(exam.scoring) : exam.scoring,
               enable_min_correct_percentage: enableMinCorrect,
               min_correct_percentage_for_review: minPct,
               questions: canReview ? exam.questions : null,
@@ -1154,6 +1246,12 @@ export default function Take() {
       toast.error("Vui lòng nhập mã bài thi hoặc dán link bài thi");
       return;
     }
+    const shortMatch = raw.match(/\/e\/([^/?#\s]+)/i);
+    if (shortMatch?.[1]) {
+      const seg = decodeURIComponent(shortMatch[1]).trim();
+      navigate(`/e/${encodeURIComponent(seg)}`);
+      return;
+    }
     // Check if it's a URL
     const pathMatch = raw.match(/\/(?:take|exam)\/([^/?#\s]+)/i);
     const codeMatch = raw.match(/[?&](?:code|join)=([^&#\s]+)/i);
@@ -1176,6 +1274,8 @@ export default function Take() {
   // Màn hình lỗi hoặc màn hình nhập mã khi vào trực tiếp /take
   if (!exam || errorMsg) {
     const isDirectEntry = !errorMsg && !id;
+    const isTransientErr =
+      errorType === "network" || errorType === "server" || errorType === "unauthorized";
 
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center items-center p-4 relative selection:bg-primary/20">
@@ -1192,7 +1292,11 @@ export default function Take() {
           </div>
           <div className="space-y-2">
             <h1 className="text-2xl font-black text-foreground">
-              {isDirectEntry ? "Tham gia bài thi Online" : "Không tìm thấy bài thi"}
+              {isDirectEntry
+                ? "Tham gia bài thi Online"
+                : isTransientErr
+                  ? "Không thể kết nối máy chủ"
+                  : "Không tìm thấy bài thi"}
             </h1>
             <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
               {errorMsg ||
@@ -1201,6 +1305,16 @@ export default function Take() {
                   : "Mã bài thi hoặc liên kết không hợp lệ hoặc bài thi không tồn tại trong hệ thống.")}
             </p>
           </div>
+
+          {isTransientErr && (
+            <Button
+              type="button"
+              onClick={() => setRetryNonce((n) => n + 1)}
+              className="w-full h-11 rounded-xl font-bold gap-2"
+            >
+              <RefreshCw className="size-4" /> Thử kết nối lại
+            </Button>
+          )}
 
           {/* Ô nhập mã hoặc dán link */}
           <div className="space-y-3 pt-2 text-left">
@@ -1215,16 +1329,11 @@ export default function Take() {
                   const val = e.target.value;
                   if (val.includes("http://") || val.includes("https://") || val.includes("/") || val.includes("?")) {
                     setManualCodeInput(val.trim());
-                  } else if (/[a-zA-Z]/.test(val)) {
-                    // Alphanumeric code (e.g. A1K8P2, EX-ZQ9UC, TIN-12)
-                    setManualCodeInput(val.trim().toUpperCase());
                   } else {
-                    // Purely numeric 6-digit code
-                    const onlyNums = val.replace(/\D/g, "").slice(0, 6);
-                    setManualCodeInput(onlyNums);
+                    setManualCodeInput(val.replace(/^\s+/, "").toUpperCase());
                   }
                 }}
-                maxLength={100}
+                maxLength={120}
                 className="h-12 rounded-xl text-base font-bold font-mono tracking-widest px-4 border-2 placeholder:font-normal placeholder:tracking-normal placeholder:text-sm"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -1682,14 +1791,15 @@ export default function Take() {
           return { key: it.key, correct: it.correct, student: stuVal };
         });
         const p2Count = questions.filter((qq) => qq._part === 2 || qq.type === "tf").length;
+        const normScoring = exam?.scoring ? normalizeScoringToScale10(exam.scoring) : null;
         const maxPts =
-          isScale100Scoring(exam?.scoring) && p2Count > 0
-            ? (exam.scoring.parts.p2 || 0) / p2Count
+          normScoring && isScale10Scoring(normScoring) && p2Count > 0
+            ? (normScoring.parts.p2 || 0) / p2Count
             : undefined;
         const qScore =
           maxPts !== undefined && items.length > 0
-            ? getPartIIQuestionScoreDetails(okItems, items.length, maxPts, exam?.scoring)
-            : getPartIIQuestionScoreDetails(okItems, items.length, 100, exam?.scoring);
+            ? getPartIIQuestionScoreDetails(okItems, items.length, maxPts, normScoring || undefined)
+            : getPartIIQuestionScoreDetails(okItems, items.length, 10, normScoring || undefined);
         return {
           type: "tf",
           correct: items.length > 0 && okItems === items.length,

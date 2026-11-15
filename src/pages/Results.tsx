@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
-import { formatScore } from "@/lib/grading";
+import { formatScore, normalizeSubmissionToScale10 } from "@/lib/grading";
 
 export default function Results() {
   const { id } = useParams();
@@ -20,7 +20,8 @@ export default function Results() {
       supabase.from("exams").select("*").eq("id", id!).maybeSingle(),
       supabase.from("submissions").select("*").eq("exam_id", id!).order("submitted_at", { ascending: false }),
     ]);
-    setExam(e); setSubs(s || []); setLoading(false);
+    const normSubs = (s || []).map((row: any) => normalizeSubmissionToScale10(row, e));
+    setExam(e); setSubs(normSubs); setLoading(false);
   };
   useEffect(() => { load(); }, [id]);
 

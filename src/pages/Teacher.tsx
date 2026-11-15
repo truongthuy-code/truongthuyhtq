@@ -14,15 +14,15 @@ import { parseTextExam } from "@/lib/textExamParser";
 import { parsePdfExam } from "@/lib/pdfParser";
 import {
   attachQuestionScores,
-  buildScale100Scoring,
+  buildScale10Scoring,
   detectExamStructure,
   formatScore,
   getPartIIMethod,
   getPartIISampleItemCount,
-  isScale100Scoring,
-  reconcileScale100Scoring,
+  isScale10Scoring,
+  reconcileScale10Scoring,
   ScoringConfig,
-  validateScale100Config,
+  validateScale10Config,
 } from "@/lib/grading";
 import ScoringConfigPanel from "@/components/ScoringConfigPanel";
 import { supabase } from "@/integrations/supabase/client";
@@ -42,6 +42,7 @@ import {
   getLocalAssignments,
   ExamAssignment,
 } from "@/lib/examAssignments";
+import { ensureExamShortLink } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { saveUnifiedExam } from "@/lib/allExamsStorage";
@@ -115,7 +116,7 @@ export default function Teacher() {
   const [shuffleQ, setShuffleQ] = useState({ p1: false, p2: false, p3: false });
   const [shuffleO, setShuffleO] = useState({ p1: false, p2: false, p3: false });
   const [scoring, setScoring] = useState<ScoringConfig>(() =>
-    buildScale100Scoring({ partI: [], partII: [], partIII: [] })
+    buildScale10Scoring({ partI: [], partII: [], partIII: [] })
   );
   const [allowReview, setAllowReview] = useState(false);
   const [enableMinCorrect, setEnableMinCorrect] = useState<boolean>(false);
@@ -132,13 +133,13 @@ export default function Teacher() {
   const examCounts = useMemo(() => detectExamStructure(exam), [exam]);
   const itemCountP2 = useMemo(() => getPartIISampleItemCount(exam), [exam]);
   const scoringValidation = useMemo(() => {
-    if (!isScale100Scoring(scoring)) return { valid: true, total: 100, diff: 0, message: null };
-    return validateScale100Config(scoring, examCounts);
+    if (!isScale10Scoring(scoring)) return { valid: true, total: 10, diff: 0, message: null };
+    return validateScale10Config(scoring, examCounts);
   }, [scoring, examCounts]);
 
   useEffect(() => {
     if (!exam) return;
-    setScoring((prev) => reconcileScale100Scoring(exam, prev));
+    setScoring((prev) => reconcileScale10Scoring(exam, prev));
   }, [examCounts.p1, examCounts.p2, examCounts.p3, itemCountP2]);
 
   const issues = useMemo(() => (exam ? validateExam(exam) : []), [exam]);
@@ -221,7 +222,7 @@ export default function Teacher() {
 
   const applyParsed = (parsed: ParsedExam, name: string, file: File | null) => {
     setExam(parsed);
-    setScoring((prev) => reconcileScale100Scoring(parsed, prev));
+    setScoring((prev) => reconcileScale10Scoring(parsed, prev));
     setOriginalFile(file);
     setTitle(name);
     const total = parsed.partI.length + parsed.partII.length + parsed.partIII.length;
@@ -338,19 +339,19 @@ export default function Teacher() {
       return;
     }
 
-    if (isScale100Scoring(scoring)) {
-      const check = validateScale100Config(scoring, examCounts);
+    if (isScale10Scoring(scoring)) {
+      const check = validateScale10Config(scoring, examCounts);
       if (!check.valid) {
-        toast.error(check.message || "Cấu hình thang điểm 100 chưa hợp lệ!");
+        toast.error(check.message || "Cấu hình thang điểm 10 chưa hợp lệ!");
         return;
       }
     }
 
     setSaving(true);
 
-    const finalScoring: ScoringConfig = isScale100Scoring(scoring)
+    const finalScoring: ScoringConfig = isScale10Scoring(scoring)
       ? {
-          ...reconcileScale100Scoring(exam, scoring),
+          ...reconcileScale10Scoring(exam, scoring),
           enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
           min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
         }
@@ -497,10 +498,33 @@ export default function Teacher() {
     }
 
     // BƯỚC 7, 8, 9: Sau khi dữ liệu đã tồn tại trên server mới lưu bộ nhớ đệm và chuyển sang trang chia sẻ
+    const createdExamPayload = {
+      id: data.id,
+      title,
+      duration_minutes: duration,
+      teacher_name: profile?.full_name || "Giáo viên",
+      school_name: profile?.school_name || "",
+      subject_name: profile?.subject_name || "",
+      open_at: schedule.open_at,
+      close_at: schedule.close_at,
+      display_mode: displayMode,
+      created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
+      team_config: finalTeamConfig as any,
+    };
+
+    let primaryShortCode: string | undefined;
+    try {
+      const shortLinkRes = await ensureExamShortLink({ exam: createdExamPayload });
+      primaryShortCode = shortLinkRes?.shortCode;
+    } catch (slErr: any) {
+      toast.warning(slErr?.message || "Đề thi đã tạo nhưng link ngắn sẽ được đồng bộ lại ở trang chia sẻ.");
+    }
+
     const primaryAssign: ExamAssignment = {
       id: `primary_${data.id}`,
       examId: data.id,
       code: examCode,
+      shortCode: primaryShortCode,
       className: "Chung",
       title,
       teacherName: profile?.full_name || "Giáo viên",
@@ -1051,7 +1075,7 @@ export default function Teacher() {
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              {isScale100Scoring(scoring) && scoring.perQuestion.p1 > 0 && (
+                              {isScale10Scoring(scoring) && scoring.perQuestion.p1 > 0 && (
                                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                                   {formatScore(scoring.perQuestion.p1)}đ
                                 </span>
@@ -1167,7 +1191,7 @@ export default function Teacher() {
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              {isScale100Scoring(scoring) && scoring.perQuestion.p2 > 0 && (
+                              {isScale10Scoring(scoring) && scoring.perQuestion.p2 > 0 && (
                                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                                   {formatScore(scoring.perQuestion.p2)}đ (
                                   {getPartIIMethod(scoring) === "custom_rates"
@@ -1281,7 +1305,7 @@ export default function Teacher() {
                               Câu {i + 1}: <RichText text={q.text} />
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              {isScale100Scoring(scoring) && scoring.perQuestion.p3 > 0 && (
+                              {isScale10Scoring(scoring) && scoring.perQuestion.p3 > 0 && (
                                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                                   {formatScore(scoring.perQuestion.p3)}đ
                                 </span>

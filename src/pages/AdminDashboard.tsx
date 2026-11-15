@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { formatScore } from "@/lib/grading";
+import { formatScore, normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
 import {
   getAllTeachers,
   TeacherUser,
@@ -244,7 +244,8 @@ export default function AdminDashboard() {
       .from("submissions")
       .select("id,exam_id,student_name,student_class,score,max_score,correct_count,wrong_count,violation_count,submitted_at,duration_seconds,answers")
       .order("submitted_at", { ascending: false });
-    const allSubs = subs || [];
+    const examMap = new Map(allExams.map((e: any) => [e.id, e]));
+    const allSubs = (subs || []).map((row: any) => normalizeSubmissionToScale10(row, examMap.get(row.exam_id)));
     setSubmissions(allSubs);
 
     // Counts per exam
@@ -373,7 +374,7 @@ export default function AdminDashboard() {
 
     const list = Array.from(map.values()).map((st) => ({
       ...st,
-      avgScore: st.attempts ? Math.round((st.totalScore / st.attempts) * 10) / 10 : 0,
+      avgScore: st.attempts ? roundFinalScore(st.totalScore / st.attempts) : 0,
     }));
 
     return list;
@@ -457,7 +458,7 @@ export default function AdminDashboard() {
     const totalSchools = allSchools.length;
     const totalSubjects = allSubjects.length;
     const avgScore = totalSubs
-      ? Math.round((submissions.reduce((a, b) => a + Number(b.score || 0), 0) / totalSubs) * 10) / 10
+      ? roundFinalScore(submissions.reduce((a, b) => a + Number(b.score || 0), 0) / totalSubs)
       : 0;
 
     return { totalTeachers, activeTeachers, totalExams, totalSubs, totalStudents, totalSchools, totalSubjects, avgScore };

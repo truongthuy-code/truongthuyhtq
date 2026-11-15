@@ -2,14 +2,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
-  buildScale100Scoring,
+  buildScale10Scoring,
   DEFAULT_PART_II_RATES,
   DEFAULT_SCORING,
   DEFAULT_TOTAL_SCALE,
   ExamStructureCounts,
   formatScore,
   getPartIIMethod,
-  isScale100Scoring,
+  isScale10Scoring,
   normalizePartIIRates,
   PartIIMethod,
   PartIIRates,
@@ -17,7 +17,7 @@ import {
   ScoringConfig,
   suggestDefaultPartPoints,
   validatePartIIRates,
-  validateScale100Parts,
+  validateScale10Parts,
 } from "@/lib/grading";
 import { AlertTriangle, Calculator, CheckCircle2, Info, RotateCcw } from "lucide-react";
 
@@ -36,7 +36,7 @@ export default function ScoringConfigPanel({
   onChange,
   allowLegacyToggle = false,
 }: ScoringConfigPanelProps) {
-  const isScale100 = isScale100Scoring(scoring);
+  const isScale10 = isScale10Scoring(scoring);
   const totalQuestions = counts.p1 + counts.p2 + counts.p3;
 
   const syntheticExam = {
@@ -48,7 +48,7 @@ export default function ScoringConfigPanel({
     partIII: Array.from({ length: counts.p3 }, (_, i) => ({ id: `p3_${i}` })),
   };
 
-  if (!isScale100) {
+  if (!isScale10) {
     return (
       <div className="space-y-3 rounded-xl border p-4 bg-muted/30">
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -63,10 +63,10 @@ export default function ScoringConfigPanel({
               type="button"
               size="sm"
               variant="default"
-              onClick={() => onChange(buildScale100Scoring(syntheticExam, undefined, scoring))}
+              onClick={() => onChange(buildScale10Scoring(syntheticExam, undefined, scoring))}
               className="rounded-lg text-xs font-semibold gap-1.5 bg-primary"
             >
-              <Calculator className="size-3.5" /> Chuyển sang Thang điểm 100
+              <Calculator className="size-3.5" /> Chuyển sang Thang điểm 10
             </Button>
           )}
         </div>
@@ -120,7 +120,7 @@ export default function ScoringConfigPanel({
   }
 
   const parts: PartPoints = scoring.parts;
-  const validation = validateScale100Parts(parts, counts);
+  const validation = validateScale10Parts(parts, counts);
   const p2Method = getPartIIMethod(scoring);
   const p2Rates = normalizePartIIRates(scoring.p2Rates);
   const allowNonMonotonic = Boolean(scoring.allowNonMonotonicP2Rates);
@@ -137,17 +137,17 @@ export default function ScoringConfigPanel({
       ...parts,
       [partKey]: nextVal,
     };
-    onChange(buildScale100Scoring(syntheticExam, nextParts, scoring));
+    onChange(buildScale10Scoring(syntheticExam, nextParts, scoring));
   };
 
   const handleResetSuggested = () => {
     const suggested = suggestDefaultPartPoints(counts, DEFAULT_TOTAL_SCALE);
-    onChange(buildScale100Scoring(syntheticExam, suggested, scoring));
+    onChange(buildScale10Scoring(syntheticExam, suggested, scoring));
   };
 
   const handleP2MethodChange = (nextMethod: PartIIMethod) => {
     onChange(
-      buildScale100Scoring(syntheticExam, parts, {
+      buildScale10Scoring(syntheticExam, parts, {
         ...scoring,
         p2Method: nextMethod,
         p2Rates,
@@ -164,7 +164,7 @@ export default function ScoringConfigPanel({
       "4": 100,
     };
     onChange(
-      buildScale100Scoring(syntheticExam, parts, {
+      buildScale10Scoring(syntheticExam, parts, {
         ...scoring,
         p2Method: "custom_rates",
         p2Rates: nextRates,
@@ -174,7 +174,7 @@ export default function ScoringConfigPanel({
 
   const handleResetP2Rates = () => {
     onChange(
-      buildScale100Scoring(syntheticExam, parts, {
+      buildScale10Scoring(syntheticExam, parts, {
         ...scoring,
         p2Method: "custom_rates",
         p2Rates: { ...DEFAULT_PART_II_RATES },
@@ -185,7 +185,7 @@ export default function ScoringConfigPanel({
 
   const handleToggleAllowNonMonotonic = (checked: boolean) => {
     onChange(
-      buildScale100Scoring(syntheticExam, parts, {
+      buildScale10Scoring(syntheticExam, parts, {
         ...scoring,
         p2Method: "custom_rates",
         p2Rates,
@@ -251,10 +251,10 @@ export default function ScoringConfigPanel({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-bold text-foreground flex items-center gap-1.5">
               <Calculator className="size-4 text-primary" />
-              Thiết lập thang điểm 100
+              Thiết lập thang điểm 10
             </span>
             <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/25">
-              Thang điểm: 100 điểm
+              Thang điểm: 10 điểm
             </span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
@@ -271,7 +271,7 @@ export default function ScoringConfigPanel({
             disabled={totalQuestions === 0}
             className="h-7 px-2.5 text-xs rounded-lg gap-1"
           >
-            <RotateCcw className="size-3" /> Tự chia 100đ
+            <RotateCcw className="size-3" /> Tự chia 10đ
           </Button>
           {allowLegacyToggle && (
             <Button
@@ -337,7 +337,7 @@ export default function ScoringConfigPanel({
                   <Input
                     type="number"
                     min={0}
-                    max={100}
+                    max={10}
                     step="any"
                     disabled={disabled}
                     aria-label={`Điểm ${r.title}`}
@@ -387,12 +387,12 @@ export default function ScoringConfigPanel({
               validation.valid ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"
             }`}
           >
-            {formatScore(validation.total)} / 100 điểm
+            {formatScore(validation.total)} / 10 điểm
           </div>
           <div className="col-span-3 text-right">
             {validation.valid ? (
               <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="size-3.5" /> Đủ 100đ
+                <CheckCircle2 className="size-3.5" /> Đủ 10đ
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-destructive">
@@ -403,7 +403,7 @@ export default function ScoringConfigPanel({
         </div>
       </div>
 
-      {/* Cảnh báo lỗi khi tổng != 100 */}
+      {/* Cảnh báo lỗi khi tổng != 10 */}
       {!validation.valid && validation.message && (
         <div
           role="alert"
@@ -619,7 +619,7 @@ export default function ScoringConfigPanel({
           )}
           {(isRepeating(parts.p1, counts.p1) || isRepeating(parts.p2, counts.p2 * itemCountP2) || isRepeating(parts.p3, counts.p3)) && (
             <span>
-              • Số thập phân vô hạn tuần hoàn được tính toán chính xác nội bộ và chỉ làm tròn ở tổng điểm cuối cùng để bài làm đúng hết luôn đạt trọn <strong>100 điểm</strong>.
+              • Số thập phân vô hạn tuần hoàn được tính toán chính xác nội bộ và chỉ làm tròn ở tổng điểm cuối cùng để bài làm đúng hết luôn đạt trọn <strong>10 điểm</strong>.
             </span>
           )}
         </div>

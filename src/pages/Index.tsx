@@ -23,8 +23,10 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { publishExamClosed } from "@/lib/studentStorage";
 import TeamLeaderboard from "./TeamLeaderboard";
-import { syncExamAssignmentCodes, getExamPrimaryCode, getExamShareUrl } from "@/lib/examAssignments";
+import { syncExamAssignmentCodes, getExamPrimaryCode } from "@/lib/examAssignments";
+import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
+import { normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
 import {
   ExamFolder,
   getFolders,
@@ -119,7 +121,7 @@ export default function Index() {
 
     const examIds = loadedExams.map((e: any) => e.id);
 
-    let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,score,violation_count");
+    let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,score,max_score,violation_count");
     if (!isAdmin && user) {
       if (examIds.length > 0) {
         subQ = subQ.in("exam_id", examIds);
@@ -131,7 +133,8 @@ export default function Index() {
     }
 
     const { data: subs } = await subQ;
-    const s = subs || [];
+    const examMap = new Map(loadedExams.map((e: any) => [e.id, e]));
+    const s = (subs || []).map((row: any) => normalizeSubmissionToScale10(row, examMap.get(row.exam_id)));
     const uniqStudents = new Set(s.map((x: any) => `${x.student_name}__${x.student_class}`)).size;
     const avg = s.length ? s.reduce((a: number, b: any) => a + Number(b.score || 0), 0) / s.length : 0;
     const violations = s.reduce((a: number, b: any) => a + (b.violation_count || 0), 0);
@@ -147,7 +150,7 @@ export default function Index() {
       exams: loadedExams.length,
       students: uniqStudents,
       attempts: s.length,
-      avgScore: Math.round(avg * 100) / 100,
+      avgScore: roundFinalScore(avg),
       violations,
       openExams: openCount,
     });
@@ -248,9 +251,19 @@ export default function Index() {
   };
 
   // Exam actions
-  const copyLink = (id: string, code?: string) => {
-    navigator.clipboard.writeText(getExamShareUrl(id, code));
-    toast.success("Đã copy link bài thi");
+  const copyLink = async (examObj: any) => {
+    try {
+      const syncRes = await syncExamAssignmentCodes(examObj);
+      if (!syncRes.success) {
+        toast.error(syncRes.error || "Chưa thể đồng bộ mã bài thi lên máy chủ.");
+        return;
+      }
+      const sl = await ensureExamShortLink({ exam: examObj });
+      await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      toast.success("Đã sao chép link ngắn bài thi");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tạo link ngắn bài thi");
+    }
   };
 
   const exportXlsx = async (exam: any) => {
@@ -503,7 +516,7 @@ export default function Index() {
               <span>MỞ BẢNG XẾP HẠNG 🏆</span>
             </Button>
           )}
-          <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e.id)}>
+          <Button size="sm" variant="outline" className="rounded-lg" onClick={() => copyLink(e)}>
             <Copy className="size-3.5 mr-1" /> Copy link
           </Button>
           <Button size="sm" variant="outline" className="rounded-lg" asChild>

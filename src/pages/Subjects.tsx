@@ -4,6 +4,7 @@ import { BookOpen, FileText, School, GraduationCap, Activity, Star } from "lucid
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
+import { normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
 
 export default function Subjects() {
   const { isAdmin, user } = useAuth();
@@ -19,10 +20,11 @@ export default function Subjects() {
       }
       const [{ data: ex }, { data: s }] = await Promise.all([
         q,
-        supabase.from("submissions").select("exam_id,score,student_name,student_class"),
+        supabase.from("submissions").select("exam_id,score,max_score,student_name,student_class"),
       ]);
-      setRows((ex as any) || []);
-      setSubs((s as any) || []);
+      const loadedEx = (ex as any) || [];
+      setRows(loadedEx);
+      setSubs(((s as any) || []).map((row: any) => normalizeSubmissionToScale10(row)));
       setLoading(false);
     })();
   }, [isAdmin, user]);
@@ -51,7 +53,7 @@ export default function Subjects() {
       return {
         name, schools, teachers, exams: exs.length,
         attempts: a.count,
-        avg: a.count ? Math.round((a.sum / a.count) * 100) / 100 : 0,
+        avg: a.count ? roundFinalScore(a.sum / a.count) : 0,
         students: a.students.size,
       };
     });

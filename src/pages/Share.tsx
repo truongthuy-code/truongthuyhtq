@@ -21,6 +21,9 @@ import {
   Users,
   CheckCircle2,
   ExternalLink,
+  Link2,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { saveAs } from "file-saver";
@@ -31,16 +34,19 @@ import {
   createAssignment,
   deleteAssignment,
   getExamPrimaryCode,
+  getExamPrimaryShortCode,
   getExamShareUrl,
   syncExamAssignmentCodes,
   getExamPublicOrigin,
 } from "@/lib/examAssignments";
+import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 
 export default function Share() {
   const { id } = useParams();
   const [exam, setExam] = useState<any>(null);
   const [assignments, setAssignments] = useState<ExamAssignment[]>([]);
   const [primaryCode, setPrimaryCode] = useState("");
+  const [shortCode, setShortCode] = useState("");
   const [selectedQR, setSelectedQR] = useState<{
     open: boolean;
     title: string;
@@ -58,26 +64,87 @@ export default function Share() {
   const [newClass, setNewClass] = useState("");
   const [newCustomCode, setNewCustomCode] = useState("");
   const [creatingAssign, setCreatingAssign] = useState(false);
+  const [syncingCodes, setSyncingCodes] = useState(true);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
+  const syncExamResources = async (data: any) => {
+    setSyncingCodes(true);
+    setSyncError(null);
+    const syncErrors: string[] = [];
+
+    const syncRes = await syncExamAssignmentCodes(data);
+    if (!syncRes.success) {
+      syncErrors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
+    }
+
+    try {
+      const sl = await ensureExamShortLink({ exam: data });
+      if (sl?.shortCode) setShortCode(sl.shortCode);
+    } catch (err: any) {
+      syncErrors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
+    }
+
+    const list = await getAssignmentsForExam(data.id, data);
+    const enrichedList = await Promise.all(
+      list.map(async (item) => {
+        if (item.shortCode) return item;
+        try {
+          const sl = await ensureExamShortLink({ exam: data, assignment: item });
+          return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
+        } catch {
+          return item;
+        }
+      })
+    );
+    setAssignments(enrichedList);
+    if (syncErrors.length > 0) {
+      setSyncError(syncErrors[0]);
+    }
+    setSyncingCodes(false);
+  };
+
   useEffect(() => {
     if (!id) return;
+    setLoadError(null);
     supabase
       .from("exams")
       .select("*")
       .eq("id", id)
       .maybeSingle()
-      .then(async ({ data }) => {
-        if (!data) return;
+      .then(async ({ data, error }) => {
+        if (error) {
+          setLoadError("Không thể tải thông tin đề thi từ máy chủ: " + error.message);
+          setSyncingCodes(false);
+          return;
+        }
+        if (!data) {
+          setLoadError("Không tìm thấy đề thi hoặc bạn không có quyền truy cập đề thi này.");
+          setSyncingCodes(false);
+          return;
+        }
         setExam(data);
         const pCode = getExamPrimaryCode(data);
         setPrimaryCode(pCode);
-        syncExamAssignmentCodes(data).catch(() => {});
-        const list = await getAssignmentsForExam(id, data);
-        setAssignments(list);
+        const existingShort = getExamPrimaryShortCode(data);
+        if (existingShort) setShortCode(existingShort);
+        await syncExamResources(data);
       });
   }, [id]);
+
+  if (loadError) {
+    return (
+      <div className="container max-w-lg py-20 text-center space-y-4">
+        <AlertCircle className="size-10 text-destructive mx-auto" />
+        <p className="text-sm font-semibold text-destructive">{loadError}</p>
+        <Button asChild variant="outline">
+          <Link to="/">Quay lại trang chủ</Link>
+        </Button>
+      </div>
+    );
+  }
 
   if (!exam) return <div className="container py-20 text-center text-muted-foreground">Đang tải…</div>;
 
@@ -85,6 +152,8 @@ export default function Share() {
   const mainUrl = primaryCode
     ? `${publicOrigin}/take/${id}?code=${encodeURIComponent(primaryCode)}`
     : `${publicOrigin}/take/${id}`;
+  const shortUrl = shortCode ? getShortExamUrl(shortCode) : "";
+  const qrUrl = shortUrl || mainUrl;
   const lbUrl = `${publicOrigin}/leaderboard/${id}`;
   const isTeam = exam.display_mode === "team";
 
@@ -93,9 +162,10 @@ export default function Share() {
     toast.success(`Đã sao chép mã bài thi: ${code}`);
   };
 
-  const copyLink = (url: string) => {
+  const copyShortLink = (url: string) => {
+    if (!url) return;
     navigator.clipboard.writeText(url);
-    toast.success("Đã sao chép link làm bài");
+    toast.success("Đã sao chép link ngắn bài thi");
   };
 
   const downloadQR = (codeToDownload: string, titleToDownload: string, urlToDownload: string, classLabel?: string) => {
@@ -239,13 +309,36 @@ export default function Share() {
       </header>
 
       <main className="container max-w-3xl py-8 px-4 space-y-6">
-        {/* Success badge */}
-        <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-2xl text-emerald-800 dark:text-emerald-300">
-          <CheckCircle2 className="size-6 shrink-0 text-emerald-500" />
-          <div className="text-sm font-semibold">
-            Đề thi đã sẵn sàng! Học sinh có thể làm bài bằng <b>Link</b>, nhập <b>Mã bài thi</b>, hoặc quét <b>Mã QR</b>.
+        {/* Success or Sync Warning badge */}
+        {syncError ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-destructive/10 border border-destructive/30 p-4 rounded-2xl text-destructive">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="size-5 shrink-0 mt-0.5" />
+              <div className="text-sm font-semibold">
+                Chưa đồng bộ xong mã bài thi lên máy chủ: {syncError}
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={syncingCodes}
+              onClick={() => syncExamResources(exam)}
+              className="gap-1.5 border-destructive/40 text-destructive shrink-0"
+            >
+              <RefreshCw className={`size-3.5 ${syncingCodes ? "animate-spin" : ""}`} /> Thử lại đồng bộ
+            </Button>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-2xl text-emerald-800 dark:text-emerald-300">
+            <CheckCircle2 className="size-6 shrink-0 text-emerald-500" />
+            <div className="text-sm font-semibold">
+              {syncingCodes
+                ? "Đang đồng bộ mã bài thi và link ngắn lên hệ thống..."
+                : <>Đề thi đã sẵn sàng! Học sinh có thể làm bài bằng <b>Link</b>, nhập <b>Mã bài thi</b>, hoặc quét <b>Mã QR</b>.</>}
+            </div>
+          </div>
+        )}
 
         {/* 2. THÔNG TIN BÀI THI CHÍNH */}
         <Card className="p-6 sm:p-8 rounded-3xl border-2 shadow-xl bg-card">
@@ -274,7 +367,7 @@ export default function Share() {
             <div className="p-4 bg-white rounded-2xl border shadow-sm flex flex-col items-center shrink-0">
               <QRCodeSVG
                 id="primary-qr-svg"
-                value={mainUrl}
+                value={qrUrl}
                 size={160}
                 level="H"
                 includeMargin={false}
@@ -307,39 +400,70 @@ export default function Share() {
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs text-muted-foreground font-bold">Link làm bài trực tiếp:</Label>
-                <div className="flex gap-2 mt-1">
-                  <Input readOnly value={mainUrl} className="font-mono text-xs h-10 rounded-xl" />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyLink(mainUrl)}
-                    className="h-10 px-3 rounded-xl shrink-0 gap-1 font-bold text-xs"
-                  >
-                    <Copy className="size-3.5" /> Sao chép link
-                  </Button>
+              {/* Link làm bài ngắn (duy nhất) */}
+              <div className="p-3.5 rounded-2xl bg-primary/10 border-2 border-primary/30 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <Label className="text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
+                    <Link2 className="size-3.5" /> LINK LÀM BÀI NGẮN
+                  </Label>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-background/80 text-primary border border-primary/20">
+                    Dễ nhớ • Chiếu màn hình
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    readOnly
+                    value={shortUrl || "Đang tạo link ngắn..."}
+                    aria-label="Link làm bài ngắn"
+                    className="font-mono text-sm font-bold text-primary bg-background h-10 rounded-xl select-all"
+                  />
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!shortUrl}
+                      onClick={() => copyShortLink(shortUrl)}
+                      className="h-10 px-3 rounded-xl gap-1.5 font-bold text-xs bg-primary text-primary-foreground flex-1 sm:flex-initial"
+                    >
+                      <Copy className="size-3.5" /> Sao chép link ngắn
+                    </Button>
+                    {shortCode && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        asChild
+                        className="h-10 px-3 rounded-xl gap-1.5 font-bold text-xs border-primary/30 bg-background"
+                      >
+                        <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="size-3.5" /> Mở link
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Action buttons: Phóng to QR & Tải QR */}
+              {/* Action buttons: Tạo / Phóng to QR & Tải QR từ link ngắn */}
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <Button
+                  disabled={!shortUrl}
                   onClick={() =>
                     setSelectedQR({
                       open: true,
                       title: exam.title,
                       code: primaryCode,
-                      url: mainUrl,
+                      url: qrUrl,
                     })
                   }
                   className="rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-primary to-sky-600 text-white shadow gap-1.5 h-11"
                 >
-                  <Maximize2 className="size-4" /> Phóng to mã QR
+                  <Maximize2 className="size-4" /> Tạo QR Code
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => downloadQR(primaryCode, exam.title, mainUrl)}
+                  disabled={!shortUrl}
+                  onClick={() => downloadQR(primaryCode, exam.title, qrUrl)}
                   className="rounded-xl font-bold text-xs sm:text-sm border-2 gap-1.5 h-11"
                 >
                   <Download className="size-4" /> Tải mã QR
@@ -355,11 +479,13 @@ export default function Share() {
                 <BarChart3 className="size-4 mr-1.5" /> Xem kết quả làm bài
               </Link>
             </Button>
-            <Button asChild className="rounded-xl font-bold bg-primary text-primary-foreground">
-              <Link to={`/take/${id}`} target="_blank">
-                <ExternalLink className="size-4 mr-1.5" /> Thử làm bài (Xem trước)
-              </Link>
-            </Button>
+            {shortCode && (
+              <Button asChild className="rounded-xl font-bold bg-primary text-primary-foreground">
+                <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="size-4 mr-1.5" /> Thử làm bài (Xem trước)
+                </Link>
+              </Button>
+            )}
           </div>
 
           {isTeam && (
@@ -462,6 +588,8 @@ export default function Share() {
               <div className="divide-y rounded-2xl border bg-card overflow-hidden">
                 {assignments.map((assign) => {
                   const assignUrl = getExamShareUrl(assign.examId, assign.code);
+                  const assignShortUrl = assign.shortCode ? getShortExamUrl(assign.shortCode) : "";
+                  const assignQrUrl = assignShortUrl || assignUrl;
                   return (
                     <div key={assign.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-muted/30 transition-colors">
                       <div className="flex items-center gap-3">
@@ -469,11 +597,16 @@ export default function Share() {
                           <Users className="size-5" />
                         </div>
                         <div>
-                          <div className="font-black text-base flex items-center gap-2">
+                          <div className="font-black text-base flex items-center gap-2 flex-wrap">
                             <span>Lớp: {assign.className}</span>
                             <span className="px-2 py-0.5 rounded-lg bg-primary/10 text-primary font-mono font-black text-xs">
                               {assign.code}
                             </span>
+                            {assign.shortCode && (
+                              <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono font-bold text-xs border border-emerald-500/20">
+                                {assignShortUrl}
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-muted-foreground">
                             Tạo lúc: {new Date(assign.createdAt).toLocaleDateString("vi-VN")}
@@ -490,14 +623,28 @@ export default function Share() {
                         >
                           <Copy className="size-3" /> Mã
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => copyLink(assignUrl)}
-                          className="h-8 rounded-lg text-xs font-semibold gap-1"
-                        >
-                          <Copy className="size-3" /> Link
-                        </Button>
+                        {assignShortUrl && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => copyShortLink(assignShortUrl)}
+                            className="h-8 rounded-lg text-xs font-semibold gap-1 border-primary/30 text-primary"
+                          >
+                            <Link2 className="size-3" /> Sao chép link
+                          </Button>
+                        )}
+                        {assign.shortCode && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            asChild
+                            className="h-8 rounded-lg text-xs font-semibold gap-1"
+                          >
+                            <Link to={`/e/${assign.shortCode}`} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="size-3" /> Mở link
+                            </Link>
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           className="h-8 rounded-lg text-xs font-bold bg-primary text-primary-foreground gap-1"
@@ -506,7 +653,7 @@ export default function Share() {
                               open: true,
                               title: exam.title,
                               code: assign.code,
-                              url: assignUrl,
+                              url: assignQrUrl,
                               className: assign.className,
                             })
                           }

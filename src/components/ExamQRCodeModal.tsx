@@ -220,11 +220,12 @@ export default function ExamQRCodeModal({
 
               {/* Share link box */}
               <div className="w-full space-y-1.5">
-                <div className="text-xs font-bold text-muted-foreground">Link làm bài trực tiếp:</div>
+                <div className="text-xs font-bold text-muted-foreground">Link làm bài ngắn:</div>
                 <div className="flex gap-2">
                   <input
                     readOnly
                     value={examUrl}
+                    aria-label="Link làm bài ngắn"
                     className="w-full text-xs font-mono px-3 py-2 rounded-xl bg-muted/40 border text-muted-foreground outline-none select-all"
                   />
                   <Button
@@ -233,7 +234,7 @@ export default function ExamQRCodeModal({
                     onClick={copyLink}
                     className="rounded-xl shrink-0 gap-1 text-xs"
                   >
-                    <Copy className="size-3.5" /> Copy
+                    <Copy className="size-3.5" /> Sao chép
                   </Button>
                 </div>
               </div>

@@ -6,7 +6,13 @@ import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
 import { Check, X, ShieldAlert, BookOpen, Lock } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
-import { formatScore, getTFValue, gradeExam, isScale100Scoring } from "@/lib/grading";
+import {
+  formatScore,
+  getTFValue,
+  gradeExam,
+  normalizeScoringToScale10,
+  normalizeSubmissionToScale10,
+} from "@/lib/grading";
 import { getPublishedExamAnswerKey, getAllSubmissions, isExamOfficiallyClosed } from "@/lib/studentStorage";
 import { findSampleExam } from "@/lib/sampleExams";
 import confetti from "canvas-confetti";
@@ -37,8 +43,9 @@ export default function Result() {
           setSub(submission);
           setExam(examObj);
 
-          const maxScoreVal = Number(submission?.max_score) || (isScale100Scoring(examObj?.scoring) ? 100 : 10);
-          if ((Number(submission?.score) || 0) >= maxScoreVal * 0.5) {
+          const normSub = normalizeSubmissionToScale10(submission, examObj);
+          const maxScoreVal = Number(normSub?.max_score) || 10;
+          if ((Number(normSub?.score) || 0) >= maxScoreVal * 0.5) {
             try {
               confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
             } catch {}
@@ -94,8 +101,9 @@ export default function Result() {
     );
   }
 
-  const total = (sub.correct_count ?? 0) + (sub.wrong_count ?? 0);
-  const correctCount = sub.correct_count ?? 0;
+  const normalizedSub = normalizeSubmissionToScale10(sub, exam);
+  const total = (normalizedSub.correct_count ?? 0) + (normalizedSub.wrong_count ?? 0);
+  const correctCount = normalizedSub.correct_count ?? 0;
   const correctRate = total > 0 ? (correctCount / total) * 100 : 0;
   const isStandard = !exam?.display_mode || exam?.display_mode === "standard";
   const enableMinCorrect = !!(
@@ -115,18 +123,20 @@ export default function Result() {
     exam?.status === "closed" ||
     exam?.manual_closed === true ||
     (exam?.close_at && new Date() > new Date(exam.close_at)) ||
-    (sub?.exam_id && isExamOfficiallyClosed(sub.exam_id));
+    (normalizedSub?.exam_id && isExamOfficiallyClosed(normalizedSub.exam_id));
   const allowReviewAnswers = !!(exam?.allow_review ?? (exam as any)?.allowReviewAnswers ?? false);
   const canReview = isExamClosed || allowReviewAnswers;
   const isThresholdActive = isStandard && enableMinCorrect && !isExamClosed;
   const isThresholdFailed = allowReviewAnswers && isThresholdActive && correctRate < threshold - 1e-6;
-  const answers = sub.answers || {};
-  const effectiveScoring = sub?.scoring_snapshot || sub?.scoringSnapshot || exam?.scoring || null;
+  const answers = normalizedSub.answers || {};
+  const rawEffectiveScoring =
+    normalizedSub?.scoring_snapshot || normalizedSub?.scoringSnapshot || exam?.scoring || null;
+  const effectiveScoring = rawEffectiveScoring ? normalizeScoringToScale10(rawEffectiveScoring) : null;
   const partIISummaryFromSub: any[] | null =
-    Array.isArray(sub?.part2_summary)
-      ? sub.part2_summary
-      : Array.isArray(sub?.partIISummary)
-      ? sub.partIISummary
+    Array.isArray(normalizedSub?.part2_summary)
+      ? normalizedSub.part2_summary
+      : Array.isArray(normalizedSub?.partIISummary)
+      ? normalizedSub.partIISummary
       : Array.isArray((location.state as any)?.partIISummary)
       ? (location.state as any).partIISummary
       : null;
@@ -232,25 +242,25 @@ export default function Result() {
     <Card className="p-6 sm:p-8 max-w-lg w-full text-center mx-auto shadow-xl rounded-3xl border-2 border-border/80 bg-card/95 backdrop-blur">
       <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Kết quả bài thi của</div>
       <div className="font-extrabold text-xl sm:text-2xl mt-1 text-foreground">
-        {sub.student_name} • Lớp {sub.student_class}
+        {normalizedSub.student_name} • Lớp {normalizedSub.student_class}
       </div>
 
       <div className="my-6 py-7 px-4 rounded-3xl bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 text-white shadow-xl shadow-indigo-500/25 relative overflow-hidden">
         <div className="absolute inset-0 bg-white/5 backdrop-blur-[1px] pointer-events-none" />
         <div className="text-xs uppercase font-bold tracking-widest opacity-90">Tổng điểm đạt được</div>
-        <div className="text-7xl sm:text-8xl font-black leading-none mt-2 drop-shadow-md">{formatScore(sub.score ?? 0)}</div>
+        <div className="text-7xl sm:text-8xl font-black leading-none mt-2 drop-shadow-md">{formatScore(normalizedSub.score ?? 0)}</div>
         <div className="text-sm font-semibold opacity-90 mt-2">
-          Thang điểm: / {formatScore(sub.max_score ?? (isScale100Scoring(exam?.scoring) ? 100 : 10))} điểm
+          Thang điểm: / {formatScore(normalizedSub.max_score ?? 10)} điểm
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4">
-          <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400">{sub.correct_count ?? 0}</div>
+          <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400">{normalizedSub.correct_count ?? 0}</div>
           <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 mt-1">Câu trả lời đúng</div>
         </div>
         <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-4">
-          <div className="text-3xl font-black text-rose-600 dark:text-rose-400">{sub.wrong_count ?? 0}</div>
+          <div className="text-3xl font-black text-rose-600 dark:text-rose-400">{normalizedSub.wrong_count ?? 0}</div>
           <div className="text-xs font-semibold text-rose-700 dark:text-rose-300 mt-1">Câu trả lời sai</div>
         </div>
       </div>

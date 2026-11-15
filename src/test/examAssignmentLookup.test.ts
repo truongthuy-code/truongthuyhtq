@@ -161,11 +161,11 @@ describe("Exam Assignment & Code Resolution", () => {
     expect(res.assignment?.code.startsWith("0")).toBe(true);
   });
 
-  it("should resolve standard 6-digit numeric code (e.g. 583214)", async () => {
+  it("should resolve standard 6-digit numeric code (e.g. 683921)", async () => {
     const fakeAssignment = {
       id: "assign_test_numeric",
       examId: "88888888-0000-4000-8000-000000000002",
-      code: "583214",
+      code: "683921",
       className: "11B1",
       title: "Bài kiểm tra Tin học 11",
       teacherName: "Trương Thị Bích Thủy",
@@ -179,10 +179,10 @@ describe("Exam Assignment & Code Resolution", () => {
 
     saveLocalAssignments([fakeAssignment]);
 
-    // Student enters "583214"
-    const res = await findAssignmentOrExamByCode("583214");
+    // Student enters "683921"
+    const res = await findAssignmentOrExamByCode("683921");
     expect(res.success).toBe(true);
     expect(res.exam.id).toBe("88888888-0000-4000-8000-000000000002");
-    expect(res.assignment?.code).toBe("583214");
+    expect(res.assignment?.code).toBe("683921");
   });
 });

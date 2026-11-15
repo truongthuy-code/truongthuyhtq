@@ -1,6 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } from "../src/lib/sampleExams";
-import { getPartIIQuestionScoreDetails, isScale100Scoring, roundFinalScore } from "../src/lib/grading";
+import {
+  getPartIIQuestionScoreDetails,
+  isScale10Scoring,
+  normalizeScoringToScale10,
+  roundFinalScore,
+} from "../src/lib/grading";
 
 // Multi-environment Supabase configuration
 // Supports Vercel production environment variables, local .env, and built-in fallback
@@ -405,15 +410,15 @@ export default async function handler(req: any, res: any) {
       return res.status(404).json({ error: "Không tìm thấy câu hỏi trong đề", questionId });
     }
 
-    const examScoring: any = examData.scoring || null;
-    const scale100 = isScale100Scoring(examScoring);
+    const examScoring: any = examData.scoring ? normalizeScoringToScale10(examData.scoring) : null;
+    const scale10 = isScale10Scoring(examScoring);
 
     // Part I: MC
     if (matchedPart === 1) {
       const qAns = String(matchedQ.answer ?? "").trim().toUpperCase();
       const sAns = String(answer ?? "").trim().toUpperCase();
       const isCorrect = qAns !== "" && sAns === qAns;
-      const maxPts = scale100 && p1.length > 0 ? roundFinalScore((examScoring.parts.p1 || 0) / p1.length) : undefined;
+      const maxPts = scale10 && p1.length > 0 ? roundFinalScore((examScoring.parts.p1 || 0) / p1.length) : undefined;
       return res.json({
         type: "mc",
         correct: isCorrect,
@@ -450,11 +455,11 @@ export default async function handler(req: any, res: any) {
         };
       });
       const isCorrect = items.length > 0 && okItems === items.length;
-      const maxPts = scale100 && p2.length > 0 ? (examScoring.parts.p2 || 0) / p2.length : undefined;
+      const maxPts = scale10 && p2.length > 0 ? (examScoring.parts.p2 || 0) / p2.length : undefined;
       const qScore =
         maxPts !== undefined && items.length > 0
           ? getPartIIQuestionScoreDetails(okItems, items.length, maxPts, examScoring)
-          : getPartIIQuestionScoreDetails(okItems, items.length, 100, examScoring);
+          : getPartIIQuestionScoreDetails(okItems, items.length, 10, examScoring);
       return res.json({
         type: "tf",
         correct: isCorrect,
@@ -492,7 +497,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      const maxPts = scale100 && p3.length > 0 ? roundFinalScore((examScoring.parts.p3 || 0) / p3.length) : undefined;
+      const maxPts = scale10 && p3.length > 0 ? roundFinalScore((examScoring.parts.p3 || 0) / p3.length) : undefined;
       return res.json({
         type: "sa",
         correct: isCorrect,
