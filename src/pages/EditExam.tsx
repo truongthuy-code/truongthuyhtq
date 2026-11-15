@@ -294,9 +294,12 @@ export default function EditExam() {
       id,
       title,
       duration_minutes: duration,
+      teacher_name: existing?.teacher_name,
+      school_name: existing?.school_name,
+      subject_name: existing?.subject_name,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
-      team_config: teamConfig as any,
+      team_config: updates.team_config as any,
     });
 
     setSaving(false);

@@ -367,22 +367,22 @@ describe("DOCX Parser - Bảng đáp án Phần II Hình 2 & Tương thích ngư
       [parsed.partII[3].id]: { a: false, b: true, c: false, d: false },
     };
 
-    // Chế độ 1: Chia đều (4 ý -> 0.625đ/ý)
-    const equalScoring = buildScale10Scoring(parsed, { p1: 0, p2: 10, p3: 0 }, { p2Method: "equal" });
-    const equalGrade = gradeExam(parsed, studentAnswers, equalScoring);
-    // Tổng số ý đúng: 4 + 3 + 2 + 1 = 10/16 ý -> 10 * 0.625 = 6.25đ
-    expect(equalGrade.score).toBe(6.25);
-    expect(equalGrade.maxScore).toBe(10);
-    expect(equalGrade.partIISummary.map((s) => s.okItems)).toEqual([4, 3, 2, 1]);
+    // Mặc định (không truyền p2Method hoặc ngay cả cấu hình cũ ghi 'equal') đều dùng Phương thức 2 duy nhất: Tỷ lệ % (10% / 25% / 50% / 100%)
+    const defaultScoring = buildScale10Scoring(parsed, { p1: 0, p2: 10, p3: 0 });
+    expect(defaultScoring.p2Method).toBe("custom_rates");
+    const defaultGrade = gradeExam(parsed, studentAnswers, defaultScoring);
+    // 2.5 + 1.25 + 0.625 + 0.25 = 4.625 -> 4.63đ
+    expect(defaultGrade.score).toBe(4.63);
+    expect(defaultGrade.maxScore).toBe(10);
+    expect(defaultGrade.partIISummary.map((s) => s.okItems)).toEqual([4, 3, 2, 1]);
 
-    // Chế độ 2: Tỷ lệ theo số ý đúng (10% / 25% / 50% / 100%)
+    // Truyền rõ custom_rates với DEFAULT_PART_II_RATES cho kết quả đồng nhất hoàn toàn
     const customScoring = buildScale10Scoring(
       parsed,
       { p1: 0, p2: 10, p3: 0 },
       { p2Method: "custom_rates", p2Rates: DEFAULT_PART_II_RATES }
     );
     const customGrade = gradeExam(parsed, studentAnswers, customScoring);
-    // 2.5 + 1.25 + 0.625 + 0.25 = 4.625 -> 4.63đ
     expect(customGrade.score).toBe(4.63);
     expect(customGrade.maxScore).toBe(10);
     expect(customGrade.partIISummary.map((s) => s.ratePercent)).toEqual([100, 50, 25, 10]);

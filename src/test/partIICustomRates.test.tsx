@@ -117,15 +117,17 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     vi.clearAllMocks();
   });
 
-  it("Test 1: Phương thức mặc định ('equal') giữ nguyên kết quả chia đều 25%/50%/75%/100%", () => {
+  it("Test 1: Phương thức duy nhất mặc định ('custom_rates') tự động áp dụng 10%/25%/50%/100% (kể cả khi dữ liệu cũ ghi 'equal')", () => {
     const exam = makeSampleExam(0, 1, 0);
-    const scoring = buildScale10Scoring(exam, { p1: 0, p2: 10, p3: 0 }); // p2Method mặc định là 'equal'
-    expect(getPartIIMethod(scoring)).toBe("equal");
+    const scoring = buildScale10Scoring(exam, { p1: 0, p2: 10, p3: 0 });
+    expect(getPartIIMethod(scoring)).toBe("custom_rates");
+    expect(getPartIIMethod({ p2Method: "equal" })).toBe("custom_rates");
+    expect(scoring.p2Method).toBe("custom_rates");
 
     expect(gradeExam(exam, { p2_1: makeTFSelection(0) }, scoring).score).toBe(0);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring).score).toBe(2.5);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring).score).toBe(5);
-    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring).score).toBe(7.5);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring).score).toBe(1);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring).score).toBe(2.5);
+    expect(gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring).score).toBe(5);
     expect(gradeExam(exam, { p2_1: makeTFSelection(4) }, scoring).score).toBe(10);
   });
 
@@ -287,13 +289,12 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
 
     expect(screen.getByText(/THIẾT LẬP TỶ LỆ ĐIỂM THEO SỐ Ý ĐÚNG/i)).toBeTruthy();
 
-    // Switch to custom_rates radio
-    const customRadio = screen.getByRole("radio", { name: /Phương thức 2: Tỷ lệ giáo viên thiết lập/i });
-    fireEvent.click(customRadio);
-    expect(onChange).toHaveBeenCalled();
+    // Phương thức 1 bị loại bỏ hoàn toàn, không còn radiogroup lựa chọn, Phương thức 2 tự động kích hoạt sẵn
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByText(/Phương thức 1/i)).toBeNull();
+    expect(screen.queryByText(/Chia đều từng ý/i)).toBeNull();
+    expect(screen.getByText(/Phương thức tính điểm Phần II: Tỷ lệ giáo viên thiết lập/i)).toBeTruthy();
     expect(current.p2Method).toBe("custom_rates");
-
-    rerender(<ScoringConfigPanel counts={counts} scoring={current} onChange={onChange} />);
 
     // Change 1/4 input to 20
     const input1 = screen.getByLabelText("Tỷ lệ đúng 1/4 ý") as HTMLInputElement;
@@ -460,12 +461,14 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     const storedPart2Summary = JSON.parse(JSON.stringify(originalGrade.partIISummary));
     expect(storedPart2Summary).toHaveLength(2);
 
-    // Sau đó giáo viên sửa lại đề (đổi sang chia đều hoặc tăng tỷ lệ khác)
+    // Sau đó giáo viên sửa lại đề (dù có trường p2Method cũ vẫn luôn chuẩn hóa về custom_rates)
     const editedExam = reconcileScale10Scoring(attached, {
       ...oldScoring,
-      p2Method: "equal",
+      p2Method: "equal" as any,
+      p2Rates: { "1": 15, "2": 35, "3": 70, "4": 100 },
     });
-    expect(editedExam.p2Method).toBe("equal");
+    expect(editedExam.p2Method).toBe("custom_rates");
+    expect(editedExam.p2Rates).toEqual({ "1": 15, "2": 35, "3": 70, "4": 100 });
 
     // Khi học sinh xem lại bài đã nộp cũ, hệ thống chấm/hiển thị theo scoring_snapshot cũ -> điểm giữ nguyên tuyệt đối!
     const historicalReplay = gradeExam(attached, studentAnswers, storedScoringSnapshot);
@@ -537,5 +540,27 @@ describe("Nâng cấp cách tính điểm Phần II – Trắc nghiệm Đúng/S
     expect(submitJson.submission?.score).toBeLessThanOrEqual(10);
     expect(Array.isArray(submitJson.partIISummary)).toBe(true);
     expect(submitJson.partIISummary.length).toBe(sample.questions.partII.length);
+  });
+
+  it("Test 14: Câu Phần II tối đa 0.8 điểm (5 câu = 4đ) chấm chính xác 0.08 / 0.2 / 0.4 / 0.8 trên cả gradeExam và check-question-answer", async () => {
+    const exam = makeSampleExam(12, 5, 6);
+    const scoring = buildScale10Scoring(exam, { p1: 3, p2: 4, p3: 3 });
+    expect(scoring.perQuestion.p2).toBe(0.8);
+
+    const res1 = gradeExam(exam, { p2_1: makeTFSelection(1) }, scoring);
+    expect(res1.partIISummary[0]).toMatchObject({ okItems: 1, ratePercent: 10, earnedScore: 0.08, maxScore: 0.8 });
+
+    const res2 = gradeExam(exam, { p2_1: makeTFSelection(2) }, scoring);
+    expect(res2.partIISummary[0]).toMatchObject({ okItems: 2, ratePercent: 25, earnedScore: 0.2, maxScore: 0.8 });
+
+    const res3 = gradeExam(exam, { p2_1: makeTFSelection(3) }, scoring);
+    expect(res3.partIISummary[0]).toMatchObject({ okItems: 3, ratePercent: 50, earnedScore: 0.4, maxScore: 0.8 });
+
+    const res4 = gradeExam(exam, { p2_1: makeTFSelection(4) }, scoring);
+    expect(res4.partIISummary[0]).toMatchObject({ okItems: 4, ratePercent: 100, earnedScore: 0.8, maxScore: 0.8 });
+
+    // Kiểm tra chế độ Từng câu hỏi (/api/check-question-answer) cũng khớp 0.2đ khi đúng 2/4 ý
+    const details2 = getPartIIQuestionScoreDetails(2, 4, 0.8, scoring);
+    expect(details2).toMatchObject({ ratePercent: 25, earnedScore: 0.2, method: "custom_rates" });
   });
 });

@@ -128,9 +128,11 @@ describe("Kiểm thử tỷ lệ điểm mặc định Phần II (10% - 25% - 50
     });
     fireEvent.click(screen.getByRole("button", { name: /Phân tích/i }));
 
-    // Chọn Phương thức 2: Tỷ lệ giáo viên thiết lập
-    const customRadio = screen.getByRole("radio", { name: /Phương thức 2: Tỷ lệ giáo viên thiết lập/i });
-    fireEvent.click(customRadio);
+    // Không còn Phương thức 1 hay radiogroup lựa chọn; Phương thức 2 tự động kích hoạt mặc định 0% / 10% / 25% / 50% / 100%
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByText(/Phương thức 1/i)).toBeNull();
+    expect(screen.queryByText(/Chia đều từng ý/i)).toBeNull();
+    expect(screen.getByText(/Phương thức tính điểm Phần II: Tỷ lệ giáo viên thiết lập/i)).toBeTruthy();
 
     expect(screen.getByText(/0% \(cố định\)/i)).toBeTruthy();
     expect((screen.getByLabelText("Tỷ lệ đúng 1/4 ý") as HTMLInputElement).value).toBe("10");

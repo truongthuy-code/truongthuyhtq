@@ -8,10 +8,8 @@ import {
   DEFAULT_TOTAL_SCALE,
   ExamStructureCounts,
   formatScore,
-  getPartIIMethod,
   isScale10Scoring,
   normalizePartIIRates,
-  PartIIMethod,
   PartIIRates,
   PartPoints,
   ScoringConfig,
@@ -121,13 +119,9 @@ export default function ScoringConfigPanel({
 
   const parts: PartPoints = scoring.parts;
   const validation = validateScale10Parts(parts, counts);
-  const p2Method = getPartIIMethod(scoring);
   const p2Rates = normalizePartIIRates(scoring.p2Rates);
   const allowNonMonotonic = Boolean(scoring.allowNonMonotonicP2Rates);
-  const rateValidation =
-    p2Method === "custom_rates"
-      ? validatePartIIRates(p2Rates, allowNonMonotonic)
-      : { valid: true, hasRangeError: false, isNonMonotonic: false, message: null };
+  const rateValidation = validatePartIIRates(p2Rates, allowNonMonotonic);
   const overallValid = validation.valid && (counts.p2 === 0 || rateValidation.valid);
 
   const handlePartChange = (partKey: keyof PartPoints, rawVal: string) => {
@@ -143,16 +137,6 @@ export default function ScoringConfigPanel({
   const handleResetSuggested = () => {
     const suggested = suggestDefaultPartPoints(counts, DEFAULT_TOTAL_SCALE);
     onChange(buildScale10Scoring(syntheticExam, suggested, scoring));
-  };
-
-  const handleP2MethodChange = (nextMethod: PartIIMethod) => {
-    onChange(
-      buildScale10Scoring(syntheticExam, parts, {
-        ...scoring,
-        p2Method: nextMethod,
-        p2Rates,
-      })
-    );
   };
 
   const handleP2RateChange = (level: "1" | "2" | "3", rawVal: string) => {
@@ -196,7 +180,6 @@ export default function ScoringConfigPanel({
 
   const perQ1 = counts.p1 > 0 ? parts.p1 / counts.p1 : 0;
   const perQ2 = counts.p2 > 0 ? parts.p2 / counts.p2 : 0;
-  const perItemP2 = counts.p2 > 0 && itemCountP2 > 0 ? perQ2 / itemCountP2 : 0;
   const perQ3 = counts.p3 > 0 ? parts.p3 / counts.p3 : 0;
 
   const isRepeating = (num: number, den: number) => {
@@ -212,7 +195,7 @@ export default function ScoringConfigPanel({
     count: number;
     partScore: number;
     perQ: number;
-    perItem?: number;
+    isPartII?: boolean;
   }> = [
     {
       key: "p1",
@@ -225,14 +208,11 @@ export default function ScoringConfigPanel({
     {
       key: "p2",
       title: "Phần II",
-      subtitle:
-        p2Method === "custom_rates"
-          ? "Đúng / Sai (tính theo tỷ lệ % GV thiết lập)"
-          : `Đúng / Sai (chia đều ${itemCountP2} ý/câu)`,
+      subtitle: "Đúng / Sai (tính theo tỷ lệ % giáo viên thiết lập)",
       count: counts.p2,
       partScore: parts.p2,
       perQ: perQ2,
-      perItem: perItemP2,
+      isPartII: true,
     },
     {
       key: "p3",
@@ -258,7 +238,7 @@ export default function ScoringConfigPanel({
             </span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Chỉ cần nhập tổng điểm từng phần; hệ thống tự động chia đều điểm cho từng câu và từng ý Phần II.
+            Chỉ cần nhập tổng điểm từng phần; hệ thống tự động phân bổ điểm từng câu và tính Phần II theo tỷ lệ % giáo viên thiết lập.
           </p>
         </div>
 
@@ -306,8 +286,6 @@ export default function ScoringConfigPanel({
           {rows.map((r) => {
             const disabled = r.count === 0;
             const repeatingQ = isRepeating(r.partScore, r.count);
-            const repeatingItem =
-              r.perItem !== undefined && r.count > 0 && isRepeating(r.partScore, r.count * itemCountP2);
 
             return (
               <div
@@ -356,18 +334,9 @@ export default function ScoringConfigPanel({
                         {repeatingQ ? "≈ " : ""}
                         {formatScore(r.perQ)} đ/câu
                       </div>
-                      {r.perItem !== undefined && (
+                      {r.isPartII && (
                         <div className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
-                          {r.key === "p2" && p2Method === "custom_rates" ? (
-                            <span>
-                              Tỷ lệ: {formatScore(p2Rates["1"])}% / {formatScore(p2Rates["2"])}% / {formatScore(p2Rates["3"])}% / 100%
-                            </span>
-                          ) : (
-                            <span>
-                              {repeatingItem ? "≈ " : ""}
-                              {formatScore(r.perItem)} đ/ý
-                            </span>
-                          )}
+                          Tỷ lệ: {formatScore(p2Rates["1"])}% / {formatScore(p2Rates["2"])}% / {formatScore(p2Rates["3"])}% / 100%
                         </div>
                       )}
                     </>
@@ -414,8 +383,8 @@ export default function ScoringConfigPanel({
         </div>
       )}
 
-      {/* KHU VỰC PHẦN II: THIẾT LẬP TỶ LỆ ĐIỂM THEO SỐ Ý ĐÚNG */}
-      {(counts.p2 > 0 || p2Method === "custom_rates") && (
+      {/* KHU VỰC PHẦN II: THIẾT LẬP TỶ LỆ ĐIỂM THEO SỐ Ý ĐÚNG (DUY NHẤT PHƯƠNG THỨC 2) */}
+      {counts.p2 > 0 && (
         <div className="rounded-xl border border-indigo-500/25 bg-background/90 p-3.5 space-y-3">
           <div className="flex items-start justify-between gap-2 flex-wrap">
             <div>
@@ -426,82 +395,35 @@ export default function ScoringConfigPanel({
                 Áp dụng cho Phần II – Trắc nghiệm Đúng/Sai ({counts.p2} câu • {formatScore(perQ2)} điểm tối đa/câu).
               </p>
             </div>
-            {p2Method === "custom_rates" && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleResetP2Rates}
-                className="h-7 px-2.5 text-[11px] rounded-lg gap-1 shrink-0"
-              >
-                <RotateCcw className="size-3" /> Khôi phục thiết lập mặc định
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleResetP2Rates}
+              className="h-7 px-2.5 text-[11px] rounded-lg gap-1 shrink-0"
+            >
+              <RotateCcw className="size-3" /> Khôi phục thiết lập mặc định
+            </Button>
           </div>
 
-          {/* Chọn phương thức tính điểm Phần II */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="radiogroup" aria-label="Phương thức tính điểm Phần II">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={p2Method === "equal"}
-              onClick={() => handleP2MethodChange("equal")}
-              className={`text-left rounded-xl border p-2.5 transition-all ${
-                p2Method === "equal"
-                  ? "border-primary bg-primary/8 ring-1 ring-primary/40"
-                  : "border-border hover:bg-muted/40"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-foreground">Phương thức 1: Chia đều từng ý</span>
-                <span
-                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                    p2Method === "equal"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  Mặc định
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground mt-1 leading-snug">
-                Mỗi ý đúng nhận 1/{itemCountP2} điểm câu (25% / 50% / 75% / 100%).
-              </div>
-            </button>
-
-            <button
-              type="button"
-              role="radio"
-              aria-checked={p2Method === "custom_rates"}
-              onClick={() => handleP2MethodChange("custom_rates")}
-              className={`text-left rounded-xl border p-2.5 transition-all ${
-                p2Method === "custom_rates"
-                  ? "border-indigo-600 bg-indigo-500/10 ring-1 ring-indigo-500/40"
-                  : "border-border hover:bg-muted/40"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-foreground">Phương thức 2: Tỷ lệ giáo viên thiết lập</span>
-                <span
-                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                    p2Method === "custom_rates"
-                      ? "bg-indigo-600 text-white"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  Tùy chỉnh %
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground mt-1 leading-snug">
-                Tính điểm theo % tương ứng khi đúng 1/4, 2/4, 3/4, 4/4 ý (mặc định 10% / 25% / 50% / 100%).
-              </div>
-            </button>
+          {/* Phương thức duy nhất: Tỷ lệ giáo viên thiết lập (hiển thị toàn bộ chiều rộng) */}
+          <div className="w-full rounded-xl border border-indigo-600/40 bg-indigo-500/10 ring-1 ring-indigo-500/30 p-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-bold text-foreground">
+                Phương thức tính điểm Phần II: Tỷ lệ giáo viên thiết lập
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-600 text-white">
+                Mặc định • Tùy chỉnh %
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+              Tính điểm theo % tương ứng khi đúng 1/4, 2/4, 3/4, 4/4 ý (mặc định 10% / 25% / 50% / 100%). Điểm đạt được = Điểm tối đa của câu × Tỷ lệ %.
+            </p>
           </div>
 
-          {/* Bảng thiết lập tỷ lệ % khi chọn Phương thức 2 */}
-          {p2Method === "custom_rates" && (
-            <div className="space-y-2.5 pt-1">
-              <div className="rounded-xl border overflow-hidden bg-card">
+          {/* Bảng thiết lập tỷ lệ % */}
+          <div className="space-y-2.5 pt-0.5">
+            <div className="rounded-xl border overflow-hidden bg-card">
                 <div className="grid grid-cols-12 gap-2 px-3 py-2 bg-muted/50 border-b text-[11px] font-bold text-muted-foreground uppercase tracking-wide">
                   <div className="col-span-5">Số ý trả lời đúng</div>
                   <div className="col-span-4 text-center">Tỷ lệ điểm câu hỏi</div>
@@ -600,7 +522,6 @@ export default function ScoringConfigPanel({
                 </span>
               </div>
             </div>
-          )}
         </div>
       )}
 
@@ -608,16 +529,14 @@ export default function ScoringConfigPanel({
         <div className="text-[11px] text-muted-foreground leading-relaxed">
           {counts.p2 > 0 && (
             <span>
-              • Phần II đang dùng phương thức{" "}
+              • Phần II đang áp dụng phương thức{" "}
               <strong>
-                {p2Method === "custom_rates"
-                  ? `tỷ lệ giáo viên thiết lập (${formatScore(p2Rates["1"])}% / ${formatScore(p2Rates["2"])}% / ${formatScore(p2Rates["3"])}% / 100%)`
-                  : "chia đều điểm theo từng ý"}
+                tỷ lệ giáo viên thiết lập ({formatScore(p2Rates["1"])}% / {formatScore(p2Rates["2"])}% / {formatScore(p2Rates["3"])}% / 100%)
               </strong>
               .{" "}
             </span>
           )}
-          {(isRepeating(parts.p1, counts.p1) || isRepeating(parts.p2, counts.p2 * itemCountP2) || isRepeating(parts.p3, counts.p3)) && (
+          {(isRepeating(parts.p1, counts.p1) || isRepeating(parts.p2, counts.p2) || isRepeating(parts.p3, counts.p3)) && (
             <span>
               • Số thập phân vô hạn tuần hoàn được tính toán chính xác nội bộ và chỉ làm tròn ở tổng điểm cuối cùng để bài làm đúng hết luôn đạt trọn <strong>10 điểm</strong>.
             </span>

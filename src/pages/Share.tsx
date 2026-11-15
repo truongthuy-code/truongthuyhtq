@@ -80,19 +80,34 @@ export default function Share() {
       syncErrors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
     }
 
+    const effectiveExam = syncRes.primaryCode
+      ? {
+          ...data,
+          team_config: {
+            ...((data.team_config as any) || {}),
+            primary_code: syncRes.primaryCode,
+          },
+        }
+      : data;
+
+    if (syncRes.primaryCode) {
+      setPrimaryCode(syncRes.primaryCode);
+      setExam((prev: any) => (prev ? { ...prev, team_config: effectiveExam.team_config } : prev));
+    }
+
     try {
-      const sl = await ensureExamShortLink({ exam: data });
+      const sl = await ensureExamShortLink({ exam: effectiveExam });
       if (sl?.shortCode) setShortCode(sl.shortCode);
     } catch (err: any) {
       syncErrors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
     }
 
-    const list = await getAssignmentsForExam(data.id, data);
+    const list = await getAssignmentsForExam(data.id, effectiveExam);
     const enrichedList = await Promise.all(
       list.map(async (item) => {
         if (item.shortCode) return item;
         try {
-          const sl = await ensureExamShortLink({ exam: data, assignment: item });
+          const sl = await ensureExamShortLink({ exam: effectiveExam, assignment: item });
           return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
         } catch {
           return item;

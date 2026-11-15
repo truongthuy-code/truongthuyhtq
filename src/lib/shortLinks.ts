@@ -8,6 +8,7 @@ import {
   getLocalAssignments,
   isUuid,
   normalizeExamCode,
+  syncSchoolsRegistryEntries,
 } from "@/lib/examAssignments";
 import {
   ExamAccessErrorType,
@@ -338,21 +339,21 @@ async function persistShortLinkRecord(
   let persistedRemote = false;
   let lastError: any = null;
 
-  // 1. Persist to cross-device public registry (`schools` table)
+  // 1. Persist to cross-device public registry (`schools` table) using RLS-safe sync
   try {
-    const { error: schErr } = await withSupabaseAuthRetry(async () => {
-      return await supabase.from("schools").upsert(
-        [
-          { name_key: `short_code:${record.shortCode}`, name: jsonPayload },
-          { name_key: reverseKey, name: jsonPayload },
-        ],
-        { onConflict: "name_key" }
-      );
+    const syncRes = await syncSchoolsRegistryEntries({
+      examId: record.examId,
+      entries: [
+        { name_key: `short_code:${record.shortCode}`, name: jsonPayload },
+        { name_key: reverseKey, name: jsonPayload },
+      ],
+      requiredKeys: [`short_code:${record.shortCode}`],
+      shortCode: record.shortCode,
     });
-    if (schErr) {
-      lastError = schErr;
-    } else {
+    if (syncRes.success) {
       persistedRemote = true;
+    } else if (syncRes.error) {
+      lastError = new Error(syncRes.error);
     }
   } catch (e) {
     lastError = e;
@@ -527,19 +528,19 @@ export async function ensureExamShortLink(params: {
           createdAt: new Date().toISOString(),
         };
         upsertLocalShortLink(record);
-        // Ensure cross-device schools lookup is populated without mutating short code
+        // Ensure cross-device schools lookup is populated safely without mutating short code or tripping UPDATE RLS
         try {
           const reverseKey = record.isPrimary
             ? `short_exam:${record.examId}`
             : `short_assign:${record.examId}:${normalizeExamCode(effectiveCode)}`;
-          await withSupabaseAuthRetry(async () => {
-            return await supabase.from("schools").upsert(
-              [
-                { name_key: `short_code:${record.shortCode}`, name: JSON.stringify(record) },
-                { name_key: reverseKey, name: JSON.stringify(record) },
-              ],
-              { onConflict: "name_key" }
-            );
+          await syncSchoolsRegistryEntries({
+            examId: record.examId,
+            entries: [
+              { name_key: `short_code:${record.shortCode}`, name: JSON.stringify(record) },
+              { name_key: reverseKey, name: JSON.stringify(record) },
+            ],
+            requiredKeys: [`short_code:${record.shortCode}`],
+            shortCode: record.shortCode,
           });
         } catch {}
         return record;

@@ -142,27 +142,27 @@ describe("Thang điểm 10 & Tự động phân bổ điểm (8 trường hợp 
     expect(fullOddRes.maxScore).toBe(10);
   });
 
-  it("Case 6: Phần II chấm độc lập từng ý (0/4, 1/4, 2/4, 3/4, 4/4, bỏ trống) theo phương thức chia đều", () => {
-    const exam = makeSampleExam(0, 2, 0); // Chỉ có Phần II: 2 câu = 10đ => 5đ/câu => 1.25đ/ý
+  it("Case 6: Phần II chấm theo số ý đúng (0/4, 1/4, 2/4, 3/4, 4/4, bỏ trống) theo tỷ lệ mặc định 10%/25%/50%/100%", () => {
+    const exam = makeSampleExam(0, 2, 0); // Chỉ có Phần II: 2 câu = 10đ => 5đ/câu
     const scoring = buildScale10Scoring(exam, { p1: 0, p2: 10, p3: 0 });
     expect(scoring.perQuestion.p2).toBe(5);
-    expect(scoring.perItemP2).toBe(1.25);
+    expect(scoring.p2Method).toBe("custom_rates");
 
-    // Đúng 1 ý trên câu 1 => 1.25 điểm (1/4 của 5)
+    // Đúng 1 ý trên câu 1 => 10% của 5 = 0.5 điểm
     const res1 = gradeExam(exam, { p2_1: { a: true, b: true, c: false, d: true } }, scoring);
-    expect(res1.score).toBe(1.25);
+    expect(res1.score).toBe(0.5);
 
-    // Đúng 2 ý trên câu 1 => 2.5 điểm (2/4 của 5)
+    // Đúng 2 ý trên câu 1 => 25% của 5 = 1.25 điểm
     const res2 = gradeExam(exam, { p2_1: { a: true, b: false, c: false, d: true } }, scoring);
-    expect(res2.score).toBe(2.5);
+    expect(res2.score).toBe(1.25);
 
-    // Đúng 3 ý trên câu 1 => 3.75 điểm (3/4 của 5)
+    // Đúng 3 ý trên câu 1 => 50% của 5 = 2.5 điểm
     const res3 = gradeExam(exam, { p2_1: { a: true, b: false, c: true, d: true } }, scoring);
-    expect(res3.score).toBe(3.75);
+    expect(res3.score).toBe(2.5);
 
-    // Học sinh chỉ làm 2 ý (a đúng, c đúng, b và d bỏ trống null) => đúng 2 ý = 2.5 điểm
+    // Học sinh chỉ làm 2 ý (a đúng, c đúng, b và d bỏ trống null) => đúng 2 ý = 25% của 5 = 1.25 điểm
     const resPartialBlank = gradeExam(exam, { p2_1: { a: true, c: true } }, scoring);
-    expect(resPartialBlank.score).toBe(2.5);
+    expect(resPartialBlank.score).toBe(1.25);
 
     // Không đúng ý nào => 0 điểm
     const res0 = gradeExam(exam, { p2_1: { a: false, b: true, c: false, d: true } }, scoring);

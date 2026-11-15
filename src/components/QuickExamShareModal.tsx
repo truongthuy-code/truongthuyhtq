@@ -79,19 +79,33 @@ export default function QuickExamShareModal({
       errors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
     }
 
+    const effectiveExam = syncRes.primaryCode
+      ? {
+          ...targetExam,
+          team_config: {
+            ...((targetExam.team_config as any) || {}),
+            primary_code: syncRes.primaryCode,
+          },
+        }
+      : targetExam;
+
+    if (syncRes.primaryCode) {
+      setPrimaryCode(syncRes.primaryCode);
+    }
+
     try {
-      const sl = await ensureExamShortLink({ exam: targetExam });
+      const sl = await ensureExamShortLink({ exam: effectiveExam });
       if (sl?.shortCode) setShortCode(sl.shortCode);
     } catch (err: any) {
       errors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
     }
 
-    const list = await getAssignmentsForExam(targetExam.id, targetExam);
+    const list = await getAssignmentsForExam(targetExam.id, effectiveExam);
     const enrichedList = await Promise.all(
       list.map(async (item) => {
         if (item.shortCode) return item;
         try {
-          const sl = await ensureExamShortLink({ exam: targetExam, assignment: item });
+          const sl = await ensureExamShortLink({ exam: effectiveExam, assignment: item });
           return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
         } catch {
           return item;

@@ -17,6 +17,12 @@ vi.mock("@/integrations/supabase/client", () => {
 
     const executeSelect = async () => {
       if (table === "schools") {
+        if (Array.isArray(filters.__in_name_key)) {
+          const all = filters.__in_name_key
+            .filter((k: string) => mockState.schools.has(k))
+            .map((k: string) => ({ name_key: k, name: mockState.schools.get(k)! }));
+          return { data: isSingle ? all[0] || null : all, error: null };
+        }
         if (filters.name_key !== undefined) {
           const val = mockState.schools.get(filters.name_key);
           const row = val !== undefined ? { name_key: filters.name_key, name: val } : null;
@@ -56,6 +62,10 @@ vi.mock("@/integrations/supabase/client", () => {
         filters[col] = val;
         return builder;
       },
+      in: (col: string, vals: any[]) => {
+        filters[`__in_${col}`] = Array.isArray(vals) ? vals : [];
+        return builder;
+      },
       filter: (col: string, _op: string, val: any) => {
         filters[col] = val;
         return builder;
@@ -82,6 +92,17 @@ vi.mock("@/integrations/supabase/client", () => {
       },
       insert: async (rows: any) => {
         const arr = Array.isArray(rows) ? rows : [rows];
+        if (table === "schools") {
+          for (const r of arr) {
+            if (mockState.schools.has(r.name_key)) {
+              return { data: null, error: { code: "23505", message: "duplicate key" } };
+            }
+          }
+          for (const r of arr) {
+            mockState.schools.set(r.name_key, r.name);
+          }
+          return { data: arr, error: null };
+        }
         if (table === "exam_short_links") {
           for (const r of arr) {
             if (mockState.shortLinks.has(r.short_code)) {

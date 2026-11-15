@@ -17,7 +17,6 @@ import {
   buildScale10Scoring,
   detectExamStructure,
   formatScore,
-  getPartIIMethod,
   getPartIISampleItemCount,
   isScale10Scoring,
   reconcileScale10Scoring,
@@ -129,6 +128,7 @@ export default function Teacher() {
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
   const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
   const [saving, setSaving] = useState(false);
+  const pendingCreatedExamRef = useRef<{ id: string; code: string } | null>(null);
 
   const examCounts = useMemo(() => detectExamStructure(exam), [exam]);
   const itemCountP2 = useMemo(() => getPartIISampleItemCount(exam), [exam]);
@@ -396,7 +396,9 @@ export default function Teacher() {
       : "";
 
     // BƯỚC 1, 2, 3: Lưu đề thi thành công vào Supabase và nhận UUID chính thức
-    const examCode = await generateUniqueNumericExamCode();
+    // Nếu lần lưu trước đã tạo dòng exam trên Supabase nhưng sync mã bị lỗi mạng, tái sử dụng ID & mã cũ để không tạo trùng đề
+    const pendingDraft = pendingCreatedExamRef.current;
+    const examCode = pendingDraft?.code || await generateUniqueNumericExamCode();
     const finalTeamConfig = {
       ...(teamConfig || {}),
       primary_code: examCode,
@@ -459,6 +461,19 @@ export default function Teacher() {
         insertPayload.folder_id = targetFolderId;
       }
 
+      if (pendingDraft?.id) {
+        const updPayload = { ...insertPayload };
+        delete updPayload.created_by;
+        let updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
+        if (updRes.error && (updRes.error.code === "42703" || updRes.error.message?.includes("folder_id"))) {
+          delete updPayload.folder_id;
+          updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
+        }
+        if (!updRes.error && updRes.data?.id) {
+          return updRes;
+        }
+      }
+
       let res = await supabase.from("exams").insert(insertPayload).select("id").single();
       // If error is code 42703 (folder_id column not created yet in remote Supabase), retry safely without folder_id in payload
       if (res.error && (res.error.code === "42703" || res.error.message?.includes("folder_id"))) {
@@ -477,6 +492,8 @@ export default function Teacher() {
       toast.error("Lỗi lưu đề thi vào hệ thống: " + (error?.message || "Không thể tạo đề thi"));
       return;
     }
+
+    pendingCreatedExamRef.current = { id: data.id, code: examCode };
 
     // BƯỚC 4, 5, 6: Lưu mã bài thi vào database và kiểm tra việc lưu mã thành công
     const syncRes = await syncExamAssignmentCodes({
@@ -497,6 +514,12 @@ export default function Teacher() {
       return;
     }
 
+    const effectiveExamCode = syncRes.primaryCode || examCode;
+    const confirmedTeamConfig = {
+      ...(finalTeamConfig || {}),
+      primary_code: effectiveExamCode,
+    };
+
     // BƯỚC 7, 8, 9: Sau khi dữ liệu đã tồn tại trên server mới lưu bộ nhớ đệm và chuyển sang trang chia sẻ
     const createdExamPayload = {
       id: data.id,
@@ -509,7 +532,7 @@ export default function Teacher() {
       close_at: schedule.close_at,
       display_mode: displayMode,
       created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
-      team_config: finalTeamConfig as any,
+      team_config: confirmedTeamConfig as any,
     };
 
     let primaryShortCode: string | undefined;
@@ -523,7 +546,7 @@ export default function Teacher() {
     const primaryAssign: ExamAssignment = {
       id: `primary_${data.id}`,
       examId: data.id,
-      code: examCode,
+      code: effectiveExamCode,
       shortCode: primaryShortCode,
       className: "Chung",
       title,
@@ -556,7 +579,7 @@ export default function Teacher() {
       allow_review: allowReview,
       open_at: schedule.open_at,
       close_at: schedule.close_at,
-      team_config: finalTeamConfig as any,
+      team_config: confirmedTeamConfig as any,
       folder_id: targetFolderId || null,
       lock_mode: {
         ...(lockMode || {}),
@@ -569,6 +592,8 @@ export default function Teacher() {
         encrypted_password: encPass,
       } as any,
     });
+
+    pendingCreatedExamRef.current = null;
 
     if (targetFolderId) {
       await moveExamToFolder(data.id, targetFolderId);
@@ -1193,11 +1218,7 @@ export default function Teacher() {
                             <div className="flex items-center gap-1.5 shrink-0">
                               {isScale10Scoring(scoring) && scoring.perQuestion.p2 > 0 && (
                                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                                  {formatScore(scoring.perQuestion.p2)}đ (
-                                  {getPartIIMethod(scoring) === "custom_rates"
-                                    ? "Theo tỷ lệ %"
-                                    : `${formatScore(scoring.perItemP2)}đ/ý`}
-                                  )
+                                  {formatScore(scoring.perQuestion.p2)}đ (Theo tỷ lệ %)
                                 </span>
                               )}
                               {isMissing ? (

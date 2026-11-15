@@ -445,6 +445,361 @@ export async function getAssignmentsForExam(examId: string, examObj?: any): Prom
   return results;
 }
 
+export interface SchoolsRegistryEntry {
+  name_key: string;
+  name: string;
+}
+
+export interface SyncRegistryResult {
+  success: boolean;
+  error?: string;
+  errorType?: ExamAccessErrorType;
+  conflictingKeys?: string[];
+  verifiedKeys?: string[];
+}
+
+function safeParseJsonObject(raw?: string | null): Record<string, any> | null {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRlsUpdateViolationError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || "").toUpperCase();
+  const msg = String(err.message || "").toLowerCase();
+  return (
+    code === "42501" ||
+    msg.includes("row-level security policy") ||
+    msg.includes("using expression") ||
+    msg.includes("permission denied")
+  );
+}
+
+function hasSameRegistryMapping(
+  nameKey: string,
+  existingParsed: Record<string, any> | null,
+  targetParsed: Record<string, any> | null,
+  examId: string
+): boolean {
+  if (!existingParsed || existingParsed.examId !== examId) return false;
+  if (!targetParsed) return true;
+  if (targetParsed.code !== undefined) {
+    const a = normalizeExamCode(existingParsed.code || existingParsed.assignmentCode || "");
+    const b = normalizeExamCode(targetParsed.code);
+    if (a !== b) return false;
+  }
+  const isShortRegistryKey = nameKey.startsWith("short_");
+  if (isShortRegistryKey && targetParsed.shortCode !== undefined) {
+    const a = String(existingParsed.shortCode || "").trim().toUpperCase();
+    const b = String(targetParsed.shortCode || "").trim().toUpperCase();
+    if (a !== b) return false;
+  }
+  if (targetParsed.isActive !== undefined && (existingParsed.isActive !== false) !== (targetParsed.isActive !== false)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Safely synchronize `schools` registry entries for an exam:
+ * 1. Tries atomic SECURITY DEFINER RPC `sync_exam_codes_and_links` when deployed.
+ * 2. Falls back to `SELECT` -> `.insert()` missing keys -> selective `.upsert()` for changed metadata,
+ *    never overwriting another exam's key and never failing on un-migrated `UPDATE` RLS when
+ *    an identical `code -> examId` mapping is already verified in Supabase.
+ * 3. Verifies required keys exist in Supabase pointing to `examId` before returning success.
+ */
+export async function syncSchoolsRegistryEntries(params: {
+  examId: string;
+  entries: SchoolsRegistryEntry[];
+  requiredKeys?: string[];
+  primaryCode?: string;
+  shortCode?: string;
+  allowUpdateSkipIfMapped?: boolean;
+}): Promise<SyncRegistryResult> {
+  const {
+    examId,
+    entries,
+    requiredKeys = [],
+    primaryCode,
+    shortCode,
+    allowUpdateSkipIfMapped = true,
+  } = params;
+
+  const dedupMap = new Map<string, SchoolsRegistryEntry>();
+  for (const e of entries) {
+    if (e?.name_key && e?.name !== undefined) {
+      dedupMap.set(e.name_key, e);
+    }
+  }
+  const uniqueEntries = Array.from(dedupMap.values());
+  if (uniqueEntries.length === 0) {
+    return { success: true, verifiedKeys: [] };
+  }
+
+  // 1. Prefer atomic SECURITY DEFINER RPC when available on remote DB
+  if (isUuid(examId)) {
+    try {
+      const { data: rpcData, error: rpcErr } = await withSupabaseAuthRetry(async () => {
+        return await (supabase as any).rpc("sync_exam_codes_and_links", {
+          p_exam_id: examId,
+          p_entries: uniqueEntries,
+          p_primary_code: primaryCode || null,
+          p_short_code: shortCode || null,
+        });
+      });
+
+      if (!rpcErr && rpcData && (rpcData as any).success === true) {
+        return {
+          success: true,
+          verifiedKeys: uniqueEntries.map((e) => e.name_key),
+        };
+      }
+
+      if (rpcErr && !isRpcNotFoundError(rpcErr)) {
+        const msg = String(rpcErr.message || "");
+        if (msg.includes("code_conflict:")) {
+          const conflictKey = msg.split("code_conflict:")[1]?.trim() || "";
+          return {
+            success: false,
+            errorType: "validation",
+            conflictingKeys: conflictKey ? [conflictKey] : requiredKeys,
+            error: "Mã bài thi đã được sử dụng bởi một bài thi khác.",
+          };
+        }
+        const classified = classifySupabaseError(rpcErr);
+        // Only abort immediately on hard network/server/unauthorized errors from deployed RPC
+        if (classified.type === "network" || classified.type === "server" || classified.type === "unauthorized") {
+          return {
+            success: false,
+            error: rpcErr.message || classified.message,
+            errorType: classified.type,
+          };
+        }
+      }
+    } catch {
+      // Fall through cleanly to schools table sync
+    }
+  }
+
+  // 2. Pre-check existing keys in `schools` so we never run ON CONFLICT DO UPDATE blindly
+  const allKeys = uniqueEntries.map((e) => e.name_key);
+  const { data: existingRows, error: selErr } = await supabase
+    .from("schools")
+    .select("name_key, name")
+    .in("name_key", allKeys);
+
+  if (selErr) {
+    const classified = classifySupabaseError(selErr);
+    return {
+      success: false,
+      error: selErr.message || classified.message,
+      errorType: classified.type,
+    };
+  }
+
+  const existingMap = new Map<string, string>();
+  if (Array.isArray(existingRows)) {
+    for (const row of existingRows as any[]) {
+      if (row?.name_key) {
+        existingMap.set(row.name_key, row.name || "");
+      }
+    }
+  }
+
+  const missingRows: SchoolsRegistryEntry[] = [];
+  const updatableRows: SchoolsRegistryEntry[] = [];
+  const verifiedMappedKeys = new Set<string>();
+  const conflictingKeys: string[] = [];
+  const requiredSet = new Set(requiredKeys);
+
+  for (const entry of uniqueEntries) {
+    const existingRaw = existingMap.get(entry.name_key);
+    if (existingRaw === undefined) {
+      missingRows.push(entry);
+      continue;
+    }
+
+    const existingParsed = safeParseJsonObject(existingRaw);
+    const targetParsed = safeParseJsonObject(entry.name);
+
+    if (existingParsed?.examId && existingParsed.examId !== examId) {
+      // Belongs to another exam/teacher -> NEVER overwrite!
+      conflictingKeys.push(entry.name_key);
+      continue;
+    }
+
+    if (existingRaw === entry.name) {
+      verifiedMappedKeys.add(entry.name_key);
+      continue;
+    }
+
+    if (hasSameRegistryMapping(entry.name_key, existingParsed, targetParsed, examId)) {
+      verifiedMappedKeys.add(entry.name_key);
+      const coreMetadataUnchanged =
+        !!existingParsed &&
+        !!targetParsed &&
+        (existingParsed.title || "") === (targetParsed.title || "") &&
+        (existingParsed.durationMinutes ?? null) === (targetParsed.durationMinutes ?? null) &&
+        (existingParsed.openAt ?? null) === (targetParsed.openAt ?? null) &&
+        (existingParsed.closeAt ?? null) === (targetParsed.closeAt ?? null);
+      if (!coreMetadataUnchanged) {
+        updatableRows.push(entry);
+      }
+    } else {
+      updatableRows.push(entry);
+    }
+  }
+
+  const requiredConflicts = conflictingKeys.filter((k) => requiredSet.has(k));
+  if (requiredConflicts.length > 0) {
+    return {
+      success: false,
+      errorType: "validation",
+      conflictingKeys: requiredConflicts,
+      error: "Mã bài thi đã được sử dụng bởi một bài thi khác trên hệ thống.",
+    };
+  }
+
+  // 3. Insert missing rows with `.insert()` ONLY (never triggers UPDATE USING RLS)
+  if (missingRows.length > 0) {
+    const { error: insErr } = await withSupabaseAuthRetry(async () => {
+      return await supabase.from("schools").insert(missingRows);
+    });
+
+    if (insErr) {
+      const insMsg = String(insErr.message || "").toLowerCase();
+      if (String(insErr.code) === "23505" || insMsg.includes("duplicate")) {
+        // Concurrent insert race: handle individually and inspect existing owner
+        for (const row of missingRows) {
+          const { error: singleErr } = await withSupabaseAuthRetry(async () => {
+            return await supabase.from("schools").insert(row);
+          });
+          if (!singleErr) {
+            verifiedMappedKeys.add(row.name_key);
+            continue;
+          }
+          const { data: checkRow, error: checkErr } = await supabase
+            .from("schools")
+            .select("name_key, name")
+            .eq("name_key", row.name_key)
+            .maybeSingle();
+
+          if (checkErr) {
+            const classified = classifySupabaseError(checkErr);
+            return {
+              success: false,
+              error: checkErr.message || classified.message,
+              errorType: classified.type,
+            };
+          }
+
+          const checkParsed = safeParseJsonObject((checkRow as any)?.name);
+          if (checkParsed?.examId === examId) {
+            verifiedMappedKeys.add(row.name_key);
+          } else if (checkParsed?.examId && checkParsed.examId !== examId) {
+            conflictingKeys.push(row.name_key);
+            if (requiredSet.has(row.name_key)) {
+              return {
+                success: false,
+                errorType: "validation",
+                conflictingKeys: [row.name_key],
+                error: "Mã bài thi đã được sử dụng bởi một bài thi khác.",
+              };
+            }
+          } else {
+            const classified = classifySupabaseError(singleErr);
+            return {
+              success: false,
+              error: singleErr.message || classified.message,
+              errorType: classified.type,
+            };
+          }
+        }
+      } else {
+        const classified = classifySupabaseError(insErr);
+        return {
+          success: false,
+          error: insErr.message || classified.message,
+          errorType: classified.type,
+        };
+      }
+    } else {
+      missingRows.forEach((r) => verifiedMappedKeys.add(r.name_key));
+    }
+  }
+
+  // 4. Update existing rows belonging to THIS exam whose metadata changed
+  if (updatableRows.length > 0) {
+    const { error: updErr } = await withSupabaseAuthRetry(async () => {
+      return await supabase.from("schools").upsert(updatableRows, { onConflict: "name_key" });
+    });
+
+    if (updErr) {
+      const canSkipMetadataUpdate =
+        allowUpdateSkipIfMapped &&
+        isRlsUpdateViolationError(updErr) &&
+        updatableRows.every((r) => verifiedMappedKeys.has(r.name_key));
+
+      if (!canSkipMetadataUpdate) {
+        const classified = classifySupabaseError(updErr);
+        return {
+          success: false,
+          error: updErr.message || classified.message,
+          errorType: classified.type,
+        };
+      }
+    } else {
+      updatableRows.forEach((r) => verifiedMappedKeys.add(r.name_key));
+    }
+  }
+
+  // 5. Final strict verification on Supabase for required keys
+  if (requiredKeys.length > 0) {
+    const unverifiedRequired = requiredKeys.filter((k) => !verifiedMappedKeys.has(k));
+    if (unverifiedRequired.length > 0) {
+      const { data: verifyRows, error: verifyErr } = await supabase
+        .from("schools")
+        .select("name_key, name")
+        .in("name_key", unverifiedRequired);
+
+      if (verifyErr) {
+        const classified = classifySupabaseError(verifyErr);
+        return {
+          success: false,
+          error: verifyErr.message || classified.message,
+          errorType: classified.type,
+        };
+      }
+
+      for (const vr of (verifyRows || []) as any[]) {
+        const p = safeParseJsonObject(vr?.name);
+        if (p?.examId === examId) {
+          verifiedMappedKeys.add(vr.name_key);
+        }
+      }
+
+      const stillMissing = requiredKeys.filter((k) => !verifiedMappedKeys.has(k));
+      if (stillMissing.length > 0) {
+        return {
+          success: false,
+          errorType: "server",
+          error: "Không thể xác minh mã bài thi đã được lưu trên máy chủ.",
+        };
+      }
+    }
+  }
+
+  return {
+    success: true,
+    verifiedKeys: Array.from(verifiedMappedKeys),
+  };
+}
+
 /**
  * Synchronize all codes of an exam to Supabase public registry (schools table)
  * and ensure legacy exams without team_config.primary_code get persisted cleanly.
@@ -453,69 +808,111 @@ export async function syncExamAssignmentCodes(exam: any): Promise<{
   success: boolean;
   error?: string;
   errorType?: ExamAccessErrorType;
+  primaryCode?: string;
 }> {
   if (!exam?.id) return { success: false, error: "Thiếu ID bài thi", errorType: "validation" };
   try {
-    const primaryCode = getExamPrimaryCode(exam);
+    let primaryCode = getExamPrimaryCode(exam);
     const legacyCode = getDeterministicPrimaryCode(exam.id, exam.subject_name);
-    const payload = {
-      id: `primary_${exam.id}`,
-      examId: exam.id,
-      code: primaryCode,
-      shortCode: getExamPrimaryShortCode(exam) || undefined,
-      className: "Chung",
-      title: exam.title,
-      teacherName: exam.teacher_name,
-      schoolName: exam.school_name,
-      subjectName: exam.subject_name,
-      durationMinutes: exam.duration_minutes,
-      openAt: exam.open_at,
-      closeAt: exam.close_at,
-      createdAt: new Date().toISOString(),
-    };
-    const jsonStr = JSON.stringify(payload);
+    const shortCode = getExamPrimaryShortCode(exam) || undefined;
+    const teamCfg = (exam.team_config as any) || {};
 
-    const keysToRegister = new Set<string>();
-    if (primaryCode) {
-      keysToRegister.add(`assign_code:${primaryCode}`);
-      const unpadded = primaryCode.replace(/^0+/, "");
-      if (unpadded && unpadded !== primaryCode) {
-        keysToRegister.add(`assign_code:${unpadded}`);
+    const buildEntriesForCode = (codeVal: string): { entries: SchoolsRegistryEntry[]; requiredKeys: string[] } => {
+      const payload = {
+        id: `primary_${exam.id}`,
+        examId: exam.id,
+        code: codeVal,
+        shortCode,
+        className: "Chung",
+        title: exam.title,
+        teacherName: exam.teacher_name,
+        schoolName: exam.school_name,
+        subjectName: exam.subject_name,
+        durationMinutes: exam.duration_minutes,
+        openAt: exam.open_at,
+        closeAt: exam.close_at,
+        createdAt: exam.created_at || new Date().toISOString(),
+      };
+      const jsonStr = JSON.stringify(payload);
+
+      const requiredKeys: string[] = [];
+      const keysToRegister = new Set<string>();
+      if (codeVal) {
+        const primaryKey = `assign_code:${codeVal}`;
+        keysToRegister.add(primaryKey);
+        requiredKeys.push(primaryKey);
+        const unpadded = codeVal.replace(/^0+/, "");
+        if (unpadded && unpadded !== codeVal) {
+          keysToRegister.add(`assign_code:${unpadded}`);
+        }
       }
-    }
-    if (legacyCode) {
-      keysToRegister.add(`assign_code:${legacyCode.toUpperCase()}`);
-      keysToRegister.add(`assign_code:${legacyCode.replace(/[^A-Z0-9]/gi, "").toUpperCase()}`);
-    }
-    keysToRegister.add(`assign_code:${exam.id.toLowerCase()}`);
+      if (legacyCode) {
+        keysToRegister.add(`assign_code:${legacyCode.toUpperCase()}`);
+        keysToRegister.add(`assign_code:${legacyCode.replace(/[^A-Z0-9]/gi, "").toUpperCase()}`);
+      }
+      keysToRegister.add(`assign_code:${exam.id.toLowerCase()}`);
 
-    const upsertRows = Array.from(keysToRegister)
-      .filter(Boolean)
-      .map((k) => ({ name_key: k, name: jsonStr }));
+      const entries: SchoolsRegistryEntry[] = Array.from(keysToRegister)
+        .filter(Boolean)
+        .map((k) => ({ name_key: k, name: jsonStr }));
 
-    const { error: upErr } = await withSupabaseAuthRetry(async () => {
-      return await supabase.from("schools").upsert(upsertRows, { onConflict: "name_key" });
+      return { entries, requiredKeys };
+    };
+
+    let { entries, requiredKeys } = buildEntriesForCode(primaryCode);
+    let syncRes = await syncSchoolsRegistryEntries({
+      examId: exam.id,
+      entries,
+      requiredKeys,
+      primaryCode,
+      shortCode,
     });
 
-    if (upErr) {
-      const classified = classifySupabaseError(upErr);
+    // If primaryCode collided with a DIFFERENT exam in Supabase, auto-regenerate a fresh 6-digit code
+    if (!syncRes.success && syncRes.conflictingKeys && syncRes.conflictingKeys.length > 0) {
+      for (let retry = 0; retry < 3; retry++) {
+        const freshCode = await generateUniqueNumericExamCode();
+        primaryCode = freshCode;
+        ({ entries, requiredKeys } = buildEntriesForCode(primaryCode));
+        syncRes = await syncSchoolsRegistryEntries({
+          examId: exam.id,
+          entries,
+          requiredKeys,
+          primaryCode,
+          shortCode,
+        });
+        if (syncRes.success) {
+          if (isUuid(exam.id)) {
+            await withSupabaseAuthRetry(async () => {
+              return await supabase
+                .from("exams")
+                .update({ team_config: { ...teamCfg, primary_code: primaryCode } as any } as any)
+                .eq("id", exam.id);
+            }).catch(() => {});
+          }
+          break;
+        }
+        if (!syncRes.conflictingKeys?.length) break;
+      }
+    }
+
+    if (!syncRes.success) {
       logExamAccessEvent({
         examId: exam.id,
         rawCode: primaryCode,
         accessType: "create_sync",
         outcome: "sync_error",
-        errorCategory: classified.type,
-        errorDetail: `schools_upsert: ${classified.technicalDetail}`,
+        errorCategory: syncRes.errorType || "server",
+        errorDetail: `schools_sync: ${syncRes.error || "sync_failed"}`,
       });
       return {
         success: false,
-        error: upErr.message || classified.message,
-        errorType: classified.type,
+        error: syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.",
+        errorType: syncRes.errorType || "server",
       };
     }
 
     // Backfill team_config.primary_code on legacy exams if missing
-    const teamCfg = (exam.team_config as any) || {};
     if (isUuid(exam.id) && !teamCfg.primary_code && primaryCode) {
       try {
         await withSupabaseAuthRetry(async () => {
@@ -527,9 +924,10 @@ export async function syncExamAssignmentCodes(exam: any): Promise<{
       } catch {}
     }
 
-    // Also sync team_config assignments if any
-    if (Array.isArray(teamCfg.assignments)) {
-      const assignRows: { name_key: string; name: string }[] = [];
+    // Also sync team_config assignments safely (without overwriting other exams)
+    if (Array.isArray(teamCfg.assignments) && teamCfg.assignments.length > 0) {
+      const assignEntries: SchoolsRegistryEntry[] = [];
+      const assignRequired: string[] = [];
       for (const a of teamCfg.assignments) {
         if (a && a.code) {
           const aCode = normalizeExamCode(a.code);
@@ -539,37 +937,40 @@ export async function syncExamAssignmentCodes(exam: any): Promise<{
             examId: a.examId || exam.id,
             title: a.title || exam.title,
           });
-          assignRows.push({ name_key: `assign_code:${aCode}`, name: aPayload });
+          const key = `assign_code:${aCode}`;
+          assignEntries.push({ name_key: key, name: aPayload });
+          assignRequired.push(key);
           const unpadded = aCode.replace(/^0+/, "");
           if (unpadded && unpadded !== aCode) {
-            assignRows.push({ name_key: `assign_code:${unpadded}`, name: aPayload });
+            assignEntries.push({ name_key: `assign_code:${unpadded}`, name: aPayload });
           }
         }
       }
-      if (assignRows.length > 0) {
-        const { error: assignErr } = await withSupabaseAuthRetry(async () => {
-          return await supabase.from("schools").upsert(assignRows, { onConflict: "name_key" });
+      if (assignEntries.length > 0) {
+        const assignSync = await syncSchoolsRegistryEntries({
+          examId: exam.id,
+          entries: assignEntries,
+          requiredKeys: assignRequired,
         });
-        if (assignErr) {
-          const classified = classifySupabaseError(assignErr);
+        if (!assignSync.success) {
           logExamAccessEvent({
             examId: exam.id,
             rawCode: primaryCode,
             accessType: "create_sync",
             outcome: "sync_error",
-            errorCategory: classified.type,
-            errorDetail: `assignments_upsert: ${classified.technicalDetail}`,
+            errorCategory: assignSync.errorType || "server",
+            errorDetail: `assignments_sync: ${assignSync.error || "sync_failed"}`,
           });
           return {
             success: false,
-            error: assignErr.message || classified.message,
-            errorType: classified.type,
+            error: assignSync.error || "Không thể đồng bộ mã lớp giao bài lên máy chủ.",
+            errorType: assignSync.errorType || "server",
           };
         }
       }
     }
 
-    return { success: true };
+    return { success: true, primaryCode };
   } catch (err: any) {
     const classified = classifySupabaseError(err);
     logExamAccessEvent({
@@ -608,12 +1009,12 @@ export async function createAssignment(params: {
     code = await generateUniqueNumericExamCode();
   }
 
-  const normalizedCode = normalizeExamCode(code);
+  let normalizedCode = normalizeExamCode(code);
 
-  const newAssignment: ExamAssignment = {
+  const buildAssignmentObj = (codeVal: string): ExamAssignment => ({
     id: `assign_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     examId: exam.id,
-    code: normalizedCode,
+    code: codeVal,
     className: className.trim() || "Chung",
     title: exam.title,
     teacherName: exam.teacher_name,
@@ -624,13 +1025,56 @@ export async function createAssignment(params: {
     closeAt: exam.close_at,
     createdAt: new Date().toISOString(),
     createdBy: exam.created_by,
-  };
+  });
+
+  let newAssignment = buildAssignmentObj(normalizedCode);
 
   let persistedExamUpdate = false;
-  let persistedSchoolsUpsert = false;
+  let persistedSchoolsSync = false;
   let lastDbError: any = null;
+  let updatedTeamConfigForExam = exam.team_config || {};
 
-  // 1. Persist to Supabase in exams.team_config.assignments
+  // 1. Persist assignment mapping to `schools` safely (using insert-missing + collision check)
+  for (let attempt = 0; attempt < (rawCustom ? 1 : 3); attempt++) {
+    const assignEntries: SchoolsRegistryEntry[] = [
+      {
+        name_key: `assign_code:${normalizedCode}`,
+        name: JSON.stringify(newAssignment),
+      },
+    ];
+    const unpadded = normalizedCode.replace(/^0+/, "");
+    if (unpadded && unpadded !== normalizedCode) {
+      assignEntries.push({
+        name_key: `assign_code:${unpadded}`,
+        name: JSON.stringify(newAssignment),
+      });
+    }
+
+    const schSync = await syncSchoolsRegistryEntries({
+      examId: exam.id,
+      entries: assignEntries,
+      requiredKeys: [`assign_code:${normalizedCode}`],
+    });
+
+    if (schSync.success) {
+      persistedSchoolsSync = true;
+      break;
+    }
+
+    if (schSync.conflictingKeys && schSync.conflictingKeys.length > 0) {
+      if (rawCustom) {
+        throw new Error(`Mã bài thi "${normalizedCode}" đã được sử dụng. Vui lòng chọn mã khác.`);
+      }
+      normalizedCode = await generateUniqueNumericExamCode();
+      newAssignment = buildAssignmentObj(normalizedCode);
+      continue;
+    }
+
+    lastDbError = schSync.error;
+    break;
+  }
+
+  // 2. Persist to Supabase in exams.team_config.assignments
   try {
     const { data: latestExam } = await supabase.from("exams").select("team_config").eq("id", exam.id).maybeSingle();
     const existingTeamCfg = (latestExam?.team_config as any) || exam.team_config || {};
@@ -641,6 +1085,7 @@ export async function createAssignment(params: {
       ...existingTeamCfg,
       assignments: updatedAssignments,
     };
+    updatedTeamConfigForExam = updatedTeamConfig;
 
     const { error: exUpdErr } = await withSupabaseAuthRetry(async () => {
       return await supabase
@@ -658,36 +1103,8 @@ export async function createAssignment(params: {
     lastDbError = e;
   }
 
-  // 2. Persist to schools table as a globally accessible mapping across devices
-  try {
-    const assignRows = [
-      {
-        name_key: `assign_code:${normalizedCode}`,
-        name: JSON.stringify(newAssignment),
-      },
-    ];
-    const unpadded = normalizedCode.replace(/^0+/, "");
-    if (unpadded && unpadded !== normalizedCode) {
-      assignRows.push({
-        name_key: `assign_code:${unpadded}`,
-        name: JSON.stringify(newAssignment),
-      });
-    }
-
-    const { error: schErr } = await withSupabaseAuthRetry(async () => {
-      return await supabase.from("schools").upsert(assignRows, { onConflict: "name_key" });
-    });
-    if (schErr) {
-      lastDbError = schErr;
-    } else {
-      persistedSchoolsUpsert = true;
-    }
-  } catch (e) {
-    lastDbError = e;
-  }
-
-  // Never show/return an unsaved assignment code if remote persistence completely failed on a real UUID exam
-  if (isUuid(exam.id) && !persistedExamUpdate && !persistedSchoolsUpsert) {
+  // Never show/return an unsaved assignment code if remote persistence failed on a real UUID exam
+  if (isUuid(exam.id) && !persistedExamUpdate && !persistedSchoolsSync) {
     const classified = classifySupabaseError(lastDbError);
     logExamAccessEvent({
       examId: exam.id,
@@ -706,11 +1123,14 @@ export async function createAssignment(params: {
   const currentLocal = getLocalAssignments();
   saveLocalAssignments([newAssignment, ...currentLocal.filter((a) => a.id !== newAssignment.id)]);
 
-  // 4. Sync primary code + automatically generate & persist unique short link
-  await syncExamAssignmentCodes(exam);
+  // 4. Sync primary code + updated assignments safely
+  await syncExamAssignmentCodes({ ...exam, team_config: updatedTeamConfigForExam });
 
   const { ensureExamShortLink } = await import("./shortLinks");
-  const shortRes = await ensureExamShortLink({ exam, assignment: newAssignment });
+  const shortRes = await ensureExamShortLink({
+    exam: { ...exam, team_config: updatedTeamConfigForExam },
+    assignment: newAssignment,
+  });
   if (shortRes?.shortCode) {
     newAssignment.shortCode = shortRes.shortCode;
     const updatedLocal = getLocalAssignments().map((a) =>
@@ -1170,13 +1590,13 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<Exam
             code: parsed.code ? normalizeExamCode(parsed.code) : normalizedNumCode || lookupCode,
             shortCode: parsed.shortCode ? String(parsed.shortCode).toUpperCase() : undefined,
             className: targetClass || parsed.className || "Chung",
-            title: parsed.title || (examObj as any).title,
-            teacherName: parsed.teacherName || (examObj as any).teacher_name,
-            schoolName: parsed.schoolName || (examObj as any).school_name,
-            subjectName: parsed.subjectName || (examObj as any).subject_name,
-            durationMinutes: parsed.durationMinutes || (examObj as any).duration_minutes,
-            openAt: parsed.openAt ?? (examObj as any).open_at,
-            closeAt: parsed.closeAt ?? (examObj as any).close_at,
+            title: (examObj as any).title || parsed.title,
+            teacherName: (examObj as any).teacher_name || parsed.teacherName,
+            schoolName: (examObj as any).school_name || parsed.schoolName,
+            subjectName: (examObj as any).subject_name || parsed.subjectName,
+            durationMinutes: (examObj as any).duration_minutes || parsed.durationMinutes,
+            openAt: (examObj as any).open_at ?? parsed.openAt,
+            closeAt: (examObj as any).close_at ?? parsed.closeAt,
             createdAt: parsed.createdAt || new Date().toISOString(),
           };
 

@@ -8,6 +8,7 @@ import { Check, X, ShieldAlert, BookOpen, Lock } from "lucide-react";
 import { stripRich } from "@/lib/docxParser";
 import {
   formatScore,
+  getPartIIQuestionScoreDetails,
   getTFValue,
   gradeExam,
   normalizeScoringToScale10,
@@ -617,7 +618,7 @@ export default function Result() {
                   const ratePercent =
                     p2Info?.ratePercent ??
                     scoreDetailMap.get(q.id)?.ratePercent ??
-                    (totalItems > 0 ? Math.round((okItems / totalItems) * 10000) / 100 : 0);
+                    getPartIIQuestionScoreDetails(okItems, totalItems || 4, maxScore || 1, effectiveScoring).ratePercent;
 
                   return (
                     <div key={q.id} className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-3">

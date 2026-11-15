@@ -107,8 +107,8 @@ export function normalizePartIIRates(rates?: Partial<PartIIRates> | null): PartI
   };
 }
 
-export function getPartIIMethod(scoring?: any): PartIIMethod {
-  return scoring?.p2Method === "custom_rates" ? "custom_rates" : "equal";
+export function getPartIIMethod(_scoring?: any): PartIIMethod {
+  return "custom_rates";
 }
 
 export function validatePartIIRates(
@@ -174,41 +174,46 @@ export function getPartIIQuestionScoreDetails(
   earnedScore: number;
   method: PartIIMethod;
 } {
-  const method = getPartIIMethod(scoring);
+  const method: PartIIMethod = "custom_rates";
   if (okItems <= 0 || totalItems <= 0 || perQuestionMax < 0) {
     return { ratePercent: 0, rawRatio: 0, rawEarned: 0, earnedScore: 0, method };
   }
 
   let ratePercent: number;
-  if (isScale10Scoring(scoring) && method === "custom_rates") {
-    const rates = normalizePartIIRates(scoring.p2Rates);
-    if (okItems >= totalItems) {
-      ratePercent = rates["4"];
-    } else {
-      const clampedKey = String(Math.min(3, Math.max(1, okItems))) as "1" | "2" | "3";
-      ratePercent = rates[clampedKey];
+  if (!isScale10Scoring(scoring) && scoring?.p2 && typeof scoring.p2 === "object") {
+    const qMax = Number(scoring.p2["4"]);
+    const clampedKey = okItems >= totalItems ? "4" : (String(Math.min(3, Math.max(1, okItems))) as "1" | "2" | "3");
+    const pts = Number(scoring.p2[clampedKey] ?? 0);
+    if (Number.isFinite(qMax) && qMax > 0 && Number.isFinite(pts)) {
+      ratePercent = Math.max(0, Math.min(100, (pts / qMax) * 100));
+      const rawRatio = ratePercent / 100;
+      const rawEarned = perQuestionMax * rawRatio;
+      return {
+        ratePercent: roundFinalScore(ratePercent),
+        rawRatio,
+        rawEarned,
+        earnedScore: roundFinalScore(rawEarned),
+        method,
+      };
     }
-    ratePercent = Math.max(0, Math.min(100, Number.isFinite(ratePercent) ? ratePercent : 0));
-    const rawRatio = ratePercent / 100;
-    const rawEarned = perQuestionMax * rawRatio;
-    return {
-      ratePercent: roundFinalScore(ratePercent),
-      rawRatio,
-      rawEarned,
-      earnedScore: roundFinalScore(rawEarned),
-      method,
-    };
   }
 
-  const ratio = okItems / totalItems;
-  ratePercent = roundFinalScore(ratio * 100);
-  const rawEarned = perQuestionMax * ratio;
+  const rates = normalizePartIIRates(scoring?.p2Rates);
+  if (okItems >= totalItems) {
+    ratePercent = rates["4"];
+  } else {
+    const clampedKey = String(Math.min(3, Math.max(1, okItems))) as "1" | "2" | "3";
+    ratePercent = rates[clampedKey];
+  }
+  ratePercent = Math.max(0, Math.min(100, Number.isFinite(ratePercent) ? ratePercent : 0));
+  const rawRatio = ratePercent / 100;
+  const rawEarned = perQuestionMax * rawRatio;
   return {
-    ratePercent,
-    rawRatio: ratio,
+    ratePercent: roundFinalScore(ratePercent),
+    rawRatio,
     rawEarned,
     earnedScore: roundFinalScore(rawEarned),
-    method: "equal",
+    method,
   };
 }
 
@@ -266,7 +271,14 @@ export function normalizeScoringToScale10<T = any>(scoring: T): T {
   if (!scoring || typeof scoring !== "object") return scoring;
   const s = scoring as any;
   if (s.mode === "scale_10") {
-    return scoring;
+    if (s.p2Method === "custom_rates" && s.p2Rates && typeof s.p2Rates === "object") {
+      return scoring;
+    }
+    return {
+      ...s,
+      p2Method: "custom_rates",
+      p2Rates: normalizePartIIRates(s.p2Rates),
+    } as T;
   }
   if (isLegacyScale100Config(s)) {
     const scaleFactor = Number(s.totalScale) > 10.5 ? Number(s.totalScale) / 10 : 10;
@@ -299,6 +311,8 @@ export function normalizeScoringToScale10<T = any>(scoring: T): T {
         p3: div(s.perQuestion?.p3),
       },
       perItemP2: div(s.perItemP2),
+      p2Method: "custom_rates",
+      p2Rates: normalizePartIIRates(s.p2Rates),
       p1: div(s.p1),
       p2: p2Legacy,
       p3: div(s.p3),
@@ -309,6 +323,8 @@ export function normalizeScoringToScale10<T = any>(scoring: T): T {
       ...s,
       mode: "scale_10",
       totalScale: DEFAULT_TOTAL_SCALE,
+      p2Method: "custom_rates",
+      p2Rates: normalizePartIIRates(s.p2Rates),
     } as T;
   }
   return scoring;
@@ -556,24 +572,16 @@ export function buildScale10Scoring(
   const perItemP2 = counts.p2 > 0 && itemCountP2 > 0 ? perQ2 / itemCountP2 : 0;
 
   const roundHigh = (n: number) => Math.round(n * 1e10) / 1e10;
-  const p2Method: PartIIMethod = getPartIIMethod(preserveExtra);
+  const p2Method: PartIIMethod = "custom_rates";
   const p2Rates = normalizePartIIRates(preserveExtra?.p2Rates);
   const allowNonMonotonicP2Rates = Boolean(preserveExtra?.allowNonMonotonicP2Rates);
 
-  const p2LegacyMap =
-    p2Method === "custom_rates"
-      ? {
-          "1": roundHigh((perQ2 * p2Rates["1"]) / 100),
-          "2": roundHigh((perQ2 * p2Rates["2"]) / 100),
-          "3": roundHigh((perQ2 * p2Rates["3"]) / 100),
-          "4": roundHigh((perQ2 * p2Rates["4"]) / 100),
-        }
-      : {
-          "1": roundHigh(perItemP2),
-          "2": roundHigh(perItemP2 * 2),
-          "3": roundHigh(perItemP2 * 3),
-          "4": roundHigh(perItemP2 * 4),
-        };
+  const p2LegacyMap = {
+    "1": roundHigh((perQ2 * p2Rates["1"]) / 100),
+    "2": roundHigh((perQ2 * p2Rates["2"]) / 100),
+    "3": roundHigh((perQ2 * p2Rates["3"]) / 100),
+    "4": roundHigh((perQ2 * p2Rates["4"]) / 100),
+  };
 
   const config: Scale10ScoringConfig = {
     mode: "scale_10",
@@ -747,7 +755,7 @@ export function attachQuestionScores<T extends ParsedExam>(exam: T, scoring: Sco
   const perQ1 = n1 > 0 ? normalized.parts.p1 / n1 : 0;
   const perQ2 = n2 > 0 ? normalized.parts.p2 / n2 : 0;
   const perQ3 = n3 > 0 ? normalized.parts.p3 / n3 : 0;
-  const p2Method = getPartIIMethod(normalized);
+  const p2Method: PartIIMethod = "custom_rates";
   const p2Rates = normalizePartIIRates(normalized.p2Rates);
 
   return {
@@ -759,11 +767,10 @@ export function attachQuestionScores<T extends ParsedExam>(exam: T, scoring: Sco
       return {
         ...q,
         maxScore: perQ2,
+        itemMaxScore: perItem,
         p2Method,
-        ...(p2Method === "custom_rates" ? { p2Rates } : { itemMaxScore: perItem }),
-        items: (q.items || []).map((it) =>
-          p2Method === "custom_rates" ? { ...it } : { ...it, maxScore: perItem }
-        ),
+        p2Rates,
+        items: (q.items || []).map((it) => ({ ...it })),
       };
     }),
     partIII: (exam.partIII || []).map((q) => ({ ...q, maxScore: perQ3 })),
@@ -1010,7 +1017,7 @@ export function gradeExam(exam: ParsedExam, answers: StudentAnswers, scoring: Sc
       ratePercent,
       earnedScore: roundFinalScore(pts),
       maxScore: roundFinalScore(qMax),
-      method: "equal",
+      method: "custom_rates",
       itemStatuses,
     });
     details.push({
