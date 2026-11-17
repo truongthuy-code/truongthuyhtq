@@ -719,6 +719,234 @@
   }
 }
 
+/* =========================================================================
+   IN ĐẬM TOÀN BỘ NỘI DUNG CÂU HỎI TRONG CHẾ ĐỘ TỪNG CÂU HỎI (CẢ BẬT & TẮT TRÌNH CHIẾU)
+   - Bắt buộc in đậm toàn bộ text câu hỏi (đoạn đơn, nhiều đoạn, Phần I, II, III)
+   - Bảo toàn nguyên vẹn công thức KaTeX, ký hiệu đặc biệt, ảnh, bảng, khối code, in nghiêng/gạch chân/màu chữ
+   - Không làm in đậm phương án trả lời, văn bản phụ, giải thích đáp án hay chế độ khác
+   ========================================================================= */
+.quiz-question-stem-bold,
+.quiz-question-stem-bold .rich-text-root,
+.quiz-question-stem-bold *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(.rich-table):not(.rich-table *):not(table):not(table *):not(svg):not(svg *) {
+  font-weight: 700 !important;
+}
+
+.quiz-question-stem-bold .code-content,
+.quiz-question-stem-bold pre.code-content,
+.quiz-question-stem-bold code.hljs,
+.quiz-question-stem-bold .katex,
+.quiz-question-stem-bold .rich-table,
+.quiz-question-stem-bold table {
+  font-weight: 400 !important;
+}
+
+/* =========================================================================
+   TRẠNG THÁI TẮT TRÌNH CHIẾU (MẶC ĐỊNH) TRONG CHẾ ĐỘ TỪNG CÂU HỎI
+   - Giữ nguyên hoàn toàn bố cục và chức năng chế độ từng câu hỏi (2x2 Phần I, từng dòng Phần II, nhập liệu Phần III, Times New Roman)
+   - Đưa cỡ chữ về kích thước bình thường phù hợp học sinh làm trực tiếp trên máy tính, laptop, tablet, điện thoại:
+       + Desktop (>= 1024px): Câu hỏi 21px (câu dài 20px) in đậm; Phương án 19px (dài 18px)
+       + Tablet (640px - <1024px): Câu hỏi 20px in đậm; Phương án 18px
+       + Mobile (< 640px): Câu hỏi 18px in đậm; Phương án 17px
+   ========================================================================= */
+.quiz-presentation-off {
+  padding: 1rem 1.25rem !important;
+}
+
+@media (min-width: 640px) {
+  .quiz-presentation-off {
+    padding: 1.25rem 1.75rem !important;
+  }
+}
+
+.quiz-presentation-off .question-content {
+  margin-bottom: 1rem !important;
+}
+
+.quiz-presentation-off [role="radiogroup"] {
+  gap: 0.75rem !important;
+}
+
+.quiz-presentation-off [role="radiogroup"] > label {
+  padding: 0.65rem 0.9rem !important;
+  min-height: 54px !important;
+  border-radius: 1rem !important;
+}
+
+.quiz-presentation-off .quiz-mc-badge {
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+  font-size: 1rem !important;
+  border-radius: 0.65rem !important;
+}
+
+.quiz-presentation-off .single-question-tf-list {
+  gap: 0.65rem !important;
+}
+
+.quiz-presentation-off .single-question-tf-item {
+  padding: 0.65rem 0.9rem !important;
+  border-radius: 1rem !important;
+}
+
+.quiz-presentation-off .quiz-sa-input {
+  min-height: 48px !important;
+  height: 48px !important;
+  padding: 0.5rem 0.875rem !important;
+}
+
+.quiz-presentation-off .rich-text-root img {
+  max-height: 260px;
+}
+
+.quiz-presentation-off .quiz-question-tv,
+.quiz-presentation-off .quiz-question-text-80,
+.quiz-presentation-off .quiz-question-tv p,
+.quiz-presentation-off .quiz-question-tv span,
+.quiz-presentation-off .quiz-question-tv div,
+.quiz-presentation-off .quiz-question-tv strong,
+.quiz-presentation-off .quiz-question-tv b,
+.quiz-presentation-off .quiz-question-tv em,
+.quiz-presentation-off .quiz-question-tv i,
+.quiz-presentation-off .quiz-question-tv u,
+.quiz-presentation-off .quiz-question-tv s,
+.quiz-presentation-off .quiz-question-tv font,
+.quiz-presentation-off .quiz-question-tv li,
+.quiz-presentation-off .quiz-question-tv ul,
+.quiz-presentation-off .quiz-question-tv ol,
+.quiz-presentation-off .quiz-question-tv td,
+.quiz-presentation-off .quiz-question-tv th,
+.quiz-presentation-off .quiz-question-tv table,
+.quiz-presentation-off .quiz-question-tv label,
+.quiz-presentation-off .quiz-question-tv .rich-text-root,
+.quiz-presentation-off .quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+.quiz-presentation-off .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  font-size: 21px !important;
+  line-height: 1.5 !important;
+}
+
+.quiz-presentation-off .quiz-q-compact,
+.quiz-presentation-off .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+  font-size: 20px !important;
+  line-height: 1.48 !important;
+}
+
+.quiz-presentation-off .quiz-option-tv,
+.quiz-presentation-off .quiz-option-text-70,
+.quiz-presentation-off .quiz-option-tv p,
+.quiz-presentation-off .quiz-option-tv span,
+.quiz-presentation-off .quiz-option-tv div,
+.quiz-presentation-off .quiz-option-tv strong,
+.quiz-presentation-off .quiz-option-tv b,
+.quiz-presentation-off .quiz-option-tv em,
+.quiz-presentation-off .quiz-option-tv i,
+.quiz-presentation-off .quiz-option-tv u,
+.quiz-presentation-off .quiz-option-tv s,
+.quiz-presentation-off .quiz-option-tv font,
+.quiz-presentation-off .quiz-option-tv li,
+.quiz-presentation-off .quiz-option-tv ul,
+.quiz-presentation-off .quiz-option-tv ol,
+.quiz-presentation-off .quiz-option-tv td,
+.quiz-presentation-off .quiz-option-tv th,
+.quiz-presentation-off .quiz-option-tv table,
+.quiz-presentation-off .quiz-option-tv label,
+.quiz-presentation-off .quiz-option-tv input,
+.quiz-presentation-off .quiz-option-tv .rich-text-root,
+.quiz-presentation-off .quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+.quiz-presentation-off .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *) {
+  font-size: 19px !important;
+  line-height: 1.42 !important;
+}
+
+.quiz-presentation-off .quiz-opt-compact,
+.quiz-presentation-off .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+  font-size: 18px !important;
+  line-height: 1.4 !important;
+}
+
+.quiz-presentation-off .quiz-helper-prompt,
+.quiz-presentation-off .quiz-helper-prompt * {
+  font-size: 16px !important;
+  line-height: 1.4 !important;
+}
+
+.quiz-presentation-off .quiz-helper-prompt {
+  font-weight: 500 !important;
+  margin-bottom: 0.5rem !important;
+}
+
+.quiz-presentation-off .quiz-sa-meta,
+.quiz-presentation-off .quiz-sa-meta * {
+  font-size: 14px !important;
+  line-height: 1.4 !important;
+}
+
+.quiz-presentation-off sub,
+.quiz-presentation-off sup {
+  font-size: 0.75em !important;
+}
+
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  .quiz-presentation-off .quiz-question-tv,
+  .quiz-presentation-off .quiz-question-text-80,
+  .quiz-presentation-off .quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-q-compact,
+  .quiz-presentation-off .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 20px !important;
+    line-height: 1.48 !important;
+  }
+
+  .quiz-presentation-off .quiz-option-tv,
+  .quiz-presentation-off .quiz-option-text-70,
+  .quiz-presentation-off .quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-opt-compact,
+  .quiz-presentation-off .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 18px !important;
+    line-height: 1.4 !important;
+  }
+
+  .quiz-presentation-off .quiz-helper-prompt,
+  .quiz-presentation-off .quiz-helper-prompt * {
+    font-size: 15px !important;
+    line-height: 1.4 !important;
+  }
+}
+
+@media (max-width: 639.98px) {
+  .quiz-presentation-off .quiz-question-tv,
+  .quiz-presentation-off .quiz-question-text-80,
+  .quiz-presentation-off .quiz-question-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-question-text-80 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-q-compact,
+  .quiz-presentation-off .quiz-q-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 18px !important;
+    line-height: 1.45 !important;
+  }
+
+  .quiz-presentation-off .quiz-option-tv,
+  .quiz-presentation-off .quiz-option-text-70,
+  .quiz-presentation-off .quiz-option-tv *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-option-text-70 *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *):not(.badge-content):not(.badge-content *):not(.status-pill):not(.status-pill *),
+  .quiz-presentation-off .quiz-opt-compact,
+  .quiz-presentation-off .quiz-opt-compact *:not(pre):not(pre *):not(code):not(code *):not(.hljs):not(.hljs *):not(.code-content):not(.code-content *):not(.katex):not(.katex *):not(svg):not(svg *) {
+    font-size: 17px !important;
+    line-height: 1.38 !important;
+  }
+
+  .quiz-presentation-off .quiz-helper-prompt,
+  .quiz-presentation-off .quiz-helper-prompt * {
+    font-size: 15px !important;
+    line-height: 1.38 !important;
+  }
+
+  .quiz-presentation-off .quiz-sa-meta,
+  .quiz-presentation-off .quiz-sa-meta * {
+    font-size: 13px !important;
+    line-height: 1.38 !important;
+  }
+}
+
 /* Bảo toàn tuyệt đối code monospace trong Chế độ từng câu hỏi */
 .quiz-question-tv pre,
 .quiz-question-tv code,

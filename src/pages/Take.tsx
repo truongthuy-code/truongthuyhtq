@@ -46,6 +46,7 @@ import {
   UserCheck,
   Lock,
   KeyRound,
+  Monitor,
 } from "lucide-react";
 import RichText from "@/components/RichText";
 import QuizBackground from "@/components/QuizBackground";
@@ -266,6 +267,8 @@ export default function Take() {
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   // View mode in Standard mode: "single" (focused) or "all" (full continuous list)
   const [standardViewMode, setStandardViewMode] = useState<"single" | "all">("all");
+  // Trình chiếu mode in Single-Question mode ("quizizz"): mặc định TẮT (cỡ chữ bình thường)
+  const [isPresentationMode, setIsPresentationMode] = useState(false);
   const [maxReachedIdx, setMaxReachedIdx] = useState(0);
 
   const submittedRef = useRef(false);
@@ -2278,7 +2281,10 @@ export default function Take() {
     return (
       <Card
         key={currentQ.id}
+        data-presentation={isSingleView ? (isPresentationMode ? "on" : "off") : undefined}
         className={`w-full rounded-3xl border-2 border-border/80 bg-card/95 shadow-xl transition-all font-times-new-roman overflow-x-hidden ${
+          isSingleView ? (isPresentationMode ? "quiz-presentation-on" : "quiz-presentation-off") : ""
+        } ${
           isSingleView ? "p-4 sm:p-6 lg:p-7 flex-1 flex flex-col justify-between" : "p-6 sm:p-8 mb-6"
         }`}
       >
@@ -2322,11 +2328,11 @@ export default function Take() {
             )}
           </div>
 
-          {/* 3. NỘI DUNG CÂU HỎI: Cỡ chữ 42px (chuẩn TV) / tự động co giãn khi câu hỏi dài */}
+          {/* 3. NỘI DUNG CÂU HỎI: Luôn in đậm; bật Trình chiếu = 47px/43px/39px, tắt Trình chiếu = bình thường */}
           <div
             className={`font-bold ${
               isSingleView ? qFontSizeClass : "text-xl sm:text-2xl"
-            } ${isVeryLongQ || isLongQ ? "quiz-q-compact" : ""} leading-relaxed text-foreground tracking-tight mb-4 sm:mb-6 question-content font-times-new-roman quiz-sync-font-size break-words`}
+            } ${isSingleView ? "quiz-question-stem-bold" : ""} ${isVeryLongQ || isLongQ ? "quiz-q-compact" : ""} leading-relaxed text-foreground tracking-tight mb-4 sm:mb-6 question-content font-times-new-roman quiz-sync-font-size break-words`}
             style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
           >
             <RichText text={currentQ.text} />
@@ -2368,7 +2374,7 @@ export default function Take() {
 
                       {/* Huy hiệu A, B, C, D rực rỡ, trực quan phong cách Quizizz */}
                       <div
-                        className={`size-11 sm:size-12 lg:size-14 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl flex items-center justify-center shrink-0 border-2 transition-transform ${
+                        className={`quiz-mc-badge size-11 sm:size-12 lg:size-14 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl flex items-center justify-center shrink-0 border-2 transition-transform ${
                           qFb
                             ? isCorrectOpt
                               ? "bg-emerald-500 text-white border-emerald-600 scale-105"
@@ -2420,7 +2426,7 @@ export default function Take() {
               data-type="true-false"
             >
               <div
-                className={`${isSingleView ? qFontSizeClass : "text-sm sm:text-base"} font-bold text-muted-foreground mb-3 font-times-new-roman quiz-sync-font-size break-words`}
+                className={`${isSingleView ? `${qFontSizeClass} quiz-helper-prompt` : "text-sm sm:text-base"} font-bold text-muted-foreground mb-3 font-times-new-roman quiz-sync-font-size break-words`}
                 style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
               >
                 Chọn <b className="text-emerald-600">Đúng</b> hoặc <b className="text-rose-600">Sai</b> cho từng ý:
@@ -2512,7 +2518,7 @@ export default function Take() {
             <div className="mt-3 w-full max-w-4xl">
               <Label
                 className={`block mb-2 font-black text-foreground font-times-new-roman ${
-                  isSingleView ? qFontSizeClass : "text-base sm:text-xl"
+                  isSingleView ? `${qFontSizeClass} quiz-helper-prompt` : "text-base sm:text-xl"
                 } quiz-sync-font-size`}
                 style={isSingleView ? { fontSize: dynamicQFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
               >
@@ -2529,13 +2535,13 @@ export default function Take() {
                 }}
                 disabled={!!qFb}
                 className={`w-full ${
-                  isSingleView ? `min-h-[76px] sm:min-h-[88px] py-3 leading-normal ${optFontSizeClass}` : "h-14 sm:h-18 text-xl sm:text-3xl"
+                  isSingleView ? `quiz-sa-input min-h-[76px] sm:min-h-[88px] py-3 leading-normal ${optFontSizeClass}` : "h-14 sm:h-18 text-xl sm:text-3xl"
                 } font-black rounded-2xl px-5 border-2 shadow-inner bg-card text-foreground font-times-new-roman break-words`}
                 style={isSingleView ? { fontSize: dynamicOptFontSize, fontFamily: '"Times New Roman", Times, Georgia, serif' } : undefined}
                 placeholder={instantFb ? "Nhập câu trả lời hoặc số liệu... (Nhấn Enter để kiểm tra)" : "Nhập câu trả lời hoặc số liệu..."}
                 autoFocus={isSingleView}
               />
-              <div className={`mt-2 ${isSingleView ? optFontSizeClass : "text-xs"} text-muted-foreground flex items-center justify-between font-times-new-roman quiz-sync-font-size break-words`}>
+              <div className={`mt-2 ${isSingleView ? `${optFontSizeClass} quiz-sa-meta` : "text-xs"} text-muted-foreground flex items-center justify-between font-times-new-roman quiz-sync-font-size break-words`}>
                 <span>
                   {answers[currentQ.id] ? (
                     <span className="text-emerald-600 font-bold">✓ Đã lưu câu trả lời</span>
@@ -3380,8 +3386,44 @@ export default function Take() {
             </div>
           </div>
 
-          {/* Bên phải: Đồng hồ đếm ngược, Toàn màn hình & NÚT NỘP BÀI */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          {/* Bên phải: Công tắc Trình chiếu (Single-Question), Đồng hồ đếm ngược, Toàn màn hình & NÚT NỘP BÀI */}
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {isQuiz && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isPresentationMode}
+                aria-label="Trình chiếu"
+                data-testid="presentation-mode-toggle"
+                onClick={() => setIsPresentationMode((prev) => !prev)}
+                title={
+                  isPresentationMode
+                    ? "Đang bật Trình chiếu (cỡ chữ lớn cho TV / máy chiếu). Nhấn để tắt."
+                    : "Đang tắt Trình chiếu (cỡ chữ bình thường). Nhấn để bật cỡ chữ trình chiếu."
+                }
+                className={`inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-2xl border-2 font-bold text-xs sm:text-sm transition-all cursor-pointer select-none shadow-xs ${
+                  isPresentationMode
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                }`}
+              >
+                <Monitor className={`size-3.5 sm:size-4 shrink-0 ${isPresentationMode ? "text-primary" : ""}`} />
+                <span className="whitespace-nowrap">Trình chiếu</span>
+                <span
+                  aria-hidden="true"
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    isPresentationMode ? "bg-primary" : "bg-slate-300 dark:bg-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                      isPresentationMode ? "translate-x-[18px]" : "translate-x-[3px]"
+                    }`}
+                  />
+                </span>
+              </button>
+            )}
+
             {/* Đồng hồ đếm ngược */}
             <div
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border-2 font-mono font-black text-sm sm:text-lg shadow-sm ${
