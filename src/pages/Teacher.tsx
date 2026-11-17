@@ -33,7 +33,7 @@ import { DEFAULT_LOCK, LockMode } from "@/hooks/useExamLock";
 import ScheduleSettings, { Schedule } from "@/components/ScheduleSettings";
 import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig } from "@/components/TeamModeSettings";
 import { useAuth } from "@/hooks/useAuth";
-import { getFolders, moveExamToFolder } from "@/lib/folderStorage";
+import { getFolderBreadcrumbLabel, getFolders, moveExamToFolder } from "@/lib/folderStorage";
 import {
   syncExamAssignmentCodes,
   generateUniqueNumericExamCode,
@@ -83,7 +83,7 @@ function validateExam(exam: ParsedExam): Issue[] {
 }
 
 export default function Teacher() {
-  const { user, profile } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -94,15 +94,20 @@ export default function Teacher() {
   const [targetFolderName, setTargetFolderName] = useState<string | null>(() => {
     return (location.state as any)?.folderName || null;
   });
+  const [targetFolderPath, setTargetFolderPath] = useState<string | null>(null);
 
   useEffect(() => {
-    if (targetFolderId && !targetFolderName) {
-      getFolders(user?.id).then((folders) => {
+    if (targetFolderId) {
+      getFolders(user?.id, isAdmin).then((folders) => {
         const found = folders.find((f) => f.id === targetFolderId);
-        if (found) setTargetFolderName(found.name);
+        if (found) {
+          setTargetFolderName((prev) => prev || found.name);
+          const fullPath = getFolderBreadcrumbLabel(folders, targetFolderId, " > ");
+          if (fullPath) setTargetFolderPath(fullPath);
+        }
       });
     }
-  }, [targetFolderId, targetFolderName, user]);
+  }, [targetFolderId, user, isAdmin]);
 
   const docxInputRef = useRef<HTMLInputElement | null>(null);
   const docxReadSeq = useRef(0);
@@ -465,7 +470,10 @@ export default function Teacher() {
         const updPayload = { ...insertPayload };
         delete updPayload.created_by;
         let updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
-        if (updRes.error && (updRes.error.code === "42703" || updRes.error.message?.includes("folder_id"))) {
+        if (
+          updRes.error &&
+          (updRes.error.code === "42703" || updRes.error.code === "PGRST204" || updRes.error.message?.includes("folder_id"))
+        ) {
           delete updPayload.folder_id;
           updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
         }
@@ -475,8 +483,11 @@ export default function Teacher() {
       }
 
       let res = await supabase.from("exams").insert(insertPayload).select("id").single();
-      // If error is code 42703 (folder_id column not created yet in remote Supabase), retry safely without folder_id in payload
-      if (res.error && (res.error.code === "42703" || res.error.message?.includes("folder_id"))) {
+      // If error is code 42703/PGRST204 (folder_id column not created yet in remote Supabase), retry safely without folder_id in payload
+      if (
+        res.error &&
+        (res.error.code === "42703" || res.error.code === "PGRST204" || res.error.message?.includes("folder_id"))
+      ) {
         delete insertPayload.folder_id;
         res = await supabase.from("exams").insert(insertPayload).select("id").single();
       }
@@ -628,20 +639,22 @@ export default function Teacher() {
 
       <main className="container max-w-3xl py-10 space-y-6">
         {/* Banner hiển thị ngữ cảnh thư mục đang mở */}
-        {targetFolderName && (
+        {(targetFolderPath || targetFolderName) && (
           <div className="flex items-center justify-between p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-foreground animate-slide-up shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="size-9 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 text-white grid place-items-center shadow-xs">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="size-9 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 text-white grid place-items-center shadow-xs shrink-0">
                 <Folder className="size-5" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[10px] font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">
                   Đang tạo đề cho thư mục:
                 </div>
-                <div className="text-base font-extrabold text-foreground">{targetFolderName}</div>
+                <div className="text-base font-extrabold text-foreground truncate" title={targetFolderPath || targetFolderName || ""}>
+                  {targetFolderPath || targetFolderName}
+                </div>
               </div>
             </div>
-            <span className="text-xs font-semibold text-teal-800 dark:text-teal-300 px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/60 border border-teal-300 dark:border-teal-800">
+            <span className="text-xs font-semibold text-teal-800 dark:text-teal-300 px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/60 border border-teal-300 dark:border-teal-800 shrink-0">
               Tự động lưu vào thư mục này
             </span>
           </div>

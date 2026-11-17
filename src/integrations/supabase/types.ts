@@ -22,6 +22,7 @@ export type Database = {
           icon: string | null
           id: string
           name: string
+          parent_id: string | null
           teacher_id: string | null
           updated_at: string
         }
@@ -32,6 +33,7 @@ export type Database = {
           icon?: string | null
           id?: string
           name: string
+          parent_id?: string | null
           teacher_id?: string | null
           updated_at?: string
         }
@@ -42,10 +44,19 @@ export type Database = {
           icon?: string | null
           id?: string
           name?: string
+          parent_id?: string | null
           teacher_id?: string | null
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "exam_folders_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "exam_folders"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       exam_teams: {
         Row: {

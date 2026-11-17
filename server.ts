@@ -14,15 +14,25 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Initialize GoogleGenAI SDK with required headers
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
+// Lazy-initialize GoogleGenAI SDK so missing GEMINI_API_KEY never errors on server boot
+let aiClient: GoogleGenAI | null = null;
+function getAiClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not configured");
+  }
+  if (!aiClient) {
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+  }
+  return aiClient;
+}
 
 const MODEL_NAME = "gemini-3.8-flash";
 
@@ -351,7 +361,7 @@ ${(text || "").slice(0, 100000)}
     }
     parts.push({ text: prompt });
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents: { parts },
       config: {
@@ -477,7 +487,7 @@ ${(text || "").slice(0, 100000)}
     }
     parts.push({ text: prompt });
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents: { parts },
       config: {
@@ -564,7 +574,7 @@ TÀI LIỆU GIÁO VIÊN CUNG CẤP:
 ${materialText.slice(0, 80000)}
 """`;
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -602,7 +612,7 @@ Dựa trên tài liệu:
 ${(materialText || "").slice(0, 50000)}
 """`;
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -689,7 +699,7 @@ TÀI LIỆU NGUỒN CỦA GIÁO VIÊN:
 ${(materialText || "").slice(0, 80000)}
 """`;
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -807,7 +817,7 @@ ${weakTopics.length > 0 ? `NỘI DUNG HỌC SINH CÒN YẾU CẦN CHÚ Ý: ${wea
       parts: [{ text: message }],
     });
 
-    const response = await ai.models.generateContent({
+    const response = await getAiClient().models.generateContent({
       model: MODEL_NAME,
       contents,
       config: {
@@ -861,7 +871,12 @@ async function startServer() {
 
   if (!isProd) {
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: "0.0.0.0", port: PORT },
+      server: {
+        middlewareMode: true,
+        host: "0.0.0.0",
+        port: PORT,
+        hmr: false,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -880,4 +895,5 @@ async function startServer() {
 
 startServer().catch((err) => {
   console.error("Failed to start server:", err);
+  process.exit(1);
 });

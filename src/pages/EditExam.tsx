@@ -31,7 +31,7 @@ import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
 import { getAllSubmissions } from "@/lib/studentStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
 import { sha256, encryptExamPassword, decryptExamPassword } from "@/lib/examSecurity";
-import { ExamFolder, getFolders, getFolderIdForExam, moveExamToFolder } from "@/lib/folderStorage";
+import { ExamFolder, buildFolderTreeOptions, getFolders, getFolderIdForExam, moveExamToFolder } from "@/lib/folderStorage";
 
 export default function EditExam() {
   const { id } = useParams();
@@ -270,7 +270,10 @@ export default function EditExam() {
     try {
       await withSupabaseAuthRetry(async () => {
         let res = await supabase.from("exams").update(updates as any).eq("id", id);
-        if (res.error && (res.error.code === "42703" || res.error.message?.includes("folder_id"))) {
+        if (
+          res.error &&
+          (res.error.code === "42703" || res.error.code === "PGRST204" || res.error.message?.includes("folder_id"))
+        ) {
           const fallbackUpdates = { ...updates };
           delete fallbackUpdates.folder_id;
           res = await supabase.from("exams").update(fallbackUpdates as any).eq("id", id);
@@ -340,15 +343,17 @@ export default function EditExam() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">📂 Đề thi chưa phân loại</SelectItem>
-                {folders.map((f) => (
-                  <SelectItem key={f.id} value={f.id}>
-                    📁 {f.name}
+                {buildFolderTreeOptions(folders).map((opt) => (
+                  <SelectItem key={opt.folder.id} value={opt.folder.id}>
+                    {"\u00A0".repeat(Math.min(opt.depth, 5) * 3)}
+                    {opt.depth > 0 ? "↳ 📁 " : "📁 "}
+                    {opt.depth > 0 ? opt.pathLabel : opt.folder.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <p className="text-[11px] text-muted-foreground mt-1">
-              Phân loại đề thi vào thư mục tương ứng để quản lý khoa học.
+              Phân loại đề thi vào thư mục gốc hoặc thư mục con tương ứng để quản lý khoa học.
             </p>
           </div>
 

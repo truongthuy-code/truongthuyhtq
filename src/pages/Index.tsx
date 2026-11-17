@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   FileText, Users, BarChart3, Upload, Copy, Download, Share2, Trash2, FileDown,
-  Settings, Plus, GraduationCap, ClipboardCheck, ShieldAlert, Activity, Star, Search,
-  Lock, Unlock, CalendarClock, Trophy, Music, Bot, Folder, FolderPlus, FolderOpen,
+  Settings, Plus, FilePlus, GraduationCap, ClipboardCheck, ShieldAlert, Activity, Star, Search,
+  Lock, Unlock, CalendarClock, Trophy, Music, Bot, Folder, FolderPlus, FolderOpen, FolderInput,
   MoreVertical, Edit2, ArrowLeft, ArrowUpDown, CheckSquare, Square, ChevronRight, X,
   Layers, Check,
 } from "lucide-react";
@@ -31,15 +31,26 @@ import {
   ExamFolder,
   getFolders,
   getExamFolderMapping,
+  syncRemoteExamFolderMappings,
   getFolderIdForExam,
   getFolderColorMeta,
+  getFolderPath,
+  getFolderBreadcrumbLabel,
+  getRootFolders,
+  getChildFolders,
+  getDescendantFolderIds,
+  getDirectExamCount,
+  getRecursiveExamCount,
+  sortFolderList,
 } from "@/lib/folderStorage";
 import {
   CreateOrEditFolderModal,
   DeleteFolderModal,
   MoveExamModal,
+  MoveFolderModal,
   renderFolderIcon,
 } from "@/components/FolderModals";
+import FolderTreePanel from "@/components/FolderTreePanel";
 
 type Stats = {
   exams: number; students: number; attempts: number; avgScore: number;
@@ -68,8 +79,15 @@ export default function Index() {
 
   // Modals state
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [createParentFolder, setCreateParentFolder] = useState<ExamFolder | null>(null);
   const [editingFolder, setEditingFolder] = useState<ExamFolder | null>(null);
-  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ folder: ExamFolder; count: number } | null>(null);
+  const [moveFolderTarget, setMoveFolderTarget] = useState<ExamFolder | null>(null);
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{
+    folder: ExamFolder;
+    count: number;
+    subfolderCount: number;
+    totalNestedCount: number;
+  } | null>(null);
   const [moveExamTarget, setMoveExamTarget] = useState<{ examIds: string[]; titles: string[]; currentFolderId: string | null } | null>(null);
 
   // Leaderboard modal
@@ -78,9 +96,12 @@ export default function Index() {
   // Load Folders & Exam Folder Mappings
   const reloadFolders = async () => {
     try {
-      const fList = await getFolders(user?.id, isAdmin);
+      const [fList, mergedMappings] = await Promise.all([
+        getFolders(user?.id, isAdmin),
+        syncRemoteExamFolderMappings(),
+      ]);
       setFolders(fList);
-      setFolderMappings(getExamFolderMapping());
+      setFolderMappings(mergedMappings);
     } catch (err) {
       console.warn("Error loading folders:", err);
     }
@@ -106,7 +127,10 @@ export default function Index() {
     let loadedExams: any[] = [];
     const { data: ex, error: exErr } = await q;
 
-    if (exErr && (exErr.code === "42703" || exErr.message?.includes("folder_id"))) {
+    if (
+      exErr &&
+      (exErr.code === "42703" || exErr.code === "PGRST204" || exErr.message?.includes("folder_id"))
+    ) {
       // Fallback if folder_id column not yet migrated in remote Supabase
       const { data: fallbackEx } = await supabase.from("exams")
         .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
@@ -161,41 +185,62 @@ export default function Index() {
     loadExams();
   }, [isAdmin, user]);
 
-  // Derived Active Folder
+  // Derived Active Folder & Multi-level Ancestor Path
   const activeFolder = useMemo(() => {
     if (!activeFolderId) return null;
     return folders.find((f) => f.id === activeFolderId) || null;
   }, [folders, activeFolderId]);
 
-  // Folder Exam Counts calculation
-  const folderExamCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    folders.forEach((f) => { counts[f.id] = 0; });
-    exams.forEach((e) => {
-      const fId = getFolderIdForExam(e, folderMappings);
-      if (fId && counts[fId] !== undefined) {
-        counts[fId] = (counts[fId] || 0) + 1;
-      }
+  const activeFolderPath = useMemo(() => {
+    if (!activeFolder) return [];
+    return getFolderPath(folders, activeFolder.id);
+  }, [folders, activeFolder]);
+
+  const parentOfActiveFolder = useMemo(() => {
+    if (activeFolderPath.length <= 1) return null;
+    return activeFolderPath[activeFolderPath.length - 2] || null;
+  }, [activeFolderPath]);
+
+  // Folder Direct & Recursive Exam Counts + Child Subfolder Counts
+  const { directExamCounts, recursiveExamCounts, directSubfolderCounts } = useMemo(() => {
+    const direct: Record<string, number> = {};
+    const recursive: Record<string, number> = {};
+    const subCounts: Record<string, number> = {};
+
+    folders.forEach((f) => {
+      direct[f.id] = getDirectExamCount(f.id, exams, folderMappings);
+      recursive[f.id] = getRecursiveExamCount(folders, f.id, exams, folderMappings);
+      subCounts[f.id] = getChildFolders(folders, f.id).length;
     });
-    return counts;
+
+    return {
+      directExamCounts: direct,
+      recursiveExamCounts: recursive,
+      directSubfolderCounts: subCounts,
+    };
   }, [folders, exams, folderMappings]);
 
-  // Filtered and Sorted Folders
-  const filteredFolders = useMemo(() => {
-    const list = folders.filter((f) => {
-      if (!folderQuery) return true;
-      const q = folderQuery.toLowerCase();
-      return (f.name || "").toLowerCase().includes(q) || (f.description || "").toLowerCase().includes(q);
-    });
+  const rootFolders = useMemo(() => getRootFolders(folders), [folders]);
 
-    return list.sort((a, b) => {
-      if (folderSort === "name-asc") return a.name.localeCompare(b.name, "vi");
-      if (folderSort === "name-desc") return b.name.localeCompare(a.name, "vi");
-      if (folderSort === "created-desc") return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      if (folderSort === "created-asc") return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      return 0;
-    });
-  }, [folders, folderQuery, folderSort]);
+  // Filtered and Sorted Folders on Homepage (Hiển thị thư mục gốc; khi tìm kiếm lọc toàn cây)
+  const filteredFolders = useMemo(() => {
+    const q = folderQuery.trim().toLowerCase();
+    const source = q
+      ? folders.filter(
+          (f) =>
+            (f.name || "").toLowerCase().includes(q) ||
+            (f.description || "").toLowerCase().includes(q)
+        )
+      : rootFolders;
+
+    return sortFolderList(source, folderSort);
+  }, [folders, rootFolders, folderQuery, folderSort]);
+
+  // Direct subfolders inside currently open folder
+  const displayedChildFolders = useMemo(() => {
+    if (!activeFolder) return [];
+    return sortFolderList(getChildFolders(folders, activeFolder.id), folderSort);
+  }, [folders, activeFolder, folderSort]);
 
   // Exams belonging to the active folder
   const currentFolderExams = useMemo(() => {
@@ -332,8 +377,12 @@ export default function Index() {
     }
   };
 
-  // Open folder handler
-  const handleOpenFolder = (folderId: string) => {
+  // Open folder handler (null -> back to root)
+  const handleOpenFolder = (folderId: string | null) => {
+    if (!folderId) {
+      handleBackToHome();
+      return;
+    }
     setSearchParams({ folder: folderId });
     setQuery("");
     setSelectedExamIds([]);
@@ -345,6 +394,24 @@ export default function Index() {
     setSearchParams(searchParams);
     setQuery("");
     setSelectedExamIds([]);
+  };
+
+  const openCreateSubfolderModal = (parentFolder: ExamFolder | null) => {
+    setEditingFolder(null);
+    setCreateParentFolder(parentFolder);
+    setCreateFolderOpen(true);
+  };
+
+  const openDeleteFolderModal = (f: ExamFolder) => {
+    const directCount = directExamCounts[f.id] || 0;
+    const subCount = getDescendantFolderIds(folders, f.id).size;
+    const totalCount = recursiveExamCounts[f.id] || 0;
+    setDeleteFolderTarget({
+      folder: f,
+      count: directCount,
+      subfolderCount: subCount,
+      totalNestedCount: totalCount,
+    });
   };
 
   // Re-fetch after moving exams
@@ -438,11 +505,16 @@ export default function Index() {
               <div className="text-xs text-muted-foreground">
                 {countQs(e.questions)} câu • {e.duration_minutes} phút
               </div>
-              {/* Badge hiển thị thư mục nếu đang xem ở ngoài hoặc xem admin */}
+              {/* Badge hiển thị đường dẫn thư mục nếu đang xem ở ngoài hoặc xem admin */}
               {examFolderObj && folderColorMeta && !insideFolder && (
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${folderColorMeta.bg} ${folderColorMeta.border} ${folderColorMeta.text} flex items-center gap-1`}>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${folderColorMeta.bg} ${folderColorMeta.border} ${folderColorMeta.text} flex items-center gap-1`}
+                  title={getFolderBreadcrumbLabel(folders, examFolderObj.id, " > ")}
+                >
                   {renderFolderIcon(examFolderObj.icon, "size-3")}
-                  <span className="truncate max-w-[120px]">{examFolderObj.name}</span>
+                  <span className="truncate max-w-[180px]">
+                    {getFolderBreadcrumbLabel(folders, examFolderObj.id, " / ")}
+                  </span>
                 </span>
               )}
             </div>
@@ -635,8 +707,8 @@ export default function Index() {
       {/* ========================================================================= */}
       {activeFolder ? (
         <section className="space-y-6 animate-fade-in">
-          {/* Breadcrumb điều hướng */}
-          <nav className="flex items-center gap-2 text-sm text-muted-foreground font-medium flex-wrap">
+          {/* Breadcrumb điều hướng nhiều cấp */}
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted-foreground font-medium flex-wrap">
             <button
               type="button"
               onClick={handleBackToHome}
@@ -652,15 +724,48 @@ export default function Index() {
             >
               Thư mục đề thi
             </button>
-            <ChevronRight className="size-4 text-muted-foreground/50 shrink-0" />
-            <span className="font-bold text-foreground flex items-center gap-1.5">
-              {activeFolder.name}
-            </span>
+            {activeFolderPath.map((node, index) => {
+              const isLast = index === activeFolderPath.length - 1;
+              return (
+                <span key={node.id} className="inline-flex items-center gap-1.5">
+                  <ChevronRight className="size-4 text-muted-foreground/50 shrink-0" />
+                  {isLast ? (
+                    <span className="font-bold text-foreground flex items-center gap-1.5">
+                      {node.name}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenFolder(node.id)}
+                      className="hover:text-primary transition-colors font-semibold"
+                    >
+                      {node.name}
+                    </button>
+                  )}
+                </span>
+              );
+            })}
           </nav>
+
+          {/* Cây thư mục thu gọn/mở rộng nhanh */}
+          <FolderTreePanel
+            folders={folders}
+            exams={exams}
+            folderMappings={folderMappings}
+            activeFolderId={activeFolder.id}
+            sortOrder={folderSort}
+            onSelectFolder={handleOpenFolder}
+            onCreateSubfolder={(parentNode) => openCreateSubfolderModal(parentNode)}
+          />
 
           {/* Banner thông tin Thư mục đang mở */}
           {(() => {
             const colorMeta = getFolderColorMeta(activeFolder.color);
+            const activeDirectCount = directExamCounts[activeFolder.id] || 0;
+            const activeRecursiveCount = recursiveExamCounts[activeFolder.id] || 0;
+            const activeSubCount = displayedChildFolders.length;
+            const fullPathText = activeFolderPath.map((f) => f.name).join(" > ");
+
             return (
               <div className={`p-6 rounded-2xl border ${colorMeta.bg} ${colorMeta.border} shadow-sm space-y-4`}>
                 <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -673,143 +778,318 @@ export default function Index() {
                         <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border ${colorMeta.badgeBg} ${colorMeta.border} ${colorMeta.text}`}>
                           THƯ MỤC ĐANG MỞ
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          Tạo ngày: {fmtDt(activeFolder.created_at)}
-                        </span>
+                        {activeFolderPath.length > 1 && (
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {fullPathText}
+                          </span>
+                        )}
                       </div>
                       <h2 className="text-2xl font-black text-foreground mt-1 tracking-tight">
                         {activeFolder.name}
                       </h2>
-                      {activeFolder.description && (
-                        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-                          {activeFolder.description}
-                        </p>
-                      )}
-                      <div className="text-xs font-semibold text-foreground/80 mt-2 flex items-center gap-2">
-                        <span className={`size-2 rounded-full ${colorMeta.dot}`} />
-                        <span>Tổng số: <strong className="font-bold text-foreground">{currentFolderExams.length}</strong> đề thi trong thư mục</span>
+                      <div className="text-xs font-semibold text-foreground/80 mt-2 flex items-center gap-3 flex-wrap">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className={`size-2 rounded-full ${colorMeta.dot}`} />
+                          <strong className="font-bold text-foreground">{activeSubCount}</strong> thư mục con
+                        </span>
+                        <span className="text-muted-foreground">•</span>
+                        <span>
+                          <strong className="font-bold text-foreground">{activeDirectCount}</strong> đề trực tiếp
+                          {activeRecursiveCount > activeDirectCount
+                            ? ` (${activeRecursiveCount} đề gồm cả thư mục con)`
+                            : ""}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
                     <Button
-                      variant="outline"
-                      className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
-                      onClick={() => setEditingFolder(activeFolder)}
+                      onClick={() => openCreateSubfolderModal(activeFolder)}
+                      className="rounded-xl text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 gap-1.5"
                     >
-                      <Edit2 className="size-4 mr-1.5" /> Sửa thư mục
+                      <FolderPlus className="size-4" />
+                      <span>+ Tạo thư mục con</span>
                     </Button>
-                    <Button
-                      variant="outline"
-                      className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
-                      onClick={handleBackToHome}
-                    >
-                      <ArrowLeft className="size-4 mr-1.5" /> Quay lại trang chủ
-                    </Button>
+
                     {/* NÚT TẠO ĐỀ TRỰC TIẾP TRONG THƯ MỤC NÀY */}
                     <Button
                       asChild
-                      className="rounded-xl text-white shadow-soft bg-gradient-primary"
+                      className="rounded-xl text-white shadow-soft gap-1.5"
+                      style={{ background: "linear-gradient(135deg, #0EA5E9, #2563EB)" }}
                     >
                       <Link
                         to={`/teacher?folder=${activeFolder.id}`}
                         state={{ folderId: activeFolder.id, folderName: activeFolder.name }}
                       >
-                        <Plus className="size-4 mr-1.5" /> Tạo đề mới vào thư mục này
+                        <FilePlus className="size-4" />
+                        <span>+ Tạo đề mới</span>
                       </Link>
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
+                      onClick={() => setEditingFolder(activeFolder)}
+                    >
+                      <Edit2 className="size-4 mr-1.5" /> Sửa
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
+                      onClick={() => setMoveFolderTarget(activeFolder)}
+                    >
+                      <FolderInput className="size-4 mr-1.5" /> Di chuyển
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      className="rounded-xl border-destructive/30 text-destructive bg-background/80 hover:bg-destructive/10"
+                      onClick={() => openDeleteFolderModal(activeFolder)}
+                    >
+                      <Trash2 className="size-4 mr-1.5" /> Xóa
+                    </Button>
+
+                    {parentOfActiveFolder ? (
+                      <Button
+                        variant="outline"
+                        className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
+                        onClick={() => handleOpenFolder(parentOfActiveFolder.id)}
+                      >
+                        <ArrowLeft className="size-4 mr-1.5" /> Về {parentOfActiveFolder.name}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        className="rounded-xl border-border/80 bg-background/80 hover:bg-background"
+                        onClick={handleBackToHome}
+                      >
+                        <ArrowLeft className="size-4 mr-1.5" /> Trang chủ
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
             );
           })()}
 
-          {/* Toolbar Tìm kiếm & Sắp xếp trong thư mục */}
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2">
+          {/* KHU VỰC THƯ MỤC CON BÊN TRONG THƯ MỤC ĐANG MỞ */}
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Folder className="size-4 text-teal-600 dark:text-teal-400" />
+                <h3 className="text-base font-extrabold uppercase tracking-tight text-foreground">
+                  Thư mục con ({displayedChildFolders.length})
+                </h3>
+              </div>
               <Button
-                variant="outline"
                 size="sm"
-                className="rounded-xl text-xs gap-1.5"
-                onClick={() => toggleSelectAll(displayedFolderExams)}
+                variant="outline"
+                className="rounded-xl text-xs gap-1.5 border-teal-500/30 text-teal-700 dark:text-teal-300 hover:bg-teal-500/10"
+                onClick={() => openCreateSubfolderModal(activeFolder)}
               >
-                {displayedFolderExams.length > 0 &&
-                displayedFolderExams.every((e) => selectedExamIds.includes(e.id)) ? (
-                  <>
-                    <CheckSquare className="size-4 text-primary" /> Bỏ chọn tất cả
-                  </>
-                ) : (
-                  <>
-                    <Square className="size-4" /> Chọn tất cả ({displayedFolderExams.length})
-                  </>
-                )}
+                <FolderPlus className="size-3.5" />
+                <span>+ Tạo thư mục con</span>
               </Button>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="relative">
-                <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Tìm đề trong thư mục này…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="pl-9 w-60 rounded-xl"
-                />
+            {displayedChildFolders.length === 0 ? (
+              <div className="px-4 py-3 rounded-xl border border-dashed border-border/80 bg-muted/20 text-xs text-muted-foreground flex items-center justify-between gap-3 flex-wrap">
+                <span>
+                  Thư mục "{activeFolder.name}" chưa có thư mục con. Bạn có thể tạo thư mục con để chia nhỏ nội dung hoặc tạo đề thi trực tiếp ngay bên dưới.
+                </span>
               </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {displayedChildFolders.map((sub, idx) => {
+                  const colorMeta = getFolderColorMeta(sub.color);
+                  const totalExamsInSub = recursiveExamCounts[sub.id] || 0;
+                  const nestedSubCount = directSubfolderCounts[sub.id] || 0;
 
-              {/* Sắp xếp đề thi */}
-              <div className="flex items-center gap-1 bg-card border rounded-xl px-2.5 py-1 text-xs">
-                <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                <select
-                  value={examSort}
-                  onChange={(e) => setExamSort(e.target.value as any)}
-                  className="bg-transparent border-none text-xs font-semibold focus:outline-hidden cursor-pointer"
-                >
-                  <option value="created-desc">Mới nhất</option>
-                  <option value="created-asc">Cũ nhất</option>
-                  <option value="title-asc">Tên đề (A-Z)</option>
-                </select>
+                  return (
+                    <Card
+                      key={sub.id}
+                      className={`p-4 rounded-2xl border transition-all duration-200 flex flex-col justify-between group hover:shadow-md cursor-pointer ${colorMeta.border} ${colorMeta.hoverBorder} bg-card`}
+                      style={{ animationDelay: `${idx * 20}ms` }}
+                      onClick={() => handleOpenFolder(sub.id)}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className={`size-11 rounded-xl bg-gradient-to-br ${colorMeta.iconGradient} text-white grid place-items-center shadow-xs shrink-0 group-hover:scale-105 transition-transform`}>
+                            {renderFolderIcon(sub.icon, "size-5")}
+                          </div>
+
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+                                >
+                                  <MoreVertical className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-52 rounded-xl">
+                                <DropdownMenuItem onClick={() => handleOpenFolder(sub.id)} className="gap-2 cursor-pointer">
+                                  <FolderOpen className="size-4 text-primary" />
+                                  <span>Mở thư mục</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => openCreateSubfolderModal(sub)} className="gap-2 cursor-pointer">
+                                  <FolderPlus className="size-4 text-teal-600" />
+                                  <span>+ Tạo thư mục con</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setEditingFolder(sub)} className="gap-2 cursor-pointer">
+                                  <Edit2 className="size-4 text-muted-foreground" />
+                                  <span>Đổi tên & chỉnh sửa</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setMoveFolderTarget(sub)} className="gap-2 cursor-pointer">
+                                  <FolderInput className="size-4 text-sky-600" />
+                                  <span>Di chuyển thư mục</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => openDeleteFolderModal(sub)}
+                                  className="gap-2 text-destructive focus:text-destructive cursor-pointer"
+                                >
+                                  <Trash2 className="size-4" />
+                                  <span>Xóa thư mục</span>
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
+
+                        <div className="mt-3">
+                          <h4 className="font-bold text-base text-foreground leading-snug group-hover:text-primary transition-colors line-clamp-1" title={sub.name}>
+                            {sub.name}
+                          </h4>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {nestedSubCount > 0
+                              ? `${nestedSubCount} thư mục con bên trong`
+                              : "Thư mục con"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-border/50 flex items-center justify-between text-xs gap-2">
+                        <span className={`font-bold px-2 py-0.5 rounded-full border ${colorMeta.bg} ${colorMeta.border} ${colorMeta.text} flex items-center gap-1`}>
+                          <span className={`size-1.5 rounded-full ${colorMeta.dot}`} />
+                          <span>{totalExamsInSub} đề thi</span>
+                        </span>
+
+                        {nestedSubCount > 0 && (
+                          <span className="text-[11px] font-medium text-muted-foreground">
+                            {nestedSubCount} thư mục con
+                          </span>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* KHU VỰC ĐỀ THI TRỰC TIẾP TRONG THƯ MỤC ĐANG MỞ */}
+          <section className="space-y-4 pt-2 border-t border-border/60">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <FileText className="size-4 text-primary" />
+                <h3 className="text-base font-extrabold uppercase tracking-tight text-foreground">
+                  Đề thi trong "{activeFolder.name}" ({displayedFolderExams.length})
+                </h3>
               </div>
             </div>
-          </div>
 
-          {/* Danh sách đề thi thuộc Thư mục đang mở */}
-          {displayedFolderExams.length === 0 ? (
-            <Card className="p-12 text-center text-muted-foreground rounded-2xl border-dashed">
-              <FolderOpen className="size-12 mx-auto mb-3 text-muted-foreground/50" />
-              <h3 className="text-base font-bold text-foreground">
-                Thư mục "{activeFolder.name}" chưa có đề thi nào
-              </h3>
-              <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
-                Bạn có thể tạo đề thi trực tiếp ngay bây giờ để đề thi tự động được lưu vào thư mục này, hoặc chuyển các đề thi có sẵn từ trang chủ vào đây.
-              </p>
-              <div className="mt-5 flex justify-center gap-2">
-                <Button
-                  asChild
-                  className="rounded-xl text-white shadow-soft bg-gradient-primary"
-                >
-                  <Link
-                    to={`/teacher?folder=${activeFolder.id}`}
-                    state={{ folderId: activeFolder.id, folderName: activeFolder.name }}
-                  >
-                    <Plus className="size-4 mr-1.5" /> + Tạo đề mới trong thư mục này
-                  </Link>
-                </Button>
+            {/* Toolbar Tìm kiếm & Sắp xếp trong thư mục */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
-                  className="rounded-xl"
-                  onClick={handleBackToHome}
+                  size="sm"
+                  className="rounded-xl text-xs gap-1.5"
+                  onClick={() => toggleSelectAll(displayedFolderExams)}
                 >
-                  Xem danh sách đề ở trang chủ
+                  {displayedFolderExams.length > 0 &&
+                  displayedFolderExams.every((e) => selectedExamIds.includes(e.id)) ? (
+                    <>
+                      <CheckSquare className="size-4 text-primary" /> Bỏ chọn tất cả
+                    </>
+                  ) : (
+                    <>
+                      <Square className="size-4" /> Chọn tất cả ({displayedFolderExams.length})
+                    </>
+                  )}
                 </Button>
               </div>
-            </Card>
-          ) : (
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {displayedFolderExams.map((e, idx) => renderExamCard(e, idx, true))}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative">
+                  <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Tìm đề trong thư mục này…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="pl-9 w-60 rounded-xl"
+                  />
+                </div>
+
+                {/* Sắp xếp đề thi */}
+                <div className="flex items-center gap-1 bg-card border rounded-xl px-2.5 py-1 text-xs">
+                  <ArrowUpDown className="size-3.5 text-muted-foreground" />
+                  <select
+                    value={examSort}
+                    onChange={(e) => setExamSort(e.target.value as any)}
+                    className="bg-transparent border-none text-xs font-semibold focus:outline-hidden cursor-pointer"
+                  >
+                    <option value="created-desc">Mới nhất</option>
+                    <option value="created-asc">Cũ nhất</option>
+                    <option value="title-asc">Tên đề (A-Z)</option>
+                  </select>
+                </div>
+              </div>
             </div>
-          )}
+
+            {/* Danh sách đề thi thuộc Thư mục đang mở */}
+            {displayedFolderExams.length === 0 ? (
+              <Card className="p-10 text-center text-muted-foreground rounded-2xl border-dashed">
+                <FolderOpen className="size-11 mx-auto mb-3 text-muted-foreground/50" />
+                <h3 className="text-base font-bold text-foreground">
+                  Thư mục "{activeFolder.name}" chưa có đề thi trực tiếp nào
+                </h3>
+                <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
+                  Bạn có thể tạo đề thi trực tiếp ngay trong thư mục này hoặc tạo thư mục con để tổ chức thêm cấp.
+                </p>
+                <div className="mt-5 flex justify-center gap-2 flex-wrap">
+                  <Button
+                    asChild
+                    className="rounded-xl text-white shadow-soft"
+                    style={{ background: "linear-gradient(135deg, #0EA5E9, #2563EB)" }}
+                  >
+                    <Link
+                      to={`/teacher?folder=${activeFolder.id}`}
+                      state={{ folderId: activeFolder.id, folderName: activeFolder.name }}
+                    >
+                      <FilePlus className="size-4 mr-1.5" /> + Tạo đề mới
+                    </Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => openCreateSubfolderModal(activeFolder)}
+                  >
+                    <FolderPlus className="size-4 mr-1.5" /> + Tạo thư mục con
+                  </Button>
+                </div>
+              </Card>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {displayedFolderExams.map((e, idx) => renderExamCard(e, idx, true))}
+              </div>
+            )}
+          </section>
         </section>
       ) : (
         /* ========================================================================= */
@@ -860,19 +1140,44 @@ export default function Index() {
                   </select>
                 </div>
 
-                {/* Nút Tạo thư mục */}
-                <Button
-                  onClick={() => {
-                    setEditingFolder(null);
-                    setCreateFolderOpen(true);
-                  }}
-                  className="rounded-xl text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 gap-1.5 h-9"
-                >
-                  <FolderPlus className="size-4" />
-                  <span>+ Tạo thư mục</span>
-                </Button>
+                {/* Nhóm nút thao tác nhanh: Tạo thư mục & Tạo đề mới */}
+                <div className="flex items-center gap-2 flex-nowrap">
+                  <Button
+                    onClick={() => {
+                      setEditingFolder(null);
+                      setCreateParentFolder(null);
+                      setCreateFolderOpen(true);
+                    }}
+                    className="rounded-xl text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 gap-1.5 h-9 whitespace-nowrap"
+                  >
+                    <FolderPlus className="size-4 shrink-0" />
+                    <span>+ Tạo thư mục</span>
+                  </Button>
+
+                  <Button
+                    asChild
+                    className="rounded-xl text-white shadow-soft gap-1.5 h-9 whitespace-nowrap hover:opacity-95 transition-opacity"
+                    style={{ background: "linear-gradient(135deg, #0EA5E9, #2563EB)" }}
+                  >
+                    <Link to="/teacher">
+                      <FilePlus className="size-4 shrink-0" />
+                      <span>+ Tạo đề mới</span>
+                    </Link>
+                  </Button>
+                </div>
               </div>
             </div>
+
+            {/* Cây thư mục thu gọn/mở rộng nhiều cấp */}
+            <FolderTreePanel
+              folders={folders}
+              exams={exams}
+              folderMappings={folderMappings}
+              activeFolderId={null}
+              sortOrder={folderSort}
+              onSelectFolder={handleOpenFolder}
+              onCreateSubfolder={(parentNode) => openCreateSubfolderModal(parentNode)}
+            />
 
             {/* Danh sách Thư mục Card Grid */}
             {filteredFolders.length === 0 ? (
@@ -887,6 +1192,7 @@ export default function Index() {
                 <Button
                   onClick={() => {
                     setEditingFolder(null);
+                    setCreateParentFolder(null);
                     setCreateFolderOpen(true);
                   }}
                   className="mt-4 rounded-xl text-white shadow-soft bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-xs"
@@ -898,7 +1204,11 @@ export default function Index() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filteredFolders.map((f, idx) => {
                   const colorMeta = getFolderColorMeta(f.color);
-                  const count = folderExamCounts[f.id] || 0;
+                  const count = recursiveExamCounts[f.id] || 0;
+                  const subCount = directSubfolderCounts[f.id] || 0;
+                  const pathLabel = folderQuery.trim()
+                    ? getFolderBreadcrumbLabel(folders, f.id, " / ")
+                    : "";
 
                   return (
                     <Card
@@ -925,18 +1235,26 @@ export default function Index() {
                                   <MoreVertical className="size-4" />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-48 rounded-xl">
+                              <DropdownMenuContent align="end" className="w-52 rounded-xl">
                                 <DropdownMenuItem onClick={() => handleOpenFolder(f.id)} className="gap-2 cursor-pointer">
                                   <FolderOpen className="size-4 text-primary" />
                                   <span>Mở thư mục</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => openCreateSubfolderModal(f)} className="gap-2 cursor-pointer">
+                                  <FolderPlus className="size-4 text-teal-600" />
+                                  <span>+ Tạo thư mục con</span>
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setEditingFolder(f)} className="gap-2 cursor-pointer">
                                   <Edit2 className="size-4 text-muted-foreground" />
                                   <span>Đổi tên & chỉnh sửa</span>
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setMoveFolderTarget(f)} className="gap-2 cursor-pointer">
+                                  <FolderInput className="size-4 text-sky-600" />
+                                  <span>Di chuyển thư mục</span>
+                                </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
-                                  onClick={() => setDeleteFolderTarget({ folder: f, count })}
+                                  onClick={() => openDeleteFolderModal(f)}
                                   className="gap-2 text-destructive focus:text-destructive cursor-pointer"
                                 >
                                   <Trash2 className="size-4" />
@@ -947,31 +1265,43 @@ export default function Index() {
                           </div>
                         </div>
 
-                        {/* Tên thư mục & Mô tả */}
+                        {/* Tên thư mục & Mô tả / Đường dẫn */}
                         <div className="mt-3">
                           <h3 className="font-bold text-base text-foreground leading-snug group-hover:text-primary transition-colors line-clamp-1" title={f.name}>
                             {f.name}
                           </h3>
-                          {f.description ? (
+                          {pathLabel && f.parent_id ? (
+                            <p className="text-[11px] text-primary/80 font-medium mt-1 line-clamp-1" title={pathLabel}>
+                              {pathLabel}
+                            </p>
+                          ) : f.description ? (
                             <p className="text-xs text-muted-foreground mt-1 line-clamp-2" title={f.description}>
                               {f.description}
                             </p>
                           ) : (
-                            <p className="text-xs text-muted-foreground/60 italic mt-1">Không có mô tả</p>
+                            <p className="text-xs text-muted-foreground/70 mt-1">
+                              {subCount > 0 ? `${subCount} thư mục con` : "Nhấn để mở hoặc tạo thư mục con"}
+                            </p>
                           )}
                         </div>
                       </div>
 
-                      {/* Footer của Folder card: Số lượng đề thi & Ngày tạo */}
-                      <div className="mt-4 pt-3 border-t border-border/50 flex items-center justify-between text-xs">
+                      {/* Footer của Folder card: Số lượng đề thi & thư mục con */}
+                      <div className="mt-4 pt-3 border-t border-border/50 flex items-center justify-between text-xs gap-2">
                         <span className={`font-bold px-2 py-0.5 rounded-full border ${colorMeta.bg} ${colorMeta.border} ${colorMeta.text} flex items-center gap-1`}>
                           <span className={`size-1.5 rounded-full ${colorMeta.dot}`} />
                           <span>{count} đề thi</span>
                         </span>
 
-                        <span className="text-[11px] text-muted-foreground">
-                          {fmtDt(f.created_at).split(" ")[1] || fmtDt(f.created_at)}
-                        </span>
+                        {subCount > 0 ? (
+                          <span className="text-[11px] font-medium text-muted-foreground">
+                            {subCount} thư mục con
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">
+                            {fmtDt(f.created_at).split(" ")[1] || fmtDt(f.created_at)}
+                          </span>
+                        )}
                       </div>
                     </Card>
                   );
@@ -1096,19 +1426,33 @@ export default function Index() {
       {/* CÁC MODAL THAO TÁC THƯ MỤC & CHUYỂN ĐỀ                                    */}
       {/* ========================================================================= */}
 
-      {/* 1. Modal Tạo / Sửa thư mục */}
+      {/* 1. Modal Tạo / Sửa thư mục (gốc & thư mục con) */}
       <CreateOrEditFolderModal
         open={createFolderOpen || !!editingFolder}
         onOpenChange={(open) => {
           if (!open) {
             setCreateFolderOpen(false);
+            setCreateParentFolder(null);
             setEditingFolder(null);
           }
         }}
         folder={editingFolder}
+        parentId={createParentFolder?.id || null}
+        parentPathLabel={
+          createParentFolder
+            ? getFolderBreadcrumbLabel(folders, createParentFolder.id, " > ")
+            : null
+        }
         teacherId={user?.id}
-        onSuccess={() => {
-          reloadFolders();
+        isAdmin={isAdmin}
+        onSuccess={async (savedFolder) => {
+          setFolders((prev) => {
+            const exists = prev.some((f) => f.id === savedFolder.id);
+            return exists
+              ? prev.map((f) => (f.id === savedFolder.id ? savedFolder : f))
+              : [savedFolder, ...prev];
+          });
+          await reloadFolders();
         }}
       />
 
@@ -1120,16 +1464,38 @@ export default function Index() {
         }}
         folder={deleteFolderTarget?.folder || null}
         examCount={deleteFolderTarget?.count || 0}
+        subfolderCount={deleteFolderTarget?.subfolderCount || 0}
+        totalNestedExamCount={deleteFolderTarget?.totalNestedCount || 0}
+        teacherId={user?.id}
+        isAdmin={isAdmin}
         onSuccess={(deletedId) => {
           if (activeFolderId === deletedId) {
-            handleBackToHome();
+            const deletedParent = deleteFolderTarget?.folder?.parent_id || null;
+            if (deletedParent) handleOpenFolder(deletedParent);
+            else handleBackToHome();
           }
           reloadFolders();
           loadExams();
         }}
       />
 
-      {/* 3. Modal Chuyển đề thi vào thư mục (Đơn lẻ & Hàng loạt) */}
+      {/* 3. Modal Di chuyển thư mục (hỗ trợ đa cấp, chống vòng lặp) */}
+      <MoveFolderModal
+        open={!!moveFolderTarget}
+        onOpenChange={(open) => {
+          if (!open) setMoveFolderTarget(null);
+        }}
+        folder={moveFolderTarget}
+        folders={folders}
+        teacherId={user?.id}
+        isAdmin={isAdmin}
+        onSuccess={async (movedFolder) => {
+          setFolders((prev) => prev.map((f) => (f.id === movedFolder.id ? movedFolder : f)));
+          await reloadFolders();
+        }}
+      />
+
+      {/* 4. Modal Chuyển đề thi vào thư mục (Đơn lẻ & Hàng loạt) */}
       <MoveExamModal
         open={!!moveExamTarget}
         onOpenChange={(open) => {
