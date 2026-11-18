@@ -11,7 +11,7 @@
 --   5. Bổ sung bảng teacher_registrations, admin_activity_logs, cột soft-delete cho exams/folders,
 --      và toàn bộ hàm RPC SECURITY DEFINER cho bảng điều khiển Super Admin.
 -- =========================================================================
-
+SET statement_timeout = 0;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 1. MỞ RỘNG ENUM app_role
