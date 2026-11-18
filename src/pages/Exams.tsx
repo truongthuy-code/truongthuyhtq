@@ -33,10 +33,12 @@ import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { withRequestTimeout } from "@/lib/requestTimeout";
 import {
   isCapabilityUnavailable,
+  isMissingColumnError,
   isMissingTableOrRpcError,
   markCapabilityAvailable,
   markCapabilityUnavailable,
 } from "@/lib/supabaseCapabilities";
+import { openOrDownloadOriginalFile, resolveOriginalFileAccess } from "@/lib/examFileStorage";
 import { fetchAllExamsForAdmin } from "@/lib/allExamsStorage";
 import { attachQuestionScores, isScale10Scoring, reconcileScale10Scoring } from "@/lib/grading";
 
@@ -71,16 +73,34 @@ export default function Exams() {
         return;
       }
 
-      let q = supabase.from("exams")
-        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,instant_feedback")
+      const includeFolderId = !isCapabilityUnavailable("col:exams.folder_id");
+      const baseCols =
+        "id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,instant_feedback";
+      const selectCols = includeFolderId ? `${baseCols},folder_id` : baseCols;
+
+      let q = supabase
+        .from("exams")
+        .select(selectCols)
         .order("created_at", { ascending: false });
 
       if (user && isUuid(user.id)) {
         q = q.eq("created_by", user.id);
       }
 
-      const { data: ex } = await withRequestTimeout<any>(q, 10000, "exams.load.teacher");
-      let loadedExams = ex || [];
+      let loadedExams: any[] = [];
+      const { data: ex, error: exErr } = await withRequestTimeout<any>(q, 10000, "exams.load.teacher");
+      if (includeFolderId && exErr && isMissingColumnError(exErr, "folder_id")) {
+        markCapabilityUnavailable("col:exams.folder_id");
+        let fq = supabase.from("exams").select(baseCols).order("created_at", { ascending: false });
+        if (user && isUuid(user.id)) fq = fq.eq("created_by", user.id);
+        const { data: fEx } = await withRequestTimeout<any>(fq, 10000, "exams.load.teacherFallback");
+        loadedExams = fEx || [];
+      } else {
+        if (includeFolderId && !exErr) {
+          markCapabilityAvailable("col:exams.folder_id");
+        }
+        loadedExams = ex || [];
+      }
 
       // Fallback: If ex returned empty for this teacher, check schools registry
       if (loadedExams.length === 0 && user && !isCapabilityUnavailable("rpc:get_exam_for_student")) {
@@ -376,16 +396,16 @@ export default function Exams() {
   };
   const downloadOriginal = async (exam: any) => {
     try {
-      if (exam.original_file_path) {
-        const { data, error } = await withRequestTimeout<any>(
-          supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300),
-          10000,
-          "exams.downloadOriginal"
-        );
-        if (error || !data) return toast.error("Không tạo được link tải");
-        window.open(data.signedUrl, "_blank");
-      } else if (exam.original_file_url) window.open(exam.original_file_url, "_blank");
-      else toast.info("Đề này không có file gốc");
+      const access = await resolveOriginalFileAccess(exam, user as any);
+      if (!access.ok) {
+        if (access.code === "no_file") {
+          toast.info(access.message);
+        } else {
+          toast.error(access.message);
+        }
+        return;
+      }
+      openOrDownloadOriginalFile(access.url, access.fileName);
     } catch (err: any) {
       toast.error(err?.message || "Không thể tải file gốc");
     }

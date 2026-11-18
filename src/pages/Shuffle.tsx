@@ -16,10 +16,11 @@ import { generateExamCodes } from "@/lib/examCodeGenerator";
 import { exportExams, exportAnswerKey, exportExamsAndKey, type ExamMeta, type ExportOptions } from "@/lib/examExporter";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 import MissingAnswersAlertModal, { MissingItem } from "@/components/MissingAnswersAlertModal";
 
 export default function Shuffle() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [sourceMode, setSourceMode] = useState<"exam" | "file">("exam");
   const [selectedExamId, setSelectedExamId] = useState<string>("");
@@ -62,17 +63,28 @@ export default function Shuffle() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
+    let active = true;
     (async () => {
-      let q = supabase.from("exams").select("id,title,questions,subject_name,duration_minutes,created_by,shuffle_questions,shuffle_options,shuffle_q_p1,shuffle_q_p2,shuffle_q_p3,shuffle_o_p1,shuffle_o_p2,shuffle_o_p3").order("created_at", { ascending: false });
-      if (!isAdmin && user) {
-        if (isUuid(user.id)) {
+      try {
+        let q = supabase
+          .from("exams")
+          .select("id,title,questions,subject_name,duration_minutes,created_by,shuffle_questions,shuffle_options,shuffle_q_p1,shuffle_q_p2,shuffle_q_p3,shuffle_o_p1,shuffle_o_p2,shuffle_o_p3")
+          .order("created_at", { ascending: false })
+          .limit(200);
+        if (!isAdmin && user && isUuid(user.id)) {
           q = q.eq("created_by", user.id);
         }
+        const { data } = await withRequestTimeout<any>(q, 10000, "shuffle.loadExams");
+        if (active) setExams(data || []);
+      } catch (err) {
+        console.warn("Shuffle loadExams error:", err);
       }
-      const { data } = await q;
-      setExams(data || []);
     })();
-  }, [isAdmin, user]);
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAdmin, user]);
 
   const loadFromExam = async (id: string) => {
     setSelectedExamId(id);

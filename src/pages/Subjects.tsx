@@ -5,29 +5,51 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
 import { normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 export default function Subjects() {
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [subs, setSubs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (authLoading) return;
+    let active = true;
+    setLoading(true);
     (async () => {
-      let q = supabase.from("exams").select("id,subject_name,school_name,teacher_name,created_by");
-      if (!isAdmin && user) {
-        if (isUuid(user.id)) q = q.eq("created_by", user.id);
+      try {
+        let q = supabase.from("exams").select("id,subject_name,school_name,teacher_name,created_by").limit(300);
+        if (!isAdmin && user && isUuid(user.id)) {
+          q = q.eq("created_by", user.id);
+        }
+        const { data: ex } = await withRequestTimeout<any>(q, 10000, "subjects.loadExams");
+        if (!active) return;
+        const loadedEx = (ex as any) || [];
+        setRows(loadedEx);
+
+        const examIds = loadedEx.map((e: any) => e.id).filter(Boolean);
+        let subQ = supabase.from("submissions").select("exam_id,score,max_score,student_name,student_class");
+        if (!isAdmin && user) {
+          if (examIds.length === 0) {
+            setSubs([]);
+            return;
+          }
+          subQ = subQ.in("exam_id", examIds);
+        }
+        const { data: s } = await withRequestTimeout<any>(subQ, 10000, "subjects.loadSubmissions");
+        if (!active) return;
+        setSubs(((s as any) || []).map((row: any) => normalizeSubmissionToScale10(row)));
+      } catch (err) {
+        console.warn("Subjects load error:", err);
+      } finally {
+        if (active) setLoading(false);
       }
-      const [{ data: ex }, { data: s }] = await Promise.all([
-        q,
-        supabase.from("submissions").select("exam_id,score,max_score,student_name,student_class"),
-      ]);
-      const loadedEx = (ex as any) || [];
-      setRows(loadedEx);
-      setSubs(((s as any) || []).map((row: any) => normalizeSubmissionToScale10(row)));
-      setLoading(false);
     })();
-  }, [isAdmin, user]);
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAdmin, user]);
 
   const stats = useMemo(() => {
     const examBySubject: Record<string, any[]> = {};

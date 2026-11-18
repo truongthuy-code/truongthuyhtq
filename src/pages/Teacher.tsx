@@ -44,7 +44,8 @@ import {
 import { ensureExamShortLink } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
-import { isRequestTimeoutError, withRequestTimeout } from "@/lib/requestTimeout";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import { uploadOriginalExamFile } from "@/lib/examFileStorage";
 import {
   isCapabilityUnavailable,
   isMissingColumnError,
@@ -400,30 +401,16 @@ export default function Teacher() {
       let original_file_name: string | null = null;
       let original_file_path: string | null = null;
       if (originalFile) {
-        try {
-          const folder = (activeUserId || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
-          const path = `${folder}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
-          const up = await withRequestTimeout<any>(
-            supabase.storage.from("exam-files").upload(path, originalFile, {
-              contentType: originalFile.type || "application/octet-stream",
-              upsert: false,
-            }),
-            20000,
-            "teacher.uploadOriginalFile"
-          );
-          if (up.error) {
-            toast.error("Lỗi tải file gốc: " + up.error.message);
-          } else {
-            original_file_path = path;
-            original_file_name = originalFile.name;
-          }
-        } catch (upErr: any) {
-          toast.warning(
-            isRequestTimeoutError(upErr)
-              ? "Tải file gốc quá lâu, hệ thống tiếp tục lưu nội dung đề thi."
-              : "Không tải được file gốc lên kho lưu trữ, hệ thống vẫn tiếp tục tạo đề."
-          );
+        const uploadRes = await uploadOriginalExamFile(originalFile, {
+          ...(currentUser as any),
+          id: activeUserId || currentUser.id,
+        });
+        if (!uploadRes.ok) {
+          toast.error(uploadRes.message);
+          return;
         }
+        original_file_path = uploadRes.path;
+        original_file_name = uploadRes.originalName;
       }
 
       // Hash and encrypt exam password if enabled

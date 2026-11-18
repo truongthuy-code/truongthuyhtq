@@ -10,12 +10,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { isUuid } from "@/lib/teacherStorage";
 import { withRequestTimeout } from "@/lib/requestTimeout";
+import { openOrDownloadOriginalFile, resolveOriginalFileAccess } from "@/lib/examFileStorage";
 
 type Exam = {
   id: string; title: string; created_at: string; duration_minutes: number;
   subject_name: string | null; school_name: string | null; teacher_name: string | null;
   created_by: string | null;
-  original_file_path?: string | null; original_file_url?: string | null;
+  original_file_path?: string | null; original_file_url?: string | null; original_file_name?: string | null;
 };
 
 export default function Library() {
@@ -33,7 +34,7 @@ export default function Library() {
       setLoading(true);
       try {
         let q = supabase.from("exams")
-          .select("id,title,created_at,duration_minutes,subject_name,school_name,teacher_name,created_by,original_file_path,original_file_url")
+          .select("id,title,created_at,duration_minutes,subject_name,school_name,teacher_name,created_by,original_file_path,original_file_url,original_file_name")
           .order("created_at", { ascending: false });
         if (!isAdmin && user) {
           if (isUuid(user.id)) q = q.eq("created_by", user.id);
@@ -102,17 +103,15 @@ export default function Library() {
 
   const downloadExam = async (e: Exam) => {
     try {
-      if (e.original_file_path) {
-        const { data, error } = await withRequestTimeout<any>(
-          supabase.storage.from("exam-files").createSignedUrl(e.original_file_path, 300),
-          10000,
-          "library.signedUrl"
-        );
-        if (error || !data) return toast.error("Không tạo được link tải");
-        window.open(data.signedUrl, "_blank");
+      const access = await resolveOriginalFileAccess(e, user as any);
+      if (access.ok) {
+        openOrDownloadOriginalFile(access.url, access.fileName);
         return;
       }
-      if (e.original_file_url) { window.open(e.original_file_url, "_blank"); return; }
+      if (access.code !== "no_file") {
+        toast.error(access.message);
+        return;
+      }
       // Fallback: export JSON of the full exam (metadata + questions + answers + explanations)
       const { data: full, error } = await withRequestTimeout<any>(
         supabase.from("exams").select("*").eq("id", e.id).maybeSingle(),

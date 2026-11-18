@@ -47,6 +47,11 @@ export default function EditExam() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const loadedOriginalMetaRef = useRef<{
+    original_file_path?: string | null;
+    original_file_name?: string | null;
+    original_file_url?: string | null;
+  }>({});
   const [title, setTitle] = useState("");
   const [duration, setDuration] = useState(45);
   const [maxAttempts, setMaxAttempts] = useState(1);
@@ -127,6 +132,11 @@ export default function EditExam() {
           } catch {}
         }
         setExamQuestions(parsedQs || null);
+        loadedOriginalMetaRef.current = {
+          original_file_path: (examData as any).original_file_path ?? null,
+          original_file_name: (examData as any).original_file_name ?? null,
+          original_file_url: (examData as any).original_file_url ?? null,
+        };
 
         setTitle(examData.title);
         setDuration(examData.duration_minutes || 45);
@@ -329,6 +339,7 @@ export default function EditExam() {
       const existing = localList.find((e) => e.id === id);
       saveUnifiedExam({
         ...(existing || { id, created_at: new Date().toISOString() }),
+        ...loadedOriginalMetaRef.current,
         ...updates,
         folder_id: targetFolderId,
       } as any);

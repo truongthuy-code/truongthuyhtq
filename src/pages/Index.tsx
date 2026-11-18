@@ -27,6 +27,7 @@ import { syncExamAssignmentCodes, getExamPrimaryCode } from "@/lib/examAssignmen
 import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { withRequestTimeout } from "@/lib/requestTimeout";
+import { openOrDownloadOriginalFile, resolveOriginalFileAccess } from "@/lib/examFileStorage";
 import {
   isCapabilityUnavailable,
   isMissingColumnError,
@@ -406,17 +407,16 @@ export default function Index() {
 
   const downloadOriginal = async (exam: any) => {
     try {
-      if (exam.original_file_path) {
-        const { data, error } = await withRequestTimeout<any>(
-          supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300),
-          10000,
-          "index.downloadOriginal"
-        );
-        if (error || !data) { toast.error("Không tạo được link tải"); return; }
-        window.open(data.signedUrl, "_blank");
-      } else if (exam.original_file_url) {
-        window.open(exam.original_file_url, "_blank");
+      const access = await resolveOriginalFileAccess(exam, user as any);
+      if (!access.ok) {
+        if (access.code === "no_file") {
+          toast.info(access.message);
+        } else {
+          toast.error(access.message);
+        }
+        return;
       }
+      openOrDownloadOriginalFile(access.url, access.fileName);
     } catch (err: any) {
       toast.error(err?.message || "Không thể tải file gốc");
     }
