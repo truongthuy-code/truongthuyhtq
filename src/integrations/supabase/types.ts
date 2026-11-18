@@ -18,9 +18,12 @@ export type Database = {
         Row: {
           color: string | null
           created_at: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description: string | null
           icon: string | null
           id: string
+          is_deleted?: boolean
           name: string
           parent_id: string | null
           teacher_id: string | null
@@ -29,9 +32,12 @@ export type Database = {
         Insert: {
           color?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           icon?: string | null
           id?: string
+          is_deleted?: boolean
           name: string
           parent_id?: string | null
           teacher_id?: string | null
@@ -40,9 +46,12 @@ export type Database = {
         Update: {
           color?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           icon?: string | null
           id?: string
+          is_deleted?: boolean
           name?: string
           parent_id?: string | null
           teacher_id?: string | null
@@ -115,11 +124,14 @@ export type Database = {
           close_at: string | null
           created_at: string
           created_by: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           display_mode: string
           duration_minutes: number
           folder_id: string | null
           id: string
           instant_feedback: boolean
+          is_deleted?: boolean
           lock_mode: Json
           manual_closed: boolean
           max_attempts: number
@@ -153,11 +165,14 @@ export type Database = {
           close_at?: string | null
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           display_mode?: string
           duration_minutes?: number
           folder_id?: string | null
           id?: string
           instant_feedback?: boolean
+          is_deleted?: boolean
           lock_mode?: Json
           manual_closed?: boolean
           max_attempts?: number
@@ -191,11 +206,14 @@ export type Database = {
           close_at?: string | null
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           display_mode?: string
           duration_minutes?: number
           folder_id?: string | null
           id?: string
           instant_feedback?: boolean
+          is_deleted?: boolean
           lock_mode?: Json
           manual_closed?: boolean
           max_attempts?: number
@@ -242,13 +260,24 @@ export type Database = {
       }
       profiles: {
         Row: {
+          approval_status: string
+          approved_at: string | null
+          approved_by: string | null
+          avatar: string | null
           created_at: string
+          deleted_at: string | null
           email: string | null
           full_name: string | null
           id: string
+          is_deleted: boolean
+          locked_at: string | null
+          locked_by: string | null
           must_change_password: boolean
           phone: string | null
           profile_completed: boolean
+          rejected_at: string | null
+          rejected_by: string | null
+          rejection_reason: string | null
           role: string | null
           school_id: string | null
           school_name: string | null
@@ -259,13 +288,24 @@ export type Database = {
           username: string | null
         }
         Insert: {
+          approval_status?: string
+          approved_at?: string | null
+          approved_by?: string | null
+          avatar?: string | null
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           full_name?: string | null
           id: string
+          is_deleted?: boolean
+          locked_at?: string | null
+          locked_by?: string | null
           must_change_password?: boolean
           phone?: string | null
           profile_completed?: boolean
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
           role?: string | null
           school_id?: string | null
           school_name?: string | null
@@ -276,13 +316,24 @@ export type Database = {
           username?: string | null
         }
         Update: {
+          approval_status?: string
+          approved_at?: string | null
+          approved_by?: string | null
+          avatar?: string | null
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           full_name?: string | null
           id?: string
+          is_deleted?: boolean
+          locked_at?: string | null
+          locked_by?: string | null
           must_change_password?: boolean
           phone?: string | null
           profile_completed?: boolean
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
           role?: string | null
           school_id?: string | null
           school_name?: string | null
@@ -308,6 +359,105 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      admin_activity_logs: {
+        Row: {
+          action: string
+          actor_email: string
+          actor_id: string | null
+          after_data: Json | null
+          before_data: Json | null
+          created_at: string
+          id: string
+          metadata: Json | null
+          summary: string | null
+          target_id: string | null
+          target_label: string | null
+          target_type: string
+        }
+        Insert: {
+          action: string
+          actor_email: string
+          actor_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          summary?: string | null
+          target_id?: string | null
+          target_label?: string | null
+          target_type: string
+        }
+        Update: {
+          action?: string
+          actor_email?: string
+          actor_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          summary?: string | null
+          target_id?: string | null
+          target_label?: string | null
+          target_type?: string
+        }
+        Relationships: []
+      }
+      teacher_registrations: {
+        Row: {
+          created_at: string
+          email: string
+          full_name: string
+          id: string
+          note: string | null
+          phone: string | null
+          rejection_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          school_name: string | null
+          status: string
+          subject_name: string | null
+          teacher_id: string
+          updated_at: string
+          username: string | null
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          full_name: string
+          id?: string
+          note?: string | null
+          phone?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          school_name?: string | null
+          status?: string
+          subject_name?: string | null
+          teacher_id: string
+          updated_at?: string
+          username?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          full_name?: string
+          id?: string
+          note?: string | null
+          phone?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          school_name?: string | null
+          status?: string
+          subject_name?: string | null
+          teacher_id?: string
+          updated_at?: string
+          username?: string | null
+        }
+        Relationships: []
       }
       schools: {
         Row: {
@@ -608,10 +758,74 @@ export type Database = {
         }
         Returns: Json
       }
+      admin_approve_teacher: {
+        Args: { p_teacher_id: string }
+        Returns: Json
+      }
+      admin_delete_exam: {
+        Args: { p_exam_id: string; p_hard_delete?: boolean }
+        Returns: Json
+      }
+      admin_delete_teacher: {
+        Args: { p_preserve_data?: boolean; p_teacher_id: string }
+        Returns: Json
+      }
+      admin_lock_teacher: {
+        Args: { p_reason?: string; p_teacher_id: string }
+        Returns: Json
+      }
+      admin_reject_teacher: {
+        Args: { p_reason?: string; p_teacher_id: string }
+        Returns: Json
+      }
+      admin_unlock_teacher: {
+        Args: { p_teacher_id: string }
+        Returns: Json
+      }
+      admin_update_teacher: {
+        Args: {
+          p_full_name?: string
+          p_phone?: string
+          p_school_name?: string
+          p_subject_name?: string
+          p_teacher_id: string
+          p_username?: string
+        }
+        Returns: Json
+      }
+      complete_super_admin_first_password_change: {
+        Args: Record<string, never>
+        Returns: Json
+      }
+      get_my_account_state: {
+        Args: Record<string, never>
+        Returns: Json
+      }
+      is_approved_active_teacher: {
+        Args: { _user_id: string }
+        Returns: boolean
+      }
+      is_super_admin: {
+        Args: { _user_id: string }
+        Returns: boolean
+      }
+      log_admin_activity: {
+        Args: {
+          p_action: string
+          p_after_data?: Json
+          p_before_data?: Json
+          p_metadata?: Json
+          p_summary?: string
+          p_target_id?: string
+          p_target_label?: string
+          p_target_type: string
+        }
+        Returns: string
+      }
       upsert_school: { Args: { p_name: string }; Returns: string }
     }
     Enums: {
-      app_role: "admin" | "teacher"
+      app_role: "super_admin" | "admin" | "teacher" | "student"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -739,7 +953,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["admin", "teacher"],
+      app_role: ["super_admin", "admin", "teacher", "student"],
     },
   },
 } as const

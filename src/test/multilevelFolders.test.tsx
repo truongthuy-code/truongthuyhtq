@@ -550,8 +550,8 @@ describe("HỆ THỐNG QUẢN LÝ THƯ MỤC NHIỀU CẤP & TẠO ĐỀ TRONG T
       const teacherFolder = await createFolder({ name: "Thư mục GV", teacher_id: TEACHER_A_ID });
 
       setCurrentAuth({
-        user: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", email: "admin@admin.com" },
-        profile: { full_name: "Admin", role: "admin" },
+        user: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", email: "bichthuylqd@gmail.com" },
+        profile: { full_name: "Trương Thị Bích Thủy", role: "super_admin" },
         isAdmin: true,
         isSuperAdmin: true,
         loading: false,

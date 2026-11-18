@@ -17,10 +17,8 @@ import {
   hashPassword,
   getTeacherById,
   upsertTeacher,
-  getAdminById,
   getRootAdmin,
   changeAdminPassword,
-  saveAdminAccount,
   getCurrentAuthUser,
 } from "@/lib/teacherStorage";
 import { supabase } from "@/integrations/supabase/client";
@@ -31,7 +29,7 @@ interface ChangePasswordDialogProps {
 }
 
 export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialogProps) {
-  const { user, isAdmin } = useAuth();
+  const { user, session, isSuperAdmin } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -63,77 +61,90 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
       toast.error("Mật khẩu mới không được trùng mật khẩu cũ");
       return;
     }
+    if (isSuperAdmin && newPassword === "123456") {
+      toast.error("Không thể sử dụng mật khẩu mặc định 123456");
+      return;
+    }
 
     setBusy(true);
 
     try {
-      const authUser = getCurrentAuthUser();
-
-      // Case 1: Custom local teacher/admin account
-      if (authUser) {
-        if (isAdmin) {
-          const adm = getAdminById(authUser.id) || getRootAdmin();
-          if (adm.passwordHash !== hashPassword(currentPassword)) {
-            toast.error("Mật khẩu hiện tại không đúng");
-            setBusy(false);
-            return;
-          }
-          const res = changeAdminPassword(adm.id, newPassword);
-          if (!res.ok) {
-            toast.error(res.message || "Không thể đổi mật khẩu");
-            setBusy(false);
-            return;
-          }
-          toast.success("Đổi mật khẩu Quản trị viên thành công!");
-          resetForm();
-          onOpenChange(false);
-          setBusy(false);
-          return;
-        } else {
-          const teacher = getTeacherById(authUser.id);
-          if (!teacher) {
-            toast.error("Không tìm thấy thông tin tài khoản giáo viên");
-            setBusy(false);
-            return;
-          }
-          if (teacher.passwordHash !== hashPassword(currentPassword)) {
-            toast.error("Mật khẩu hiện tại không chính xác");
-            setBusy(false);
-            return;
-          }
-          teacher.passwordHash = hashPassword(newPassword);
-          upsertTeacher(teacher);
-          toast.success("Đổi mật khẩu thành công!");
-          resetForm();
-          onOpenChange(false);
+      // Case 1: Active Supabase Auth session (Production & Live Preview)
+      if (session?.access_token && user?.email) {
+        const { error: reAuthError } = await supabase.auth.signInWithPassword({
+          email: user.email,
+          password: currentPassword,
+        });
+        if (reAuthError) {
+          toast.error("Mật khẩu hiện tại không chính xác");
           setBusy(false);
           return;
         }
-      }
 
-      // Case 2: Supabase Auth account
-      const { error: reAuthError } = await supabase.auth.signInWithPassword({
-        email: user?.email || "",
-        password: currentPassword,
-      });
-      if (reAuthError) {
-        toast.error("Mật khẩu hiện tại không chính xác");
+        const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+        if (updateError) {
+          toast.error("Lỗi cập nhật mật khẩu: " + updateError.message);
+          setBusy(false);
+          return;
+        }
+
+        if (isSuperAdmin) {
+          try {
+            await (supabase as any).rpc("complete_super_admin_first_password_change");
+          } catch {}
+          const root = getRootAdmin();
+          changeAdminPassword(root.id, newPassword);
+        }
+
+        toast.success("Đổi mật khẩu thành công!");
+        resetForm();
+        onOpenChange(false);
         setBusy(false);
         return;
       }
 
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-      if (updateError) {
-        toast.error("Lỗi cập nhật mật khẩu: " + updateError.message);
-      } else {
+      // Case 2: Local fallback
+      const authUser = getCurrentAuthUser();
+      if (authUser && isSuperAdmin) {
+        const adm = getRootAdmin();
+        if (adm.passwordHash !== hashPassword(currentPassword)) {
+          toast.error("Mật khẩu hiện tại không đúng");
+          setBusy(false);
+          return;
+        }
+        const res = changeAdminPassword(adm.id, newPassword);
+        if (!res.ok) {
+          toast.error(res.message || "Không thể đổi mật khẩu");
+          setBusy(false);
+          return;
+        }
+        toast.success("Đổi mật khẩu Super Admin thành công!");
+        resetForm();
+        onOpenChange(false);
+        setBusy(false);
+        return;
+      }
+
+      if (authUser) {
+        const teacher = getTeacherById(authUser.id);
+        if (!teacher) {
+          toast.error("Không tìm thấy thông tin tài khoản giáo viên");
+          setBusy(false);
+          return;
+        }
+        if (teacher.passwordHash !== hashPassword(currentPassword)) {
+          toast.error("Mật khẩu hiện tại không chính xác");
+          setBusy(false);
+          return;
+        }
+        teacher.passwordHash = hashPassword(newPassword);
+        upsertTeacher(teacher);
         toast.success("Đổi mật khẩu thành công!");
         resetForm();
         onOpenChange(false);
       }
     } catch (err: any) {
-      toast.error(err.message || "Không thể đổi mật khẩu");
+      toast.error(err?.message || "Không thể đổi mật khẩu");
     } finally {
       setBusy(false);
     }
@@ -147,7 +158,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
             <KeyRound className="size-5 text-primary" /> Đổi mật khẩu
           </DialogTitle>
           <DialogDescription>
-            Bảo vệ tài khoản bằng mật khẩu an toàn (ít nhất 6 ký tự). Mật khẩu được mã hóa an toàn và không lưu dưới dạng văn bản thô.
+            Bảo vệ tài khoản bằng mật khẩu an toàn (ít nhất 6 ký tự).
           </DialogDescription>
         </DialogHeader>
 
@@ -214,7 +225,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: ChangePasswordDialo
 
           <div className="p-3 bg-muted/40 rounded-lg text-xs text-muted-foreground flex items-center gap-2">
             <ShieldCheck className="size-4 text-primary shrink-0" />
-            <span>Mật khẩu được băm và mã hóa tự động trước khi lưu trữ, đảm bảo an toàn tuyệt đối.</span>
+            <span>Mật khẩu được mã hóa tự động khi lưu trên Supabase Auth.</span>
           </div>
 
           <DialogFooter className="pt-2">

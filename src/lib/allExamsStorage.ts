@@ -270,7 +270,7 @@ export function deleteUnifiedExamFromLocal(examId: string) {
  * Ensures Super Admin sees 100% of all exams from all teachers with no empty states!
  */
 export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam[]> {
-  // 1. Ensure Supabase auth session for admin@admin.com
+  // 1. Ensure active Supabase auth session
   await ensureSupabaseSession(adminUser);
 
   const examMap = new Map<string, SystemExam>();

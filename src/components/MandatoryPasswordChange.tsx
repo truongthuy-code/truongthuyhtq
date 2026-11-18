@@ -21,10 +21,9 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   hashPassword,
   getRootAdmin,
-  getAdminById,
   changeAdminPassword,
   saveAdminAccount,
-  DEFAULT_ROOT_ADMIN,
+  SUPER_ADMIN_EMAIL,
 } from "@/lib/teacherStorage";
 
 interface MandatoryPasswordChangeProps {
@@ -32,7 +31,7 @@ interface MandatoryPasswordChangeProps {
 }
 
 export default function MandatoryPasswordChange({ onSuccess }: MandatoryPasswordChangeProps) {
-  const { user, signOut, refreshProfile } = useAuth();
+  const { user, session, signOut, refreshProfile } = useAuth();
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -43,12 +42,7 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
   const [showConfirm, setShowConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Password rules validation
-  const isDifferentFromDefault =
-    newPassword.length > 0 &&
-    newPassword !== "123456" &&
-    newPassword !== "Admin@123456" &&
-    newPassword !== "Admin@123";
+  const isDifferentFromDefault = newPassword.length > 0 && newPassword !== "123456";
   const hasMinLength = newPassword.length >= 6;
   const hasUpperCase = /[A-Z]/.test(newPassword);
   const hasLowerCase = /[a-z]/.test(newPassword);
@@ -73,7 +67,7 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
     }
 
     if (!isDifferentFromDefault) {
-      toast.error("Mật khẩu mới không được trùng với mật khẩu mặc định (123456)!");
+      toast.error("Mật khẩu mới không được trùng với mật khẩu mặc định ban đầu!");
       return;
     }
 
@@ -95,61 +89,68 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
     setBusy(true);
 
     try {
-      // Find current admin account
-      const adminId = user?.id || DEFAULT_ROOT_ADMIN.id;
-      const admin = getAdminById(adminId) || getRootAdmin();
+      const admin = getRootAdmin();
+      const targetEmail = user?.email || SUPER_ADMIN_EMAIL;
 
-      // Check current password hash
-      const currentHash = hashPassword(currentPassword);
-      if (admin.passwordHash !== currentHash) {
-        toast.error("Mật khẩu hiện tại không chính xác. Mật khẩu khởi tạo ban đầu là 123456");
-        setBusy(false);
-        return;
+      // Verify current password via Supabase Auth when session exists, or local hash fallback
+      if (session?.access_token) {
+        const { error: verifyErr } = await supabase.auth.signInWithPassword({
+          email: targetEmail,
+          password: currentPassword,
+        });
+        if (verifyErr) {
+          toast.error("Mật khẩu hiện tại không chính xác.");
+          setBusy(false);
+          return;
+        }
+
+        const { error: updErr } = await supabase.auth.updateUser({ password: newPassword });
+        if (updErr) {
+          toast.error("Không thể cập nhật mật khẩu trên máy chủ: " + updErr.message);
+          setBusy(false);
+          return;
+        }
+
+        // Persist must_change_password = false via SECURITY DEFINER RPC and /api/admin fallback
+        try {
+          await (supabase as any).rpc("complete_super_admin_first_password_change");
+        } catch {}
+
+        try {
+          await fetch("/api/admin", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              action: "change_super_admin_password",
+              newPassword,
+            }),
+          });
+        } catch {}
+      } else {
+        if (admin.passwordHash !== hashPassword(currentPassword)) {
+          toast.error("Mật khẩu hiện tại không chính xác.");
+          setBusy(false);
+          return;
+        }
       }
 
-      // 1. Update password and clear mustChangePassword in local storage registry
-      const res = changeAdminPassword(admin.id, newPassword);
-      if (!res.ok) {
-        toast.error(res.message || "Không thể cập nhật mật khẩu");
-        setBusy(false);
-        return;
-      }
-
-      // Ensure root admin object also persisted
-      admin.passwordHash = hashPassword(newPassword);
-      admin.mustChangePassword = false;
-      saveAdminAccount(admin);
-
-      // 2. Synchronize password update with Supabase Auth
-      try {
-        await supabase.auth.updateUser({ password: newPassword });
-      } catch (sbAuthErr) {
-        console.warn("Supabase auth updateUser notice:", sbAuthErr);
-      }
-
-      // 3. Synchronize must_change_password flag with Supabase DB profiles
-      try {
-        await supabase
-          .from("profiles")
-          .update({
-            must_change_password: false,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", admin.id);
-      } catch (sbDbErr) {
-        console.warn("Supabase profiles update notice:", sbDbErr);
-      }
+      changeAdminPassword(admin.id, newPassword);
+      saveAdminAccount({
+        ...admin,
+        passwordHash: hashPassword(newPassword),
+        mustChangePassword: false,
+      });
 
       await refreshProfile();
 
-      toast.success("Đổi mật khẩu thành công! Chào mừng Quản trị viên đến với Hệ thống.");
+      toast.success("Đổi mật khẩu thành công! Chào mừng Super Admin đến với Bảng điều khiển.");
       setBusy(false);
-
-      if (onSuccess) {
-        onSuccess();
-      }
+      onSuccess?.();
     } catch (err: any) {
-      toast.error(err.message || "Đã xảy ra lỗi khi đổi mật khẩu");
+      toast.error(err?.message || "Đã xảy ra lỗi khi đổi mật khẩu");
       setBusy(false);
     }
   };
@@ -157,49 +158,41 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
   return (
     <div className="min-h-screen bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 z-50">
       <Card className="max-w-xl w-full p-6 sm:p-8 bg-card border-amber-500/30 shadow-2xl rounded-2xl relative overflow-hidden">
-        {/* Top Decorative accent */}
         <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-500" />
 
-        {/* Header */}
         <div className="text-center space-y-3 mb-6">
           <div className="mx-auto size-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 grid place-items-center text-amber-600 dark:text-amber-400 shadow-sm">
-            <Lock className="size-7 animate-pulse" />
+            <Lock className="size-7" />
           </div>
           <div>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-500/10 text-rose-600 border border-rose-500/20 mb-2">
               <ShieldAlert className="size-3.5" /> Bắt buộc đổi mật khẩu lần đầu
             </span>
             <h2 className="text-2xl font-black tracking-tight text-foreground">
-              ĐỔI MẬT KHẨU QUẢN TRỊ VIÊN
+              ĐỔI MẬT KHẨU SUPER ADMIN
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1 max-w-md mx-auto">
-              Tài khoản Quản trị viên hệ thống đang sử dụng mật khẩu mặc định ban đầu. Bạn bắt buộc phải đổi sang mật khẩu an toàn mới để mở khóa quyền truy cập Dashboard.
+              Tài khoản Quản trị viên đang sử dụng mật khẩu khởi tạo mặc định. Vui lòng thiết lập mật khẩu an toàn mới để bảo vệ toàn bộ hệ thống.
             </p>
           </div>
         </div>
 
-        {/* Account Info Card */}
         <div className="mb-6 p-3.5 bg-muted/50 rounded-xl border border-border text-xs flex flex-wrap items-center justify-between gap-2">
           <div>
             <span className="text-muted-foreground">Tài khoản Quản trị:</span>{" "}
-            <span className="font-bold text-foreground">{user?.email || "admin@admin.com"}</span>
+            <span className="font-bold text-foreground">{user?.email || SUPER_ADMIN_EMAIL}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="size-4 text-emerald-600" />
-            <span className="font-semibold text-emerald-600">Super Admin (Quản trị viên gốc)</span>
+            <span className="font-semibold text-emerald-600">SUPER_ADMIN</span>
           </div>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Current Password */}
           <div className="space-y-1.5">
-            <div className="flex justify-between items-center">
-              <Label htmlFor="curr-pass" className="text-xs font-bold">
-                Mật khẩu hiện tại (Mặc định) *
-              </Label>
-              <span className="text-[11px] text-muted-foreground">Mặc định: Admin@123456</span>
-            </div>
+            <Label htmlFor="curr-pass" className="text-xs font-bold">
+              Mật khẩu hiện tại *
+            </Label>
             <div className="relative">
               <Input
                 id="curr-pass"
@@ -207,7 +200,7 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
                 required
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Nhập mật khẩu hiện tại (Admin@123456)"
+                placeholder="Nhập mật khẩu hiện tại"
                 className="h-11 pr-10 rounded-xl font-mono text-sm"
               />
               <button
@@ -221,7 +214,6 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
             </div>
           </div>
 
-          {/* New Password */}
           <div className="space-y-1.5">
             <Label htmlFor="new-pass" className="text-xs font-bold">
               Mật khẩu mới *
@@ -247,7 +239,6 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
             </div>
           </div>
 
-          {/* Confirm New Password */}
           <div className="space-y-1.5">
             <Label htmlFor="conf-pass" className="text-xs font-bold">
               Xác nhận mật khẩu mới *
@@ -273,7 +264,6 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
             </div>
           </div>
 
-          {/* Password Strength Checklist */}
           <div className="p-3 bg-muted/40 rounded-xl space-y-1.5 text-xs border border-border/60">
             <div className="font-semibold text-muted-foreground mb-1">Yêu cầu bảo mật mật khẩu mới:</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
@@ -304,7 +294,6 @@ export default function MandatoryPasswordChange({ onSuccess }: MandatoryPassword
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
             <Button
               type="button"

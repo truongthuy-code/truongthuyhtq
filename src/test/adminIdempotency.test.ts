@@ -5,8 +5,9 @@ import {
   getAdminByUsernameOrEmail,
   changeAdminPassword,
   hashPassword,
-  DEFAULT_ROOT_ADMIN,
   ROOT_SUPER_ADMIN_ID,
+  SUPER_ADMIN_EMAIL,
+  SUPER_ADMIN_USERNAME,
   upsertAdmin,
 } from "@/lib/teacherStorage";
 
@@ -15,36 +16,36 @@ describe("Admin Account Idempotency & RBAC Verification", () => {
     localStorage.clear();
   });
 
-  it("1. Initializes exactly 1 root admin with username 'admin' and default password hash (123456)", () => {
+  it("1. Initializes exactly 1 Super Admin with bichthuylqd@gmail.com and default password hash (123456)", () => {
     const admins = getAllAdmins();
     expect(admins).toHaveLength(1);
 
     const admin = admins[0];
-    expect(admin.username).toBe("admin");
-    expect(admin.email).toBe("admin@admin.com");
+    expect(admin.username).toBe(SUPER_ADMIN_USERNAME);
+    expect(admin.email).toBe(SUPER_ADMIN_EMAIL);
     expect(admin.status).toBe("active");
     expect(admin.mustChangePassword).toBe(true);
     expect(admin.passwordHash).toBe(hashPassword("123456"));
   });
 
-  it("2. Idempotency test: calling initialization 10 times results in exactly 1 admin", () => {
+  it("2. Idempotency test: calling initialization 10 times results in exactly 1 Super Admin", () => {
     for (let i = 0; i < 10; i++) {
       getAllAdmins();
     }
     const admins = getAllAdmins();
     const adminCount = admins.filter(
-      (a) => a.username.toLowerCase() === "admin" || a.email.toLowerCase() === "admin@admin.com"
+      (a) =>
+        a.username.toLowerCase() === SUPER_ADMIN_USERNAME ||
+        a.email.toLowerCase() === SUPER_ADMIN_EMAIL
     ).length;
     expect(adminCount).toBe(1);
     expect(admins).toHaveLength(1);
   });
 
   it("3. Password change: updates password, sets mustChangePassword to false, and never resets back on re-deploy", () => {
-    // Initial setup
     const initial = getAllAdmins();
     expect(initial[0].mustChangePassword).toBe(true);
 
-    // Admin changes password from 123456 to Abc@123456
     const changeRes = changeAdminPassword(ROOT_SUPER_ADMIN_ID, "Abc@123456");
     expect(changeRes.ok).toBe(true);
 
@@ -52,7 +53,6 @@ describe("Admin Account Idempotency & RBAC Verification", () => {
     expect(updated.mustChangePassword).toBe(false);
     expect(updated.passwordHash).toBe(hashPassword("Abc@123456"));
 
-    // Simulate 5 re-deployments / page reloads
     for (let i = 0; i < 5; i++) {
       getAllAdmins();
     }
@@ -63,32 +63,31 @@ describe("Admin Account Idempotency & RBAC Verification", () => {
     expect(reloaded.mustChangePassword).toBe(false);
   });
 
-  it("4. Case-insensitive lookup by username 'admin', 'ADMIN', or email 'admin@admin.com'", () => {
+  it("4. Case-insensitive lookup for bichthuylqd and bichthuylqd@gmail.com only", () => {
     getAllAdmins();
 
-    expect(getAdminByUsernameOrEmail("admin")).not.toBeNull();
-    expect(getAdminByUsernameOrEmail("ADMIN")).not.toBeNull();
-    expect(getAdminByUsernameOrEmail("Admin")).not.toBeNull();
-    expect(getAdminByUsernameOrEmail("admin@admin.com")).not.toBeNull();
-    expect(getAdminByUsernameOrEmail("ADMIN@ADMIN.COM")).not.toBeNull();
+    expect(getAdminByUsernameOrEmail("bichthuylqd")).not.toBeNull();
+    expect(getAdminByUsernameOrEmail("BICHTHUYLQD")).not.toBeNull();
+    expect(getAdminByUsernameOrEmail("bichthuylqd@gmail.com")).not.toBeNull();
+    expect(getAdminByUsernameOrEmail("BICHTHUYLQD@GMAIL.COM")).not.toBeNull();
+    expect(getAdminByUsernameOrEmail("random@gmail.com")).toBeNull();
   });
 
-  it("5. Secondary admins can be added with role 'admin', but duplicate 'admin' username is rejected", () => {
+  it("5. Rejects privilege escalation or adding any second admin account", () => {
     getAllAdmins();
 
-    // Trying to add another admin with username 'admin'
     const dupRes = upsertAdmin({
       id: "another-uuid",
-      username: "admin",
+      username: "second_admin",
       name: "Duplicate Admin",
-      email: "dup@admin.com",
-      role: "admin",
-      passwordHash: hashPassword("123456"),
+      email: "second@school.edu.vn",
+      role: "super_admin",
+      passwordHash: hashPassword("Abc@123456"),
       status: "active",
       createdAt: new Date().toISOString(),
     });
 
     expect(dupRes.ok).toBe(false);
-    expect(dupRes.message).toContain("đã tồn tại");
+    expect(getAllAdmins()).toHaveLength(1);
   });
 });

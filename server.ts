@@ -7,6 +7,10 @@ import { SAMPLE_EXAMS, findSampleExam, getSampleExamById, getSampleExamByCode } 
 import verifyExamPasswordHandler from "./api/verify-exam-password";
 import checkQuestionAnswerHandler from "./api/check-question-answer";
 import submitExamHandler from "./api/submit-exam";
+import authRegisterHandler from "./api/auth-register";
+import adminHandler from "./api/admin";
+import authRegisterHandler from "./api/auth-register";
+import adminHandler from "./api/admin";
 
 const app = express();
 const PORT = 3000;
@@ -861,6 +865,38 @@ app.post("/api/verify-exam-password", async (req, res) => {
 // -------------------------------------------------------------
 app.post("/api/submit-exam", async (req, res) => {
   return submitExamHandler(req, res);
+});
+
+// -------------------------------------------------------------
+// POST /api/auth-register
+// Teacher registration endpoint (enforces PENDING approval + Super Admin notify)
+// -------------------------------------------------------------
+app.post("/api/auth-register", async (req, res) => {
+  return authRegisterHandler(req, res);
+});
+
+// -------------------------------------------------------------
+// ALL /api/admin
+// Super Admin unified server-side management endpoint
+// -------------------------------------------------------------
+app.all("/api/admin", async (req, res) => {
+  return adminHandler(req, res);
+});
+
+// -------------------------------------------------------------
+// POST /api/auth-register
+// Teacher registration endpoint (enforces PENDING approval + Super Admin notify)
+// -------------------------------------------------------------
+app.post("/api/auth-register", async (req, res) => {
+  return authRegisterHandler(req, res);
+});
+
+// -------------------------------------------------------------
+// ALL /api/admin
+// Super Admin unified server-side management endpoint
+// -------------------------------------------------------------
+app.all("/api/admin", async (req, res) => {
+  return adminHandler(req, res);
 });
 
 // -------------------------------------------------------------

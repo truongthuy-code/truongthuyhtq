@@ -18,43 +18,45 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
-  User,
-  KeyRound,
+  Clock,
+  Ban,
+  CheckCircle2,
 } from "lucide-react";
 import { SUBJECT_LIST } from "@/lib/subjects";
 import {
   hashPassword,
   getTeacherByUsernameOrEmail,
-  getAdminAccount,
+  fetchTeacherByUsernameOrEmail,
   getAdminByUsernameOrEmail,
-  getRootAdmin,
   setCurrentAuthUser,
   upsertTeacher,
   TeacherUser,
-  getAllTeachers,
-  isUuid,
   generateUuid,
-  ROOT_SUPER_ADMIN_ID,
+  SUPER_ADMIN_EMAIL,
+  isSuperAdminEmail,
+  isReservedAdminIdentifier,
 } from "@/lib/teacherStorage";
-import { ensureSupabaseSession } from "@/lib/supabaseAuthSync";
+
+type BlockBannerState = {
+  type: "PENDING" | "REJECTED" | "LOCKED";
+  message: string;
+  reason?: string | null;
+} | null;
 
 export default function AuthPage() {
   const navigate = useNavigate();
   const location = useLocation() as any;
   const [searchParams] = useSearchParams();
-  const { user, isAdmin, loading } = useAuth();
+  const { user, isSuperAdmin, approvalStatus, loading } = useAuth();
 
-  // Selected Role: "teacher" | "student" | "admin"
   const roleParam = searchParams.get("role") as "teacher" | "student" | "admin" | null;
   const [selectedRole, setSelectedRole] = useState<"teacher" | "student" | "admin">(
     roleParam || "teacher"
   );
-
-  // Tab: "login" | "signup" (signup only available for teacher)
   const [tab, setTab] = useState<"login" | "signup">("login");
 
   // Login form state
-  const [identifier, setIdentifier] = useState(""); // username or email
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
@@ -69,408 +71,425 @@ export default function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [busy, setBusy] = useState(false);
+  const [blockBanner, setBlockBanner] = useState<BlockBannerState>(null);
+  const [pendingSuccessBanner, setPendingSuccessBanner] = useState<string | null>(null);
   const redirectTo = location.state?.from || "/";
 
-  // Redirect if user already logged in with valid session
+  // Redirect only if authenticated AND approved (or Super Admin)
   useEffect(() => {
     if (!loading && user) {
-      if (isAdmin) {
+      if (isSuperAdmin) {
         navigate("/admin", { replace: true });
-      } else {
+      } else if (approvalStatus === "APPROVED") {
         navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
       }
     }
-  }, [user, isAdmin, loading, navigate, redirectTo]);
+  }, [user, isSuperAdmin, approvalStatus, loading, navigate, redirectTo]);
 
-  // Handle switching to student role
   const handleSelectRole = (r: "teacher" | "student" | "admin") => {
     setSelectedRole(r);
     setTab("login");
+    setBlockBanner(null);
     if (r === "student") {
       navigate("/student/auth");
     }
   };
 
-  // Login handler
+  async function completeSuperAdminSupabaseLogin(email: string, pwd: string): Promise<boolean> {
+    try {
+      const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
+        email,
+        password: pwd,
+      });
+
+      if (!sbError && signData?.user) {
+        let stateData: any = null;
+        try {
+          const { data } = await (supabase as any).rpc("get_my_account_state");
+          stateData = data;
+        } catch {}
+
+        const { data: prof } = stateData
+          ? { data: null }
+          : await supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle();
+
+        const resolvedRole = stateData?.role || prof?.role;
+        const isAllowedSuperAdmin =
+          isSuperAdminEmail(signData.user.email) ||
+          stateData?.is_super_admin === true ||
+          resolvedRole === "super_admin";
+
+        if (!isAllowedSuperAdmin) {
+          await supabase.auth.signOut().catch(() => {});
+          toast.error("Tài khoản này không có quyền Super Admin!");
+          return false;
+        }
+
+        const mustChange = Boolean(
+          stateData?.must_change_password ?? prof?.must_change_password ?? pwd === "123456"
+        );
+
+        setCurrentAuthUser({
+          id: signData.user.id,
+          username: "bichthuylqd",
+          name: stateData?.full_name || prof?.full_name || "Trương Thị Bích Thủy",
+          email: SUPER_ADMIN_EMAIL,
+          role: "super_admin",
+          approvalStatus: "APPROVED",
+          mustChangePassword: mustChange,
+        });
+
+        if (mustChange) {
+          toast.info("Đăng nhập thành công! Bạn bắt buộc phải đổi mật khẩu lần đầu tiên để tiếp tục.");
+        } else {
+          toast.success("Đăng nhập thành công với quyền Super Admin.");
+        }
+        navigate("/admin", { replace: true });
+        return true;
+      }
+    } catch (err) {
+      console.warn("Supabase Super Admin login warning:", err);
+    }
+
+    // Offline / unmigrated sandbox fallback ONLY if matching local Super Admin registry
+    const localAdmin = getAdminByUsernameOrEmail(email);
+    if (localAdmin && localAdmin.passwordHash === hashPassword(pwd)) {
+      setCurrentAuthUser({
+        id: localAdmin.id,
+        username: localAdmin.username,
+        name: localAdmin.name,
+        email: SUPER_ADMIN_EMAIL,
+        role: "super_admin",
+        approvalStatus: "APPROVED",
+        mustChangePassword: !!localAdmin.mustChangePassword,
+      });
+      toast.success("Đăng nhập thành công với quyền Super Admin.");
+      navigate("/admin", { replace: true });
+      return true;
+    }
+
+    return false;
+  }
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setBlockBanner(null);
+    setPendingSuccessBanner(null);
+
     if (!identifier.trim() || !password) {
       toast.error("Vui lòng nhập đầy đủ tài khoản và mật khẩu");
       return;
     }
 
     setBusy(true);
+    const normInput = identifier.trim().toLowerCase();
 
     try {
-      // 1. ADMIN LOGIN FLOW
-      if (selectedRole === "admin") {
-        const normInput = identifier.trim().toLowerCase();
-        const inputHash = hashPassword(password);
+      // 1. SUPER ADMIN LOGIN FLOW
+      if (selectedRole === "admin" || isSuperAdminEmail(normInput) || normInput === "bichthuylqd") {
+        const targetEmail =
+          normInput === "bichthuylqd" || isSuperAdminEmail(normInput) ? SUPER_ADMIN_EMAIL : identifier.trim();
 
-        // Check against registered admins (root super_admin or secondary admin)
-        const matchedAdmin = getAdminByUsernameOrEmail(normInput);
-
-        if (matchedAdmin) {
-          if (matchedAdmin.status === "locked") {
-            setBusy(false);
-            toast.error("Tài khoản Quản trị viên này đã bị khóa. Vui lòng liên hệ Super Admin!");
-            return;
-          }
-
-          const pwdMatch = matchedAdmin.passwordHash === inputHash;
-
-          if (pwdMatch) {
-            // Ensure Supabase Auth session exists for PostgreSQL RLS & table permissions
-            const adminEmail = matchedAdmin.email?.trim() || `${matchedAdmin.username.toLowerCase()}@admin.local`;
-            try {
-              let { data: signData } = await supabase.auth.signInWithPassword({
-                email: adminEmail,
-                password: password,
-              });
-              if (!signData?.user) {
-                await supabase.auth.signUp({
-                  email: adminEmail,
-                  password: password,
-                  options: {
-                    data: { role: matchedAdmin.role, full_name: matchedAdmin.name, username: matchedAdmin.username },
-                  },
-                });
-              }
-            } catch (err) {
-              console.warn("Supabase admin auth sync note:", err);
-            }
-
-            setCurrentAuthUser({
-              id: matchedAdmin.id,
-              username: matchedAdmin.username,
-              name: matchedAdmin.name,
-              email: matchedAdmin.email,
-              role: matchedAdmin.role,
-              mustChangePassword: !!matchedAdmin.mustChangePassword,
-            });
-
-            if (matchedAdmin.mustChangePassword) {
-              toast.info("Đăng nhập thành công! Bạn bắt buộc phải đổi mật khẩu lần đầu tiên để tiếp tục.");
-            } else {
-              toast.success(
-                `Đăng nhập thành công với quyền ${
-                  matchedAdmin.role === "super_admin"
-                    ? "Super Admin (Quản trị viên gốc)"
-                    : "Quản trị viên (Admin)"
-                }`
-              );
-            }
-            setBusy(false);
-            navigate("/admin", { replace: true });
-            return;
-          }
+        if (!isSuperAdminEmail(targetEmail)) {
+          setBusy(false);
+          toast.error(`Chỉ tài khoản Super Admin duy nhất (${SUPER_ADMIN_EMAIL}) được phép đăng nhập khu vực quản trị.`);
+          return;
         }
 
-        // Check Supabase Auth directly for Admin role
-        try {
-          const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
-            email: identifier.trim(),
-            password,
-          });
-
-          if (!sbError && signData?.user) {
-            const [{ data: r }, { data: p }] = await Promise.all([
-              supabase.from("user_roles").select("role").eq("user_id", signData.user.id),
-              supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
-            ]);
-            const role = (r && r[0]?.role) || signData.user.user_metadata?.role || "admin";
-            const fullName = p?.full_name || signData.user.user_metadata?.full_name || identifier.split("@")[0];
-
-            setCurrentAuthUser({
-              id: signData.user.id,
-              username: identifier.split("@")[0],
-              name: fullName,
-              email: signData.user.email || identifier.trim(),
-              role: role as any,
-              mustChangePassword: false,
-            });
-
-            toast.success(`Đăng nhập thành công với quyền Quản trị viên: ${fullName}`);
-            setBusy(false);
-            navigate("/admin", { replace: true });
-            return;
-          }
-        } catch (err) {
-          console.warn("Supabase admin auth attempt note:", err);
-        }
-
-        // If not matched, strictly refuse wrong role/credentials
+        const ok = await completeSuperAdminSupabaseLogin(targetEmail, password);
         setBusy(false);
-        toast.error("Tên đăng nhập hoặc mật khẩu Quản trị viên không chính xác");
+        if (!ok) {
+          toast.error("Email hoặc mật khẩu Super Admin không chính xác.");
+        }
         return;
       }
 
       // 2. TEACHER LOGIN FLOW
-      if (selectedRole === "teacher") {
-        const normInput = identifier.trim().toLowerCase();
-        const inputHash = hashPassword(password);
-
-        // Smart detection: If admin@admin.com or an admin account is entered while on Teacher tab
-        const matchedAdmin = getAdminByUsernameOrEmail(normInput);
-        if (matchedAdmin) {
-          const isSuper =
-            matchedAdmin.role === "super_admin" ||
-            matchedAdmin.id === ROOT_SUPER_ADMIN_ID ||
-            matchedAdmin.email?.toLowerCase() === "admin@admin.com";
-          const pwdMatch = matchedAdmin.passwordHash === inputHash;
-
-          if (pwdMatch) {
-            const adminEmail = matchedAdmin.email?.trim() || `${matchedAdmin.username.toLowerCase()}@admin.local`;
-            try {
-              let { data: signData } = await supabase.auth.signInWithPassword({
-                email: adminEmail,
-                password: password,
-              });
-              if (!signData?.user) {
-                await supabase.auth.signUp({
-                  email: adminEmail,
-                  password: password,
-                  options: { data: { role: matchedAdmin.role, full_name: matchedAdmin.name, username: matchedAdmin.username } },
-                });
-              }
-            } catch (err) {
-              console.warn("Supabase admin auth sync note:", err);
-            }
-
-            setCurrentAuthUser({
-              id: matchedAdmin.id || ROOT_SUPER_ADMIN_ID,
-              username: matchedAdmin.username,
-              name: matchedAdmin.name,
-              email: matchedAdmin.email,
-              role: isSuper ? "super_admin" : matchedAdmin.role,
-              mustChangePassword: !!matchedAdmin.mustChangePassword,
-            });
-
-            toast.success(
-              `Đăng nhập thành công với quyền ${
-                isSuper ? "Super Admin (Quản trị viên gốc)" : "Quản trị viên (Admin)"
-              }`
-            );
-            setBusy(false);
-            navigate("/admin", { replace: true });
-            return;
-          }
+      let loginEmail = normInput;
+      if (!loginEmail.includes("@")) {
+        const resolved =
+          getTeacherByUsernameOrEmail(normInput) || (await fetchTeacherByUsernameOrEmail(normInput));
+        if (resolved?.email) {
+          loginEmail = resolved.email.toLowerCase();
         }
+      }
 
-        const teacher = getTeacherByUsernameOrEmail(identifier);
+      if (loginEmail.includes("@")) {
+        const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
+          email: loginEmail,
+          password,
+        });
 
-        if (teacher) {
-          // Check if teacher account is locked
-          if (teacher.status === "locked") {
-            setBusy(false);
-            toast.error("Tài khoản giáo viên này đã bị khóa. Vui lòng liên hệ Admin!");
-            return;
-          }
+        if (!sbError && signData?.user) {
+          let stateData: any = null;
+          try {
+            const { data } = await (supabase as any).rpc("get_my_account_state");
+            stateData = data;
+          } catch {}
 
-          // Check password
-          if (teacher.passwordHash === inputHash) {
-            // Ensure Supabase Auth session exists for RLS policies
-            const effectiveEmail = teacher.email?.trim() || `${teacher.username.toLowerCase()}@school.edu.vn`;
-            try {
-              let { data: signData } = await supabase.auth.signInWithPassword({
-                email: effectiveEmail,
-                password,
-              });
-              let finalUserId = signData?.user?.id;
-              if (!finalUserId) {
-                const { data: signUpData } = await supabase.auth.signUp({
-                  email: effectiveEmail,
-                  password,
-                  options: {
-                    data: { full_name: teacher.name, subject_name: teacher.subject },
-                  },
-                });
-                finalUserId = signUpData?.user?.id;
-              }
-              if (finalUserId) {
-                teacher.id = finalUserId;
-                upsertTeacher(teacher);
-              }
-            } catch (err) {
-              console.warn("Supabase auth sync note on login:", err);
-            }
+          const { data: prof } = stateData
+            ? { data: null }
+            : await supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle();
 
-            setCurrentAuthUser({
-              id: teacher.id,
-              username: teacher.username,
-              name: teacher.name,
-              email: teacher.email,
-              phone: teacher.phone,
-              school: teacher.school,
-              subject: teacher.subject,
-              avatar: teacher.avatar,
-              role: "teacher",
+          const eff = stateData || prof || {};
+          const rawApproval = String(eff.approval_status || "").toUpperCase();
+          const rawStatus = String(eff.status || "").toLowerCase();
+
+          if (eff.is_deleted || rawApproval === "LOCKED" || rawStatus === "locked") {
+            await supabase.auth.signOut().catch(() => {});
+            setBlockBanner({
+              type: "LOCKED",
+              message: "Tài khoản giáo viên này đã bị khóa bởi Quản trị viên.",
             });
-            toast.success(`Chào mừng giáo viên ${teacher.name}`);
             setBusy(false);
-            navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
             return;
           }
-        }
 
-        // Fallback to Supabase Auth if registered via email
-        try {
-          const { data: signData, error: sbError } = await supabase.auth.signInWithPassword({
-            email: identifier.trim(),
-            password,
+          if (rawApproval === "REJECTED" || rawStatus === "rejected") {
+            await supabase.auth.signOut().catch(() => {});
+            setBlockBanner({
+              type: "REJECTED",
+              message: "Yêu cầu đăng ký tài khoản giáo viên của bạn đã bị từ chối.",
+              reason: eff.rejection_reason || null,
+            });
+            setBusy(false);
+            return;
+          }
+
+          if (rawApproval === "PENDING" || rawStatus === "pending") {
+            await supabase.auth.signOut().catch(() => {});
+            setBlockBanner({
+              type: "PENDING",
+              message: `Tài khoản của bạn đang chờ Quản trị viên (${SUPER_ADMIN_EMAIL}) phê duyệt. Vui lòng quay lại sau khi được duyệt.`,
+            });
+            setBusy(false);
+            return;
+          }
+
+          const fullName =
+            eff.full_name || signData.user.user_metadata?.full_name || loginEmail.split("@")[0];
+          const username = eff.username || loginEmail.split("@")[0];
+
+          setCurrentAuthUser({
+            id: signData.user.id,
+            username,
+            name: fullName,
+            email: signData.user.email || loginEmail,
+            phone: eff.phone || "",
+            school: eff.school_name || "Trường THPT",
+            subject: eff.subject_name || "Tin học",
+            avatar: eff.avatar,
+            role: "teacher",
+            approvalStatus: "APPROVED",
           });
 
-          if (!sbError && signData?.user) {
-            const [{ data: r }, { data: p }] = await Promise.all([
-              supabase.from("user_roles").select("role").eq("user_id", signData.user.id),
-              supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
-            ]);
+          upsertTeacher({
+            id: signData.user.id,
+            username,
+            name: fullName,
+            email: signData.user.email || loginEmail,
+            phone: eff.phone || "",
+            school: eff.school_name || "Trường THPT",
+            subject: eff.subject_name || "Tin học",
+            status: "active",
+            approvalStatus: "APPROVED",
+            passwordHash: hashPassword(password),
+            createdAt: eff.created_at || new Date().toISOString(),
+          });
 
-            const role = (r && r[0]?.role) || signData.user.user_metadata?.role || "teacher";
-            const fullName = p?.full_name || signData.user.user_metadata?.full_name || identifier.split("@")[0];
-            const isAdm = role === "admin" || role === "super_admin";
+          toast.success(`Chào mừng giáo viên ${fullName}`);
+          setBusy(false);
+          navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
+          return;
+        }
+      }
 
-            setCurrentAuthUser({
-              id: signData.user.id,
-              username: identifier.split("@")[0],
-              name: fullName,
-              email: signData.user.email || identifier.trim(),
-              phone: p?.phone || "",
-              school: p?.school_name || "Trường THPT",
-              subject: p?.subject_name || "Tin học",
-              avatar: p?.avatar,
-              role: role as any,
-            });
-
-            // Keep teacher registry synchronized across devices
-            try {
-              upsertTeacher({
-                id: signData.user.id,
-                username: identifier.split("@")[0],
-                name: fullName,
-                email: signData.user.email || identifier.trim(),
-                phone: p?.phone || "",
-                school: p?.school_name || "Trường THPT",
-                subject: p?.subject_name || "Tin học",
-                status: "active",
-                passwordHash: hashPassword(password),
-                createdAt: p?.created_at || new Date().toISOString(),
-              });
-            } catch {}
-
-            toast.success(`Chào mừng ${fullName}`);
-            setBusy(false);
-            navigate(isAdm ? "/admin" : (redirectTo === "/admin" ? "/" : redirectTo), { replace: true });
-            return;
-          }
-        } catch (err) {
-          console.warn("Supabase teacher auth attempt note:", err);
+      // Local offline fallback (only when Supabase Auth unreachable / local Vitest teacher)
+      const localTeacher = getTeacherByUsernameOrEmail(identifier);
+      if (localTeacher && localTeacher.passwordHash && localTeacher.passwordHash === hashPassword(password)) {
+        if (localTeacher.status === "locked" || localTeacher.approvalStatus === "LOCKED") {
+          setBlockBanner({
+            type: "LOCKED",
+            message: "Tài khoản giáo viên này đã bị khóa bởi Quản trị viên.",
+          });
+          setBusy(false);
+          return;
+        }
+        if (localTeacher.status === "rejected" || localTeacher.approvalStatus === "REJECTED") {
+          setBlockBanner({
+            type: "REJECTED",
+            message: "Tài khoản giáo viên đã bị từ chối.",
+            reason: localTeacher.rejectionReason,
+          });
+          setBusy(false);
+          return;
+        }
+        if (localTeacher.status === "pending" || localTeacher.approvalStatus === "PENDING") {
+          setBlockBanner({
+            type: "PENDING",
+            message: "Tài khoản đang chờ Quản trị viên phê duyệt.",
+          });
+          setBusy(false);
+          return;
         }
 
+        setCurrentAuthUser({
+          id: localTeacher.id,
+          username: localTeacher.username,
+          name: localTeacher.name,
+          email: localTeacher.email,
+          phone: localTeacher.phone,
+          school: localTeacher.school,
+          subject: localTeacher.subject,
+          avatar: localTeacher.avatar,
+          role: "teacher",
+          approvalStatus: "APPROVED",
+        });
+        toast.success(`Chào mừng giáo viên ${localTeacher.name}`);
         setBusy(false);
-        toast.error("Tên đăng nhập / Email hoặc mật khẩu giáo viên không chính xác");
+        navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
         return;
       }
+
+      setBusy(false);
+      toast.error("Tên đăng nhập / Email hoặc mật khẩu không chính xác");
     } catch (err: any) {
       setBusy(false);
-      toast.error(err.message || "Đăng nhập thất bại");
+      toast.error(err?.message || "Đăng nhập thất bại");
     }
   };
 
-  // Teacher Signup handler
   const handleTeacherSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedRole !== "teacher") return;
+    setBlockBanner(null);
+    setPendingSuccessBanner(null);
 
     if (signupPassword !== confirmPassword) {
       toast.error("Mật khẩu xác nhận không khớp");
       return;
     }
+    if (signupPassword.length < 6) {
+      toast.error("Mật khẩu phải có tối thiểu 6 ký tự");
+      return;
+    }
     if (!fullName.trim() || !subjectName) {
-      toast.error("Vui lòng điền họ tên và môn học");
+      toast.error("Vui lòng điền họ tên và môn học giảng dạy");
       return;
     }
 
-    const normUsername = (signupUsername || signupEmail.split("@")[0] || "").trim().toLowerCase();
     const normEmail = signupEmail.trim().toLowerCase();
-    if (!normUsername) {
-      toast.error("Vui lòng nhập tên đăng nhập");
+    const normUsername = (signupUsername || normEmail.split("@")[0] || "").trim().toLowerCase();
+
+    if (!normEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+      toast.error("Vui lòng nhập địa chỉ email hợp lệ");
+      return;
+    }
+    if (!normUsername || normUsername.length < 3) {
+      toast.error("Tên đăng nhập phải có ít nhất 3 ký tự");
       return;
     }
 
-    // Strictly forbid registration of admin or super_admin identifiers
-    if (
-      normUsername === "admin" ||
-      normUsername === "super_admin" ||
-      normUsername === "root" ||
-      normEmail === "admin@admin.com" ||
-      getAdminByUsernameOrEmail(normUsername) ||
-      getAdminByUsernameOrEmail(normEmail)
-    ) {
-      toast.error("Không được phép đăng ký tên tài khoản hoặc email của Quản trị viên hệ thống!");
-      return;
-    }
-
-    // Check existing
-    const existing = getTeacherByUsernameOrEmail(normUsername);
-    if (existing) {
-      toast.error("Tên đăng nhập này đã được sử dụng");
+    if (isReservedAdminIdentifier(normEmail) || isReservedAdminIdentifier(normUsername)) {
+      toast.error("Không được phép đăng ký bằng email hoặc tên đăng nhập của Quản trị viên hệ thống!");
       return;
     }
 
     setBusy(true);
 
-    const effectiveEmail = normEmail || `${normUsername}@school.edu.vn`;
-    let sbUserId: string | null = null;
-
-    // Attempt Supabase signup for backend sync so RLS policies and table constraints succeed
     try {
-      const { data: sbData } = await supabase.auth.signUp({
-        email: effectiveEmail,
-        password: signupPassword,
-        options: {
-          data: { full_name: fullName.trim(), subject_name: subjectName },
-        },
-      });
-      if (sbData?.user?.id && isUuid(sbData.user.id)) {
-        sbUserId = sbData.user.id;
+      let registeredUserId: string | null = null;
+      let registeredViaServer = false;
+
+      // 1. Primary path: server API endpoint (/api/auth-register) -> forces PENDING + notifies Super Admin
+      try {
+        const resp = await fetch("/api/auth-register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: normEmail,
+            password: signupPassword,
+            confirmPassword,
+            fullName: fullName.trim(),
+            username: normUsername,
+            phone: signupPhone.trim(),
+            schoolName: signupSchool.trim() || "Trường THPT",
+            subjectName,
+          }),
+        });
+
+        const payload = await resp.json().catch(() => null);
+        if (resp.ok && payload?.ok) {
+          registeredViaServer = true;
+          registeredUserId = payload.userId || null;
+        } else if (resp.status >= 400 && resp.status < 500 && payload?.error) {
+          setBusy(false);
+          toast.error(payload.error);
+          return;
+        }
+      } catch {
+        // Network / offline fallback handled below
       }
-    } catch (sbErr) {
-      console.warn("Supabase signup warning:", sbErr);
+
+      // 2. Fallback path if server endpoint unavailable in offline mode
+      if (!registeredViaServer) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signUp({
+          email: normEmail,
+          password: signupPassword,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              username: normUsername,
+              phone: signupPhone.trim(),
+              school_name: signupSchool.trim() || "Trường THPT",
+              subject_name: subjectName,
+            },
+          },
+        });
+        if (sbErr) {
+          setBusy(false);
+          toast.error(sbErr.message || "Không thể đăng ký tài khoản.");
+          return;
+        }
+        registeredUserId = sbData?.user?.id || null;
+        // CRITICAL: Never allow newly registered teacher to remain signed in before Super Admin approval!
+        await supabase.auth.signOut().catch(() => {});
+      }
+
+      const newTeacher: TeacherUser = {
+        id: registeredUserId || generateUuid(),
+        username: normUsername,
+        name: fullName.trim(),
+        email: normEmail,
+        phone: signupPhone.trim(),
+        school: signupSchool.trim() || "Trường THPT",
+        subject: subjectName,
+        status: "pending",
+        approvalStatus: "PENDING",
+        passwordHash: hashPassword(signupPassword),
+        createdAt: new Date().toISOString(),
+      };
+      upsertTeacher(newTeacher);
+
+      setPendingSuccessBanner(
+        `Đăng ký tài khoản "${fullName.trim()}" (${normEmail}) thành công! Tài khoản hiện đang ở trạng thái CHỜ PHÊ DUYỆT bởi Quản trị viên (${SUPER_ADMIN_EMAIL}). Bạn sẽ có thể đăng nhập sau khi được phê duyệt.`
+      );
+
+      setFullName("");
+      setSignupUsername("");
+      setSignupEmail("");
+      setSignupPhone("");
+      setSignupSchool("");
+      setSubjectName("");
+      setSignupPassword("");
+      setConfirmPassword("");
+      setTab("login");
+      setBusy(false);
+      toast.success("Đã gửi đăng ký tài khoản! Vui lòng chờ Quản trị viên phê duyệt.");
+    } catch (err: any) {
+      setBusy(false);
+      toast.error(err?.message || "Đăng ký thất bại");
     }
-
-    const teacherId = sbUserId || generateUuid();
-
-    const newTeacher: TeacherUser = {
-      id: teacherId,
-      username: normUsername,
-      name: fullName.trim(),
-      email: signupEmail.trim() || effectiveEmail,
-      phone: signupPhone.trim(),
-      school: signupSchool.trim() || "Trường THPT",
-      subject: subjectName,
-      status: "active",
-      passwordHash: hashPassword(signupPassword),
-      createdAt: new Date().toISOString(),
-    };
-
-    upsertTeacher(newTeacher);
-
-    // Auto login
-    setCurrentAuthUser({
-      id: newTeacher.id,
-      username: newTeacher.username,
-      name: newTeacher.name,
-      email: newTeacher.email,
-      phone: newTeacher.phone,
-      school: newTeacher.school,
-      subject: newTeacher.subject,
-      role: "teacher",
-    });
-
-    setBusy(false);
-    toast.success("Tạo tài khoản giáo viên thành công!");
-    navigate(redirectTo === "/admin" ? "/" : redirectTo, { replace: true });
   };
 
   return (
@@ -488,7 +507,7 @@ export default function AuthPage() {
             Tác giả: Trương Thị Bích Thủy – THPT Phan Bội Châu - TP Đà Nẵng
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Đăng nhập phân quyền: Giáo viên, Học sinh
+            Đăng nhập phân quyền: Giáo viên, Học sinh, Quản trị viên
           </p>
         </div>
 
@@ -497,13 +516,13 @@ export default function AuthPage() {
           <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-2 text-center">
             Chọn vai trò đăng nhập
           </Label>
-          <div className="grid grid-cols-2 gap-2 p-1.5 bg-muted/60 rounded-xl">
+          <div className="grid grid-cols-3 gap-2 p-1.5 bg-muted/60 rounded-xl">
             <button
               type="button"
               onClick={() => handleSelectRole("teacher")}
               className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg font-bold text-xs transition-all ${
                 selectedRole === "teacher"
-                  ? "bg-white text-primary shadow-sm ring-1 ring-primary/20 scale-[1.02]"
+                  ? "bg-white text-primary shadow-sm ring-1 ring-primary/20"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -516,24 +535,77 @@ export default function AuthPage() {
               onClick={() => handleSelectRole("student")}
               className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg font-bold text-xs transition-all ${
                 selectedRole === "student"
-                  ? "bg-white text-primary shadow-sm ring-1 ring-primary/20 scale-[1.02]"
+                  ? "bg-white text-primary shadow-sm ring-1 ring-primary/20"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
               <GraduationCap className="size-4 mb-1" />
               <span>HỌC SINH</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectRole("admin")}
+              className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg font-bold text-xs transition-all ${
+                selectedRole === "admin"
+                  ? "bg-white text-amber-700 shadow-sm ring-1 ring-amber-500/30"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <ShieldCheck className="size-4 mb-1" />
+              <span>QUẢN TRỊ VIÊN</span>
+            </button>
           </div>
         </div>
 
-        {/* ROLE NOTICE */}
+        {/* Pending registration success banner */}
+        {pendingSuccessBanner && (
+          <div className="mb-4 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-2.5 text-xs text-emerald-900 dark:text-emerald-200">
+            <CheckCircle2 className="size-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Đăng ký đang chờ phê duyệt</p>
+              <p className="mt-0.5 leading-relaxed">{pendingSuccessBanner}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Blocked / Pending / Rejected login banner */}
+        {blockBanner && (
+          <div
+            className={`mb-4 p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+              blockBanner.type === "PENDING"
+                ? "bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200"
+                : "bg-destructive/10 border-destructive/30 text-destructive"
+            }`}
+          >
+            {blockBanner.type === "PENDING" ? (
+              <Clock className="size-4 shrink-0 mt-0.5" />
+            ) : (
+              <Ban className="size-4 shrink-0 mt-0.5" />
+            )}
+            <div>
+              <p className="font-bold">
+                {blockBanner.type === "PENDING"
+                  ? "Tài khoản đang chờ phê duyệt"
+                  : blockBanner.type === "REJECTED"
+                    ? "Đăng ký chưa được phê duyệt"
+                    : "Tài khoản đã bị khóa"}
+              </p>
+              <p className="mt-0.5 leading-relaxed">{blockBanner.message}</p>
+              {blockBanner.reason && (
+                <p className="mt-1 font-semibold">Lý do: {blockBanner.reason}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {selectedRole === "admin" && (
           <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
             <ShieldCheck className="size-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Khu vực dành riêng cho Quản trị viên (Super Admin / Admin):</span>
+              <span className="font-semibold">Khu vực Quản trị viên Toàn quyền (Super Admin):</span>
               <p className="mt-0.5 text-muted-foreground">
-                Tài khoản quản trị nội bộ của hệ thống. Không hỗ trợ đăng ký công khai tài khoản Quản trị viên.
+                Chỉ tài khoản Super Admin duy nhất của hệ thống mới có quyền đăng nhập tại đây. Không hỗ trợ tự đăng ký tài khoản quản trị.
               </p>
             </div>
           </div>
@@ -550,13 +622,13 @@ export default function AuthPage() {
             <TabsContent value="login">
               <form onSubmit={handleLogin} className="space-y-3.5">
                 <div className="space-y-1">
-                  <Label htmlFor="t-login-user">Tên đăng nhập hoặc Email</Label>
+                  <Label htmlFor="t-login-user">Email hoặc Tên đăng nhập</Label>
                   <Input
                     id="t-login-user"
                     required
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
-                    placeholder="VD: giaovien hoặc thuy.tb@lqd.edu.vn"
+                    placeholder="VD: giaovien@truong.edu.vn"
                     className="h-10"
                   />
                 </div>
@@ -635,10 +707,11 @@ export default function AuthPage() {
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
-                    <Label htmlFor="s-email">Email</Label>
+                    <Label htmlFor="s-email">Email *</Label>
                     <Input
                       id="s-email"
                       type="email"
+                      required
                       value={signupEmail}
                       onChange={(e) => setSignupEmail(e.target.value)}
                       placeholder="gv@school.edu.vn"
@@ -692,31 +765,36 @@ export default function AuthPage() {
                   </div>
                 </div>
 
-                <Button type="submit" className="w-full bg-gradient-primary h-10 mt-2" disabled={busy}>
-                  {busy && <Loader2 className="size-4 mr-2 animate-spin" />} Đăng ký tài khoản Giáo viên
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Tài khoản đăng ký mới sẽ ở trạng thái <strong>Chờ phê duyệt</strong> và cần Quản trị viên xét duyệt trước khi đăng nhập.
+                </p>
+
+                <Button type="submit" className="w-full bg-gradient-primary h-10 mt-1" disabled={busy}>
+                  {busy && <Loader2 className="size-4 mr-2 animate-spin" />} Gửi đăng ký tài khoản Giáo viên
                 </Button>
               </form>
             </TabsContent>
           </Tabs>
         )}
 
-        {/* ADMIN LOGIN */}
+        {/* SUPER ADMIN LOGIN */}
         {selectedRole === "admin" && (
           <form onSubmit={handleLogin} className="space-y-3.5">
             <div className="space-y-1">
-              <Label htmlFor="adm-user">Tên đăng nhập hoặc Email Quản trị</Label>
+              <Label htmlFor="adm-user">Email Quản trị viên</Label>
               <Input
                 id="adm-user"
+                type="email"
                 required
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="admin hoặc admin@admin.com"
+                placeholder={SUPER_ADMIN_EMAIL}
                 className="h-10"
               />
             </div>
 
             <div className="space-y-1">
-              <Label htmlFor="adm-pass">Mật khẩu Quản trị</Label>
+              <Label htmlFor="adm-pass">Mật khẩu Super Admin</Label>
               <div className="relative">
                 <Input
                   id="adm-pass"
@@ -724,7 +802,7 @@ export default function AuthPage() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Nhập mật khẩu Admin"
+                  placeholder="Nhập mật khẩu Quản trị viên"
                   className="h-10 pr-10"
                 />
                 <button
@@ -740,10 +818,10 @@ export default function AuthPage() {
 
             <Button
               type="submit"
-              className="w-full h-10 mt-2 text-white bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700"
+              className="w-full h-10 mt-2 text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700"
               disabled={busy}
             >
-              {busy && <Loader2 className="size-4 mr-2 animate-spin" />} Đăng nhập quyền Quản trị viên
+              {busy && <Loader2 className="size-4 mr-2 animate-spin" />} Đăng nhập Quản trị viên (Super Admin)
             </Button>
           </form>
         )}
