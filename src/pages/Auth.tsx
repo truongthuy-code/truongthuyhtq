@@ -419,19 +419,25 @@ export default function AuthPage() {
         });
 
         const payload = await resp.json().catch(() => null);
+        const errText = String(payload?.error || "");
+        const isGatewayOrKeyError = /invalid api key|invalid jwt|no api key|apikey/i.test(errText);
+
         if (resp.ok && payload?.ok) {
           registeredViaServer = true;
           registeredUserId = payload.userId || null;
-        } else if (resp.status >= 400 && resp.status < 500 && payload?.error) {
+        } else if (
+          !isGatewayOrKeyError &&
+          (resp.status === 403 || resp.status === 409 || resp.status === 422 || (resp.status === 400 && errText))
+        ) {
           setBusy(false);
-          toast.error(payload.error);
+          toast.error(errText);
           return;
         }
       } catch {
         // Network / offline fallback handled below
       }
 
-      // 2. Fallback path if server endpoint unavailable in offline mode
+      // 2. Fallback path if server endpoint unavailable or returned gateway/API key error
       if (!registeredViaServer) {
         const { data: sbData, error: sbErr } = await supabase.auth.signUp({
           email: normEmail,
@@ -448,12 +454,36 @@ export default function AuthPage() {
         });
         if (sbErr) {
           setBusy(false);
-          toast.error(sbErr.message || "Không thể đăng ký tài khoản.");
+          const rawMsg = sbErr.message || "Không thể đăng ký tài khoản.";
+          if (/already|registered/i.test(rawMsg)) {
+            toast.error("Email này đã được đăng ký trước đó.");
+          } else if (/invalid api key/i.test(rawMsg)) {
+            toast.error(
+              "Lỗi cấu hình kết nối Supabase (API key không hợp lệ). Vui lòng kiểm tra biến môi trường VITE_SUPABASE_URL và VITE_SUPABASE_PUBLISHABLE_KEY."
+            );
+          } else {
+            toast.error(rawMsg);
+          }
           return;
         }
         registeredUserId = sbData?.user?.id || null;
         // CRITICAL: Never allow newly registered teacher to remain signed in before Super Admin approval!
         await supabase.auth.signOut().catch(() => {});
+
+        // Best-effort notification to Super Admin via Edge Function
+        try {
+          await supabase.functions.invoke("teacher-register-notify", {
+            body: {
+              eventType: "TEACHER_REGISTERED",
+              teacherName: fullName.trim(),
+              teacherEmail: normEmail,
+              teacherUsername: normUsername,
+              teacherPhone: signupPhone.trim(),
+              teacherSchool: signupSchool.trim() || "Trường THPT",
+              teacherSubject: subjectName,
+            },
+          });
+        } catch {}
       }
 
       const newTeacher: TeacherUser = {

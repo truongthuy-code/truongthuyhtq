@@ -249,10 +249,11 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
     if (apiRes?.ok && Array.isArray(apiRes.registrations)) {
       for (const r of apiRes.registrations) {
         if (isSuperAdminEmail(r.email)) continue;
+        const uid = r.user_id || r.teacher_id || r.id;
         const status = String(r.status || "PENDING").toUpperCase() as AdminRegistrationRecord["status"];
-        regMap.set(r.teacher_id || r.id, {
+        regMap.set(uid, {
           id: r.id,
-          teacher_id: r.teacher_id || r.id,
+          teacher_id: uid,
           email: r.email || "",
           username: r.username || (r.email ? r.email.split("@")[0] : ""),
           full_name: r.full_name || "Giáo viên",
@@ -276,9 +277,10 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
         .order("created_at", { ascending: false });
       for (const r of regs || []) {
         if (isSuperAdminEmail(r.email)) continue;
-        regMap.set(r.teacher_id || r.id, {
+        const uid = r.user_id || r.teacher_id || r.id;
+        regMap.set(uid, {
           id: r.id,
-          teacher_id: r.teacher_id || r.id,
+          teacher_id: uid,
           email: r.email || "",
           username: r.username || "",
           full_name: r.full_name || "Giáo viên",
@@ -376,7 +378,7 @@ export async function approveTeacherAccount(
       return { ok: false, error: apiRes.error };
     }
     if (!apiRes && isUuid(teacherId)) {
-      await (supabase as any).rpc("admin_approve_teacher", { p_teacher_id: teacherId }).catch(() => {});
+      await (supabase as any).rpc("admin_approve_teacher", { p_user_id: teacherId }).catch(() => {});
     }
   } catch (err: any) {
     return { ok: false, error: err?.message || "Không thể phê duyệt tài khoản." };
@@ -412,7 +414,7 @@ export async function rejectTeacherAccount(
     }
     if (!apiRes && isUuid(teacherId)) {
       await (supabase as any)
-        .rpc("admin_reject_teacher", { p_teacher_id: teacherId, p_reason: cleanReason })
+        .rpc("admin_reject_teacher", { p_user_id: teacherId, p_reason: cleanReason })
         .catch(() => {});
     }
   } catch (err: any) {
@@ -450,7 +452,7 @@ export async function updateTeacherProfileByAdmin(
     if (!apiRes && isUuid(teacherId)) {
       await (supabase as any)
         .rpc("admin_update_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
           p_full_name: updates.fullName,
           p_username: updates.username,
           p_phone: updates.phone || "",
@@ -489,7 +491,7 @@ export async function lockTeacherAccount(
     if (apiRes && !apiRes.ok) return { ok: false, error: apiRes.error };
     if (!apiRes && isUuid(teacherId)) {
       await (supabase as any)
-        .rpc("admin_lock_teacher", { p_teacher_id: teacherId, p_reason: reason || null })
+        .rpc("admin_lock_teacher", { p_user_id: teacherId, p_reason: reason || null })
         .catch(() => {});
     }
   } catch (err: any) {
@@ -510,7 +512,7 @@ export async function unlockTeacherAccount(teacherId: string): Promise<{ ok: boo
     });
     if (apiRes && !apiRes.ok) return { ok: false, error: apiRes.error };
     if (!apiRes && isUuid(teacherId)) {
-      await (supabase as any).rpc("admin_unlock_teacher", { p_teacher_id: teacherId }).catch(() => {});
+      await (supabase as any).rpc("admin_unlock_teacher", { p_user_id: teacherId }).catch(() => {});
     }
   } catch (err: any) {
     return { ok: false, error: err?.message || "Không thể mở khóa tài khoản." };
@@ -535,7 +537,7 @@ export async function deleteTeacherAccount(
     if (apiRes && !apiRes.ok) return { ok: false, error: apiRes.error };
     if (!apiRes && isUuid(teacherId)) {
       await (supabase as any)
-        .rpc("admin_delete_teacher", { p_teacher_id: teacherId, p_preserve_data: preserveData })
+        .rpc("admin_delete_teacher", { p_user_id: teacherId, p_preserve_data: preserveData })
         .catch(() => {});
     }
   } catch (err: any) {
@@ -832,12 +834,19 @@ export async function deleteFolderByAdmin(
 }
 
 export async function fetchAdminActivityLogs(limit = 200): Promise<AdminActivityLogRecord[]> {
+  const normalizeLog = (row: any): AdminActivityLogRecord => ({
+    ...row,
+    actor_id: row.admin_id || row.actor_id || null,
+    actor_email: row.admin_email || row.actor_email || SUPER_ADMIN_EMAIL,
+    summary: row.detail || row.summary || "",
+  });
+
   try {
     const apiRes = await callAdminApi<{ ok: boolean; logs: AdminActivityLogRecord[] }>("list_activity_logs", {
       limit,
     });
     if (apiRes?.ok && Array.isArray(apiRes.logs)) {
-      return apiRes.logs;
+      return apiRes.logs.map(normalizeLog);
     }
   } catch {}
 
@@ -847,7 +856,7 @@ export async function fetchAdminActivityLogs(limit = 200): Promise<AdminActivity
       .select("*")
       .order("created_at", { ascending: false })
       .limit(limit);
-    return (data || []) as AdminActivityLogRecord[];
+    return (data || []).map(normalizeLog);
   } catch {
     return [];
   }

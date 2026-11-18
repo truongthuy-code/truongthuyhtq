@@ -1,17 +1,105 @@
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL =
-  process.env.VITE_SUPABASE_URL ||
-  process.env.SUPABASE_URL ||
-  "https://zhixpglctyfffpwamixv.supabase.co";
-
-const SUPABASE_ANON_KEY =
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
+const DEFAULT_SUPABASE_PROJECT_REF = "zhixpglctyfffpwamixv";
+const DEFAULT_SUPABASE_URL = `https://${DEFAULT_SUPABASE_PROJECT_REF}.supabase.co`;
+const DEFAULT_SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpoaXhwZ2xjdHlmZmZwd2FtaXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjAxODYsImV4cCI6MjA5MzUzNjE4Nn0.cjGa8bgMIVlJ_LrEbW_0qDYBxAC4ykhlgmxd9OFq1e4";
 
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const SUPER_ADMIN_EMAIL = "bichthuylqd@gmail.com";
+
+function cleanEnvValue(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  let val = raw.trim();
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+  }
+  if (!val || val === "undefined" || val === "null") return "";
+  return val;
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function isApiKeyGatewayError(errOrMsg: unknown): boolean {
+  const status = typeof errOrMsg === "object" && errOrMsg !== null ? Number((errOrMsg as any).status) : 0;
+  const msg =
+    typeof errOrMsg === "string"
+      ? errOrMsg
+      : typeof errOrMsg === "object" && errOrMsg !== null
+        ? String((errOrMsg as any).message || (errOrMsg as any).error_description || (errOrMsg as any).msg || "")
+        : "";
+  const lower = msg.toLowerCase();
+  if (status === 401 && !lower.includes("invalid login credentials")) return true;
+  return (
+    lower.includes("invalid api key") ||
+    lower.includes("no api key found") ||
+    lower.includes("invalid jwt") ||
+    lower.includes("apikey")
+  );
+}
+
+function resolveAdminSupabaseEnv(env: Record<string, string | undefined> = process.env) {
+  const rawUrl =
+    cleanEnvValue(env.VITE_SUPABASE_URL) ||
+    cleanEnvValue(env.SUPABASE_URL) ||
+    cleanEnvValue(env.NEXT_PUBLIC_SUPABASE_URL);
+
+  const supabaseUrl =
+    rawUrl && /^https?:\/\/[^/\s]+/i.test(rawUrl) ? rawUrl.replace(/\/+$/, "") : DEFAULT_SUPABASE_URL;
+
+  const urlMatch = supabaseUrl.match(/^https?:\/\/([a-z0-9-]+)\.supabase\.co/i);
+  const projectRef = urlMatch?.[1] || "";
+
+  const rawAnon =
+    cleanEnvValue(env.VITE_SUPABASE_PUBLISHABLE_KEY) ||
+    cleanEnvValue(env.VITE_SUPABASE_ANON_KEY) ||
+    cleanEnvValue(env.SUPABASE_PUBLISHABLE_KEY) ||
+    cleanEnvValue(env.SUPABASE_ANON_KEY);
+
+  let anonKey = rawAnon;
+  let anonInvalid = !anonKey || /\s/.test(anonKey) || anonKey.startsWith("sb_secret_") || anonKey.startsWith("sbp_");
+  if (!anonInvalid && anonKey.startsWith("eyJ")) {
+    const payload = decodeJwtPayload(anonKey);
+    if (!payload || payload.role === "service_role" || (projectRef && payload.ref && payload.ref !== projectRef)) {
+      anonInvalid = true;
+    }
+  } else if (!anonInvalid && !anonKey.startsWith("sb_publishable_")) {
+    anonInvalid = true;
+  }
+
+  if (anonInvalid) {
+    anonKey =
+      projectRef === DEFAULT_SUPABASE_PROJECT_REF || !projectRef
+        ? DEFAULT_SUPABASE_ANON_KEY
+        : rawAnon || DEFAULT_SUPABASE_ANON_KEY;
+  }
+
+  const rawService =
+    cleanEnvValue(env.SUPABASE_SERVICE_ROLE_KEY) || cleanEnvValue(env.SUPABASE_SERVICE_KEY);
+  let serviceRoleKey = "";
+  if (rawService && !/\s/.test(rawService) && !rawService.startsWith("sb_publishable_") && !rawService.startsWith("sbp_")) {
+    if (rawService.startsWith("eyJ")) {
+      const payload = decodeJwtPayload(rawService);
+      if (payload && (!payload.role || payload.role === "service_role") && (!projectRef || !payload.ref || payload.ref === projectRef)) {
+        serviceRoleKey = rawService;
+      }
+    } else if (rawService.startsWith("sb_secret_")) {
+      serviceRoleKey = rawService;
+    }
+  }
+
+  return { supabaseUrl, anonKey, serviceRoleKey, projectRef };
+}
 
 function setCors(res: any) {
   res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -30,15 +118,19 @@ function getBearerToken(req: any): string | null {
   return match?.[1]?.trim() || null;
 }
 
-async function notifyTeacherDecision(payload: {
-  type: "TEACHER_APPROVED" | "TEACHER_REJECTED";
-  teacherEmail?: string | null;
-  teacherName?: string | null;
-  reason?: string | null;
-}) {
+async function notifyTeacherDecision(
+  supabaseUrl: string,
+  anonKey: string,
+  payload: {
+    type: "TEACHER_APPROVED" | "TEACHER_REJECTED";
+    teacherEmail?: string | null;
+    teacherName?: string | null;
+    reason?: string | null;
+  }
+) {
   if (!payload.teacherEmail) return { sent: false };
-  const resendKey = process.env.RESEND_API_KEY || "";
-  const mailFrom = process.env.MAIL_FROM || "Hệ thống Trắc nghiệm <onboarding@resend.dev>";
+  const resendKey = cleanEnvValue(process.env.RESEND_API_KEY);
+  const mailFrom = cleanEnvValue(process.env.MAIL_FROM) || "Hệ thống Trắc nghiệm <onboarding@resend.dev>";
 
   if (resendKey) {
     try {
@@ -65,14 +157,21 @@ async function notifyTeacherDecision(payload: {
   }
 
   try {
-    await fetch(`${SUPABASE_URL}/functions/v1/teacher-register-notify`, {
+    await fetch(`${supabaseUrl}/functions/v1/teacher-register-notify`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY,
-        ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        eventType: payload.type,
+        type: payload.type,
+        teacherEmail: payload.teacherEmail,
+        teacherName: payload.teacherName,
+        rejectionReason: payload.reason,
+        reason: payload.reason,
+      }),
     });
   } catch {}
   return { sent: false };
@@ -94,13 +193,14 @@ async function writeAuditLog(
 ) {
   try {
     await sb.from("admin_activity_logs").insert({
-      actor_id: actor.id,
-      actor_email: actor.email,
+      admin_id: actor.id,
+      admin_email: actor.email,
       action: entry.action,
       target_type: entry.targetType,
       target_id: entry.targetId || null,
       target_label: entry.targetLabel || null,
-      summary: entry.summary || null,
+      detail: entry.summary || null,
+      outcome: "success",
       before_data: entry.beforeData ?? null,
       after_data: entry.afterData ?? null,
       metadata: entry.metadata ?? {},
@@ -115,27 +215,56 @@ export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
+    const { supabaseUrl, anonKey: initialAnonKey, serviceRoleKey, projectRef } = resolveAdminSupabaseEnv(
+      process.env
+    );
+    let activeAnonKey = initialAnonKey;
+
     const token = getBearerToken(req);
     if (!token) {
       return res.status(401).json({ ok: false, error: "Chưa xác thực phiên đăng nhập Quản trị viên." });
     }
 
-    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    let callerClient = createClient(supabaseUrl, activeAnonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const { data: userData, error: userErr } = await callerClient.auth.getUser(token);
+    let { data: userData, error: userErr } = await callerClient.auth.getUser(token);
+    if (
+      userErr &&
+      isApiKeyGatewayError(userErr) &&
+      (projectRef === DEFAULT_SUPABASE_PROJECT_REF || !projectRef) &&
+      activeAnonKey !== DEFAULT_SUPABASE_ANON_KEY
+    ) {
+      activeAnonKey = DEFAULT_SUPABASE_ANON_KEY;
+      callerClient = createClient(DEFAULT_SUPABASE_URL, activeAnonKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      const retry = await callerClient.auth.getUser(token);
+      userData = retry.data;
+      userErr = retry.error;
+    }
+
     const caller = userData?.user;
     if (userErr || !caller) {
       return res.status(401).json({ ok: false, error: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn." });
     }
 
-    const serviceClient = SUPABASE_SERVICE_ROLE_KEY
-      ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    let serviceClient = serviceRoleKey
+      ? createClient(supabaseUrl, serviceRoleKey, {
           auth: { autoRefreshToken: false, persistSession: false },
         })
       : null;
+
+    if (serviceClient) {
+      const probe = await serviceClient.from("profiles").select("id").limit(1);
+      if (probe.error && isApiKeyGatewayError(probe.error)) {
+        console.warn("[admin-api] SUPABASE_SERVICE_ROLE_KEY rejected by Supabase; falling back to Super Admin caller session.");
+        serviceClient = null;
+      }
+    }
 
     const db = serviceClient || callerClient;
 
@@ -165,7 +294,7 @@ export default async function handler(req: any, res: any) {
       case "overview": {
         const [profilesRes, regsRes, examsRes, foldersRes, subsRes] = await Promise.all([
           db.from("profiles").select("id, email, role, status, approval_status, is_deleted"),
-          db.from("teacher_registrations").select("id, status"),
+          db.from("teacher_registrations").select("id, user_id, status"),
           db.from("exams").select("id, is_deleted, manual_closed"),
           db.from("exam_folders").select("id, is_deleted"),
           db.from("submissions").select("id"),
@@ -184,7 +313,7 @@ export default async function handler(req: any, res: any) {
             .filter((p: any) => p.approval_status === "PENDING" || p.status === "pending")
             .map((p: any) => p.id)
         );
-        regs.filter((r: any) => r.status === "PENDING").forEach((r: any) => pendingIds.add(r.id));
+        regs.filter((r: any) => r.status === "PENDING").forEach((r: any) => pendingIds.add(r.user_id || r.id));
 
         const approvedCount = profiles.filter(
           (p: any) => (p.approval_status === "APPROVED" || p.status === "active") && p.status !== "locked"
@@ -219,7 +348,8 @@ export default async function handler(req: any, res: any) {
 
         const regMap = new Map<string, any>();
         for (const r of regsRes.data || []) {
-          regMap.set(r.teacher_id || r.id, r);
+          const uid = r.user_id || r.teacher_id || r.id;
+          regMap.set(uid, { ...r, teacher_id: uid, user_id: uid });
         }
 
         for (const p of profRes.data || []) {
@@ -227,6 +357,7 @@ export default async function handler(req: any, res: any) {
           if (!regMap.has(p.id)) {
             regMap.set(p.id, {
               id: p.id,
+              user_id: p.id,
               teacher_id: p.id,
               email: p.email,
               username: p.username || (p.email ? p.email.split("@")[0] : ""),
@@ -253,7 +384,7 @@ export default async function handler(req: any, res: any) {
         if (!teacherId) return res.status(400).json({ ok: false, error: "Thiếu ID giáo viên." });
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_approve_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
         });
 
         let targetProfile: any = null;
@@ -285,7 +416,7 @@ export default async function handler(req: any, res: any) {
               rejection_reason: null,
               updated_at: nowIso,
             })
-            .eq("teacher_id", teacherId);
+            .eq("user_id", teacherId);
           await writeAuditLog(serviceClient, actor, {
             action: "APPROVE_TEACHER",
             targetType: "teacher",
@@ -310,7 +441,7 @@ export default async function handler(req: any, res: any) {
           targetProfile = prof;
         }
 
-        await notifyTeacherDecision({
+        await notifyTeacherDecision(supabaseUrl, activeAnonKey, {
           type: "TEACHER_APPROVED",
           teacherEmail: targetProfile?.email || body.email,
           teacherName: targetProfile?.full_name || body.fullName,
@@ -325,7 +456,7 @@ export default async function handler(req: any, res: any) {
         if (!teacherId) return res.status(400).json({ ok: false, error: "Thiếu ID giáo viên." });
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_reject_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
           p_reason: reason,
         });
 
@@ -360,7 +491,7 @@ export default async function handler(req: any, res: any) {
               reviewed_at: nowIso,
               updated_at: nowIso,
             })
-            .eq("teacher_id", teacherId);
+            .eq("user_id", teacherId);
           await writeAuditLog(serviceClient, actor, {
             action: "REJECT_TEACHER",
             targetType: "teacher",
@@ -374,7 +505,7 @@ export default async function handler(req: any, res: any) {
           targetProfile = prof;
         }
 
-        await notifyTeacherDecision({
+        await notifyTeacherDecision(supabaseUrl, activeAnonKey, {
           type: "TEACHER_REJECTED",
           teacherEmail: targetProfile?.email || body.email,
           teacherName: targetProfile?.full_name || body.fullName,
@@ -423,7 +554,7 @@ export default async function handler(req: any, res: any) {
         if (!teacherId) return res.status(400).json({ ok: false, error: "Thiếu ID giáo viên." });
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_update_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
           p_full_name: body.fullName ?? null,
           p_username: body.username ?? null,
           p_phone: body.phone ?? null,
@@ -471,7 +602,7 @@ export default async function handler(req: any, res: any) {
         }
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_lock_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
           p_reason: body.reason || null,
         });
 
@@ -512,7 +643,7 @@ export default async function handler(req: any, res: any) {
         if (!teacherId) return res.status(400).json({ ok: false, error: "Thiếu ID giáo viên." });
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_unlock_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
         });
 
         if (rpcErr || !rpcRes?.ok) {
@@ -556,7 +687,7 @@ export default async function handler(req: any, res: any) {
         }
 
         const { data: rpcRes, error: rpcErr } = await callerClient.rpc("admin_delete_teacher", {
-          p_teacher_id: teacherId,
+          p_user_id: teacherId,
           p_preserve_data: preserveData,
         });
 
@@ -586,7 +717,7 @@ export default async function handler(req: any, res: any) {
               await serviceClient.from("exams").delete().in("id", examIds);
             }
             await serviceClient.from("exam_folders").delete().eq("teacher_id", teacherId);
-            await serviceClient.from("teacher_registrations").delete().eq("teacher_id", teacherId);
+            await serviceClient.from("teacher_registrations").delete().eq("user_id", teacherId);
             await serviceClient.from("user_roles").delete().eq("user_id", teacherId);
             await serviceClient.from("profiles").delete().eq("id", teacherId);
             await serviceClient.auth.admin.deleteUser(teacherId).catch(() => {});
@@ -860,7 +991,13 @@ export default async function handler(req: any, res: any) {
           .order("created_at", { ascending: false })
           .limit(limit);
         if (error) return res.status(200).json({ ok: true, logs: [] });
-        return res.status(200).json({ ok: true, logs: data || [] });
+        const logs = (data || []).map((row: any) => ({
+          ...row,
+          actor_id: row.admin_id || row.actor_id || null,
+          actor_email: row.admin_email || row.actor_email || SUPER_ADMIN_EMAIL,
+          summary: row.detail || row.summary || "",
+        }));
+        return res.status(200).json({ ok: true, logs });
       }
 
       case "change_super_admin_password": {

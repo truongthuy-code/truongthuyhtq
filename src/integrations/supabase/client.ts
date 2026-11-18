@@ -3,8 +3,91 @@ import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://zhixpglctyfffpwamixv.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpoaXhwZ2xjdHlmZmZwd2FtaXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjAxODYsImV4cCI6MjA5MzUzNjE4Nn0.cjGa8bgMIVlJ_LrEbW_0qDYBxAC4ykhlgmxd9OFq1e4';
+const DEFAULT_SUPABASE_PROJECT_REF = 'zhixpglctyfffpwamixv';
+const DEFAULT_SUPABASE_URL = `https://${DEFAULT_SUPABASE_PROJECT_REF}.supabase.co`;
+const DEFAULT_SUPABASE_PUBLISHABLE_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpoaXhwZ2xjdHlmZmZwd2FtaXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjAxODYsImV4cCI6MjA5MzUzNjE4Nn0.cjGa8bgMIVlJ_LrEbW_0qDYBxAC4ykhlgmxd9OFq1e4';
+
+function cleanEnvValue(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  let val = raw.trim();
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+  }
+  if (!val || val === 'undefined' || val === 'null') return '';
+  return val;
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const json = atob(padded);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+export function resolveClientSupabaseConfig(env: Record<string, any> = import.meta.env || {}) {
+  const rawUrl = cleanEnvValue(env.VITE_SUPABASE_URL);
+  const supabaseUrl =
+    rawUrl && /^https?:\/\/[^/\s]+/i.test(rawUrl)
+      ? rawUrl.replace(/\/+$/, '')
+      : DEFAULT_SUPABASE_URL;
+
+  const urlHostMatch = supabaseUrl.match(/^https?:\/\/([a-z0-9-]+)\.supabase\.co/i);
+  const urlProjectRef = urlHostMatch?.[1] || '';
+
+  const rawKey =
+    cleanEnvValue(env.VITE_SUPABASE_PUBLISHABLE_KEY) || cleanEnvValue(env.VITE_SUPABASE_ANON_KEY);
+
+  let publishableKey = rawKey;
+  let invalidReason: string | null = null;
+
+  if (!publishableKey) {
+    invalidReason = 'missing_key';
+  } else if (/\s/.test(publishableKey)) {
+    invalidReason = 'whitespace_in_key';
+  } else if (publishableKey.startsWith('sb_secret_') || publishableKey.startsWith('sbp_')) {
+    invalidReason = 'non_public_key_prefix';
+  } else if (publishableKey.startsWith('eyJ')) {
+    const payload = decodeJwtPayload(publishableKey);
+    if (!payload) {
+      invalidReason = 'malformed_jwt';
+    } else if (payload.role === 'service_role') {
+      invalidReason = 'service_role_in_client';
+    } else if (urlProjectRef && payload.ref && payload.ref !== urlProjectRef) {
+      invalidReason = 'project_ref_mismatch';
+    }
+  } else if (!publishableKey.startsWith('sb_publishable_')) {
+    invalidReason = 'unrecognized_key_format';
+  }
+
+  if (invalidReason) {
+    if (invalidReason !== 'missing_key') {
+      console.warn(
+        `[supabase/client] Ignored invalid VITE_SUPABASE_PUBLISHABLE_KEY (${invalidReason}); using verified project anon key.`
+      );
+    }
+    publishableKey =
+      urlProjectRef === DEFAULT_SUPABASE_PROJECT_REF || !urlProjectRef
+        ? DEFAULT_SUPABASE_PUBLISHABLE_KEY
+        : rawKey || DEFAULT_SUPABASE_PUBLISHABLE_KEY;
+  }
+
+  return {
+    supabaseUrl,
+    publishableKey,
+    usedFallbackKey: publishableKey === DEFAULT_SUPABASE_PUBLISHABLE_KEY && rawKey !== DEFAULT_SUPABASE_PUBLISHABLE_KEY,
+  };
+}
+
+const resolvedConfig = resolveClientSupabaseConfig();
+const SUPABASE_URL = resolvedConfig.supabaseUrl;
+const SUPABASE_PUBLISHABLE_KEY = resolvedConfig.publishableKey;
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
