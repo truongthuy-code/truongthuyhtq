@@ -1,4 +1,9 @@
 import { supabase } from "@/integrations/supabase/client";
+import {
+  isCapabilityUnavailable,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 
 export type ExamAccessErrorType =
   | "validation"
@@ -254,6 +259,7 @@ export function logExamAccessEvent(params: {
 
   // Only persist non-trivial diagnostics or failures remotely when running in a real browser/RPC environment
   if (params.outcome === "success") return;
+  if (isCapabilityUnavailable("rpc:log_exam_access_event")) return;
 
   try {
     const rpcPromise = (supabase as any)?.rpc?.("log_exam_access_event", {
@@ -266,7 +272,16 @@ export function logExamAccessEvent(params: {
       p_app_env: origin,
     });
     if (rpcPromise && typeof rpcPromise.then === "function") {
-      rpcPromise.then(() => {}, () => {});
+      rpcPromise.then(
+        (res: any) => {
+          if (res?.error && isRpcNotFoundError(res.error)) {
+            markCapabilityUnavailable("rpc:log_exam_access_event");
+          } else if (!res?.error) {
+            markCapabilityAvailable("rpc:log_exam_access_event");
+          }
+        },
+        () => {}
+      );
     }
   } catch {}
 }

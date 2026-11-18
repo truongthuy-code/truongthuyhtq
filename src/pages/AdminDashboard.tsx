@@ -30,7 +30,9 @@ import {
   fetchAdminTeachers,
   fetchSystemExamsForAdmin,
   fetchAdminActivityLogs,
+  invalidateAdminServiceCache,
 } from "@/lib/adminService";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 import { SystemExam } from "@/lib/allExamsStorage";
 import { ExamFolder, getFolders } from "@/lib/folderStorage";
 import MandatoryPasswordChange from "@/components/MandatoryPasswordChange";
@@ -64,7 +66,7 @@ const EMPTY_METRICS: AdminOverviewMetrics = {
 };
 
 export default function AdminDashboard() {
-  const { user, isSuperAdmin, mustChangePassword, refreshProfile, signOut } = useAuth();
+  const { user, isSuperAdmin, mustChangePassword, refreshProfile, signOut, loading: authLoading } = useAuth();
 
   const [activeTab, setActiveTab] = useState<AdminTabKey>("overview");
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>("");
@@ -81,17 +83,33 @@ export default function AdminDashboard() {
 
   const loadAll = useCallback(async (isInitial = false) => {
     if (isInitial) setLoading(true);
-    else setRefreshing(true);
+    else {
+      setRefreshing(true);
+      invalidateAdminServiceCache();
+    }
 
     try {
-      const [ov, regs, tchs, sysExams, allFolders, actLogs] = await Promise.all([
-        fetchAdminOverview(),
-        fetchAdminRegistrations(),
-        fetchAdminTeachers(false),
-        fetchSystemExamsForAdmin(),
-        getFolders(undefined, true),
-        fetchAdminActivityLogs(250),
-      ]);
+      const [regs, tchs, sysExams, allFolders, actLogs] = await withRequestTimeout(
+        Promise.all([
+          fetchAdminRegistrations(),
+          fetchAdminTeachers(false),
+          fetchSystemExamsForAdmin(),
+          getFolders(undefined, true),
+          fetchAdminActivityLogs(250),
+        ]),
+        15000,
+        "adminDashboard.loadAll"
+      );
+
+      const ov = await withRequestTimeout(
+        fetchAdminOverview({
+          teachers: tchs,
+          exams: sysExams.exams,
+          folders: allFolders,
+        }),
+        10000,
+        "adminDashboard.overview"
+      );
 
       setMetrics(ov);
       setRegistrations(regs);
@@ -114,10 +132,11 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    if (authLoading) return;
     if (isSuperAdmin && !mustChangePassword) {
       loadAll(true);
     }
-  }, [isSuperAdmin, mustChangePassword, loadAll]);
+  }, [authLoading, isSuperAdmin, mustChangePassword, loadAll]);
 
   if (!isSuperAdmin) {
     return (

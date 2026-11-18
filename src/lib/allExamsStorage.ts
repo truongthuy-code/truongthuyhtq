@@ -3,6 +3,13 @@ import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuth
 import { SAMPLE_EXAMS, SampleExamData } from "@/lib/sampleExams";
 import { getLocalAssignments, ExamAssignment } from "@/lib/examAssignments";
 import { getAllTeachers, TeacherUser, isUuid } from "@/lib/teacherStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingTableOrRpcError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 
 export interface SystemExam {
   id: string;
@@ -260,153 +267,22 @@ export function deleteUnifiedExamFromLocal(examId: string) {
 }
 
 /**
- * Fetch all exams across the system for Super Admin.
- * Combines:
- * 1. Supabase database records (cloud)
- * 2. Local assignments cache (teacher-created assignments)
- * 3. Local system exam registry
- * 4. Sample verified exams
- *
- * Ensures Super Admin sees 100% of all exams from all teachers with no empty states!
+ * Synchronously merges remote system exams with local registry, local assignments, and built-in sample exams.
+ * Used when `/api/admin` already fetched the authoritative remote list so we avoid duplicate Supabase queries.
  */
-export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam[]> {
-  // 1. Ensure active Supabase auth session
-  await ensureSupabaseSession(adminUser);
-
+export function mergeLocalExamsForAdmin(remoteExams: SystemExam[]): SystemExam[] {
   const examMap = new Map<string, SystemExam>();
-  const teachers = getAllTeachers();
-  const teacherMap = new Map<string, TeacherUser>();
-  teachers.forEach((t) => {
-    teacherMap.set(t.id, t);
-    if (t.username) teacherMap.set(t.username.toLowerCase(), t);
-    if (t.email) teacherMap.set(t.email.toLowerCase(), t);
-  });
-
-  // 2. Fetch from Supabase
-  try {
-    const { data: dbExams, error: dbErr } = await supabase
-      .from("exams")
-      .select(
-        "id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,teacher_name,school_name,subject_name,instant_feedback,lock_mode,auto_submit_on_close"
-      )
-      .order("created_at", { ascending: false });
-
-    if (!dbErr && Array.isArray(dbExams)) {
-      dbExams.forEach((e: any) => {
-        let tName = e.teacher_name;
-        let sName = e.school_name;
-        let subName = e.subject_name;
-
-        // Fallback to teacher lookup if missing
-        if ((!tName || tName === "Giáo viên") && e.created_by) {
-          const t = teacherMap.get(e.created_by);
-          if (t) {
-            tName = t.name;
-            sName = sName || t.school;
-            subName = subName || t.subject;
-          }
-        }
-
-        examMap.set(e.id, {
-          ...e,
-          allow_back: e.allow_back !== false && e.lock_mode?.allow_back !== false && e.team_config?.allow_back !== false,
-          teacher_name: tName || "Giáo viên",
-          school_name: sName || "",
-          subject_name: subName || "Chưa phân loại",
-        });
-      });
+  for (const ex of remoteExams || []) {
+    if (ex?.id) {
+      examMap.set(ex.id, ex);
     }
-  } catch (err) {
-    console.warn("Error fetching exams from Supabase for admin:", err);
   }
 
-  // 2.5. Fetch all registered teacher exams from Supabase public registry (schools table)
-  // Ensures Admin can view, edit, and manage all exams created by all teachers
-  try {
-    const { data: schRows } = await supabase
-      .from("schools")
-      .select("name_key, name")
-      .like("name_key", "assign_code:%");
-
-    if (schRows && schRows.length > 0) {
-      const missingExamIds = new Set<string>();
-      const metaMap = new Map<string, any>();
-
-      for (const s of schRows) {
-        try {
-          const p = JSON.parse(s.name);
-          if (p.examId && isUuid(p.examId) && !examMap.has(p.examId)) {
-            missingExamIds.add(p.examId);
-            if (!metaMap.has(p.examId)) {
-              metaMap.set(p.examId, p);
-            }
-          }
-        } catch {}
-      }
-
-      if (missingExamIds.size > 0) {
-        // Immediate baseline registration to guarantee 100% presence
-        for (const [examId, meta] of metaMap.entries()) {
-          if (!examMap.has(examId)) {
-            examMap.set(examId, {
-              id: examId,
-              title: meta.title || "Bài thi",
-              teacher_name: meta.teacherName || "Giáo viên",
-              school_name: meta.schoolName || "",
-              subject_name: meta.subjectName || "Chưa phân loại",
-              duration_minutes: meta.durationMinutes || 45,
-              open_at: meta.openAt ?? null,
-              close_at: meta.closeAt ?? null,
-              created_at: meta.createdAt || new Date().toISOString(),
-              manual_closed: false,
-              display_mode: "standard",
-              questions: [],
-            });
-          }
-        }
-
-        // Fetch full exam content with questions via public get_exam_for_student RPC
-        const fetchedExams = await Promise.all(
-          Array.from(missingExamIds).map(async (examId) => {
-            try {
-              const { data: exData, error: exErr } = await supabase.rpc("get_exam_for_student", {
-                p_exam_id: examId,
-              });
-              if (!exErr && exData) {
-                const meta = metaMap.get(examId) || {};
-                return {
-                  ...meta,
-                  ...exData,
-                  id: examId,
-                  teacher_name: meta.teacherName || (exData as any).teacher_name || "Giáo viên",
-                  school_name: meta.schoolName || (exData as any).school_name || "",
-                  subject_name: meta.subjectName || (exData as any).subject_name || "Chưa phân loại",
-                  created_at: meta.createdAt || (exData as any).created_at || new Date().toISOString(),
-                };
-              }
-            } catch {}
-            return null;
-          })
-        );
-
-        for (const fe of fetchedExams) {
-          if (fe && fe.id) {
-            examMap.set(fe.id, fe);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Error resolving cross-teacher exams for admin:", err);
-  }
-
-  // 3. Merge with local exams registry
   const localList = getLocalStoredExams();
   localList.forEach((e) => {
     if (!examMap.has(e.id)) {
       examMap.set(e.id, e);
     } else {
-      // Supabase record has priority, but preserve any local fields if missing
       const existing = examMap.get(e.id)!;
       examMap.set(e.id, {
         ...e,
@@ -416,7 +292,6 @@ export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam
     }
   });
 
-  // 4. Merge with local assignments cache (if an exam was saved locally by a teacher)
   const assignments = getLocalAssignments();
   assignments.forEach((a) => {
     if (a.examId && !examMap.has(a.examId)) {
@@ -437,7 +312,6 @@ export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam
     }
   });
 
-  // 5. Merge sample exams for completeness and testing
   SAMPLE_EXAMS.forEach((s) => {
     if (!examMap.has(s.id)) {
       examMap.set(s.id, {
@@ -463,10 +337,172 @@ export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam
   });
 
   const combined = Array.from(examMap.values());
-  // Sort descending by created_at
   combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return combined;
+}
 
-  // Cache back to local registry so offline works too
+/**
+ * Fetch all exams across the system for Super Admin.
+ * Combines:
+ * 1. Supabase database records (cloud)
+ * 2. Local assignments cache (teacher-created assignments)
+ * 3. Local system exam registry
+ * 4. Sample verified exams
+ *
+ * Ensures Super Admin sees 100% of all exams from all teachers with no empty states!
+ */
+export async function fetchAllExamsForAdmin(adminUser?: any): Promise<SystemExam[]> {
+  // 1. Ensure active Supabase auth session
+  await ensureSupabaseSession(adminUser);
+
+  const examMap = new Map<string, SystemExam>();
+  const teachers = getAllTeachers();
+  const teacherMap = new Map<string, TeacherUser>();
+  teachers.forEach((t) => {
+    teacherMap.set(t.id, t);
+    if (t.username) teacherMap.set(t.username.toLowerCase(), t);
+    if (t.email) teacherMap.set(t.email.toLowerCase(), t);
+  });
+
+  // 2. Fetch from Supabase
+  try {
+    const { data: dbExams, error: dbErr } = await withRequestTimeout<any>(
+      supabase
+        .from("exams")
+        .select(
+          "id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,teacher_name,school_name,subject_name,instant_feedback,lock_mode,auto_submit_on_close"
+        )
+        .order("created_at", { ascending: false }),
+      10000,
+      "allExamsStorage.fetchAllExamsForAdmin.exams"
+    );
+
+    if (!dbErr && Array.isArray(dbExams)) {
+      dbExams.forEach((e: any) => {
+        let tName = e.teacher_name;
+        let sName = e.school_name;
+        let subName = e.subject_name;
+
+        if ((!tName || tName === "Giáo viên") && e.created_by) {
+          const t = teacherMap.get(e.created_by);
+          if (t) {
+            tName = t.name;
+            sName = sName || t.school;
+            subName = subName || t.subject;
+          }
+        }
+
+        examMap.set(e.id, {
+          ...e,
+          allow_back: e.allow_back !== false && e.lock_mode?.allow_back !== false && e.team_config?.allow_back !== false,
+          teacher_name: tName || "Giáo viên",
+          school_name: sName || "",
+          subject_name: subName || "Chưa phân loại",
+        });
+      });
+    }
+  } catch (err) {
+    console.warn("Error fetching exams from Supabase for admin:", err);
+  }
+
+  // 2.5. Fetch all registered teacher exams from Supabase public registry (schools table)
+  try {
+    const { data: schRows } = await withRequestTimeout<any>(
+      supabase.from("schools").select("name_key, name").like("name_key", "assign_code:%"),
+      8000,
+      "allExamsStorage.fetchAllExamsForAdmin.schools"
+    );
+
+    if (schRows && schRows.length > 0) {
+      const missingExamIds = new Set<string>();
+      const metaMap = new Map<string, any>();
+
+      for (const s of schRows) {
+        try {
+          const p = JSON.parse(s.name);
+          if (p.examId && isUuid(p.examId) && !examMap.has(p.examId)) {
+            missingExamIds.add(p.examId);
+            if (!metaMap.has(p.examId)) {
+              metaMap.set(p.examId, p);
+            }
+          }
+        } catch {}
+      }
+
+      if (missingExamIds.size > 0) {
+        for (const [examId, meta] of metaMap.entries()) {
+          if (!examMap.has(examId)) {
+            examMap.set(examId, {
+              id: examId,
+              title: meta.title || "Bài thi",
+              teacher_name: meta.teacherName || "Giáo viên",
+              school_name: meta.schoolName || "",
+              subject_name: meta.subjectName || "Chưa phân loại",
+              duration_minutes: meta.durationMinutes || 45,
+              open_at: meta.openAt ?? null,
+              close_at: meta.closeAt ?? null,
+              created_at: meta.createdAt || new Date().toISOString(),
+              manual_closed: false,
+              display_mode: "standard",
+              questions: [],
+            });
+          }
+        }
+
+        // Fetch full exam content in bounded batches of 5 (skip if RPC unavailable)
+        if (!isCapabilityUnavailable("rpc:get_exam_for_student")) {
+          const missingArr = Array.from(missingExamIds);
+          const batchSize = 5;
+          for (let i = 0; i < missingArr.length; i += batchSize) {
+            if (isCapabilityUnavailable("rpc:get_exam_for_student")) break;
+            const batch = missingArr.slice(i, i + batchSize);
+            const fetchedBatch = await Promise.all(
+              batch.map(async (examId) => {
+                try {
+                  const { data: exData, error: exErr } = await withRequestTimeout<any>(
+                    supabase.rpc("get_exam_for_student", {
+                      p_exam_id: examId,
+                    }),
+                    6000,
+                    "allExamsStorage.getExamForStudent"
+                  );
+                  if (exErr && isMissingTableOrRpcError(exErr, "get_exam_for_student")) {
+                    markCapabilityUnavailable("rpc:get_exam_for_student");
+                    return null;
+                  }
+                  if (!exErr && exData) {
+                    markCapabilityAvailable("rpc:get_exam_for_student");
+                    const meta = metaMap.get(examId) || {};
+                    return {
+                      ...meta,
+                      ...exData,
+                      id: examId,
+                      teacher_name: meta.teacherName || (exData as any).teacher_name || "Giáo viên",
+                      school_name: meta.schoolName || (exData as any).school_name || "",
+                      subject_name: meta.subjectName || (exData as any).subject_name || "Chưa phân loại",
+                      created_at: meta.createdAt || (exData as any).created_at || new Date().toISOString(),
+                    };
+                  }
+                } catch {}
+                return null;
+              })
+            );
+
+            for (const fe of fetchedBatch) {
+              if (fe && fe.id) {
+                examMap.set(fe.id, fe);
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Error resolving cross-teacher exams for admin:", err);
+  }
+
+  const combined = mergeLocalExamsForAdmin(Array.from(examMap.values()));
+
   try {
     setLocalStoredExams(combined);
   } catch {}

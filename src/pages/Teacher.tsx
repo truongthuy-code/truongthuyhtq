@@ -44,6 +44,13 @@ import {
 import { ensureExamShortLink } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { ensureSupabaseSession, withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { isRequestTimeoutError, withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingColumnError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import { saveUnifiedExam } from "@/lib/allExamsStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
 import { sha256, encryptExamPassword } from "@/lib/examSecurity";
@@ -133,6 +140,7 @@ export default function Teacher() {
   const [schedule, setSchedule] = useState<Schedule>({ open_at: null, close_at: null, auto_submit_on_close: true });
   const [passwordConfig, setPasswordConfig] = useState<ExamPasswordConfig>({ requirePassword: false, password: "" });
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const pendingCreatedExamRef = useRef<{ id: string; code: string } | null>(null);
 
   const examCounts = useMemo(() => detectExamStructure(exam), [exam]);
@@ -319,7 +327,7 @@ export default function Teacher() {
   };
 
   const onCreate = async () => {
-    if (!exam || !title) return;
+    if (!exam || !title || savingRef.current) return;
     const currentUser = user;
     if (!currentUser) { toast.error("Bạn cần đăng nhập"); navigate("/auth"); return; }
 
@@ -352,94 +360,287 @@ export default function Teacher() {
       }
     }
 
+    savingRef.current = true;
     setSaving(true);
 
-    const finalScoring: ScoringConfig = isScale10Scoring(scoring)
-      ? {
-          ...reconcileScale10Scoring(exam, scoring),
-          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+    try {
+      const finalScoring: ScoringConfig = isScale10Scoring(scoring)
+        ? {
+            ...reconcileScale10Scoring(exam, scoring),
+            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+          }
+        : {
+            ...(scoring as any),
+            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+          };
+      const examToSave = attachQuestionScores(exam, finalScoring);
+
+      // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
+      let activeUserId = await withRequestTimeout(
+        ensureSupabaseSession(currentUser as any),
+        8000,
+        "teacher.ensureSupabaseSession"
+      );
+      if (!isUuid(activeUserId)) {
+        try {
+          const { data: authUserData } = await withRequestTimeout<any>(
+            supabase.auth.getUser(),
+            4500,
+            "teacher.getUser"
+          );
+          if (authUserData?.user?.id) {
+            activeUserId = authUserData.user.id;
+          }
+        } catch {}
+      }
+
+      let original_file_url: string | null = null;
+      let original_file_name: string | null = null;
+      let original_file_path: string | null = null;
+      if (originalFile) {
+        try {
+          const folder = (activeUserId || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
+          const path = `${folder}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
+          const up = await withRequestTimeout<any>(
+            supabase.storage.from("exam-files").upload(path, originalFile, {
+              contentType: originalFile.type || "application/octet-stream",
+              upsert: false,
+            }),
+            20000,
+            "teacher.uploadOriginalFile"
+          );
+          if (up.error) {
+            toast.error("Lỗi tải file gốc: " + up.error.message);
+          } else {
+            original_file_path = path;
+            original_file_name = originalFile.name;
+          }
+        } catch (upErr: any) {
+          toast.warning(
+            isRequestTimeoutError(upErr)
+              ? "Tải file gốc quá lâu, hệ thống tiếp tục lưu nội dung đề thi."
+              : "Không tải được file gốc lên kho lưu trữ, hệ thống vẫn tiếp tục tạo đề."
+          );
         }
-      : {
-          ...(scoring as any),
-          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-        };
-    const examToSave = attachQuestionScores(exam, finalScoring);
-
-    // Ensure active Supabase Auth session for PostgreSQL RLS & table permissions
-    let activeUserId = await ensureSupabaseSession(currentUser as any);
-    const { data: authUserData } = await supabase.auth.getUser();
-    if (authUserData?.user?.id) {
-      activeUserId = authUserData.user.id;
-    }
-
-    let original_file_url: string | null = null;
-    let original_file_name: string | null = null;
-    let original_file_path: string | null = null;
-    if (originalFile) {
-      const folder = (activeUserId || currentUser.id || "teacher").replace(/[^\w.\-]+/g, "_");
-      const path = `${folder}/${Date.now()}-${originalFile.name.replace(/[^\w.\-]+/g, "_")}`;
-      const up = await supabase.storage.from("exam-files").upload(path, originalFile, {
-        contentType: originalFile.type || "application/octet-stream",
-        upsert: false,
-      });
-      if (up.error) {
-        toast.error("Lỗi tải file gốc: " + up.error.message);
-      } else {
-        original_file_path = path;
-        original_file_name = originalFile.name;
       }
-    }
 
-    // Hash and encrypt exam password if enabled
-    const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
-      ? await sha256(passwordConfig.password.trim())
-      : "";
-    const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
-      ? encryptExamPassword(passwordConfig.password.trim(), "default")
-      : "";
+      // Hash and encrypt exam password if enabled
+      const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
+        ? await sha256(passwordConfig.password.trim())
+        : "";
+      const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
+        ? encryptExamPassword(passwordConfig.password.trim(), "default")
+        : "";
 
-    // BƯỚC 1, 2, 3: Lưu đề thi thành công vào Supabase và nhận UUID chính thức
-    // Nếu lần lưu trước đã tạo dòng exam trên Supabase nhưng sync mã bị lỗi mạng, tái sử dụng ID & mã cũ để không tạo trùng đề
-    const pendingDraft = pendingCreatedExamRef.current;
-    const examCode = pendingDraft?.code || await generateUniqueNumericExamCode();
-    const finalTeamConfig = {
-      ...(teamConfig || {}),
-      primary_code: examCode,
-    };
+      // BƯỚC 1, 2, 3: Lưu đề thi thành công vào Supabase và nhận UUID chính thức
+      const pendingDraft = pendingCreatedExamRef.current;
+      const examCode = pendingDraft?.code || await withRequestTimeout(
+        generateUniqueNumericExamCode(),
+        10000,
+        "teacher.generateExamCode"
+      );
+      const finalTeamConfig = {
+        ...(teamConfig || {}),
+        primary_code: examCode,
+      };
 
-    const { data, error } = await withSupabaseAuthRetry<{ id: string }>(async (uid) => {
-      // Prioritize the actual authenticated user id in current Supabase JWT to guarantee RLS with check
-      const currentAuthUser = (await supabase.auth.getUser()).data.user;
-      const verifiedUid = currentAuthUser?.id || (isUuid(uid) ? uid : (isUuid(currentUser?.id) ? currentUser.id : null));
+      let folderIdPersistedOnExam = false;
 
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[Exam Create Safe Debug]", {
-          authenticatedUserId: currentAuthUser?.id || null,
-          role: currentUser?.role || "teacher",
-          targetCreatedBy: verifiedUid,
+      const { data, error } = await withSupabaseAuthRetry<{ id: string }>(async (uid) => {
+        let verifiedUid = isUuid(uid)
+          ? uid
+          : isUuid(activeUserId)
+            ? activeUserId
+            : isUuid(currentUser?.id)
+              ? currentUser.id
+              : null;
+
+        if (!verifiedUid) {
+          try {
+            const currentAuthUser = (await withRequestTimeout<any>(supabase.auth.getUser(), 4500, "teacher.retryGetUser")).data?.user;
+            if (currentAuthUser?.id) verifiedUid = currentAuthUser.id;
+          } catch {}
+        }
+
+        const insertPayload: any = {
           title,
+          questions: examToSave as any,
+          duration_minutes: duration,
+          max_attempts: maxAttempts,
+          shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+          shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+          shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+          shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+          scoring: finalScoring as any,
+          allow_review: allowReview,
+          display_mode: displayMode,
+          instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
+          team_config: {
+            ...(finalTeamConfig || {}),
+            allow_back: displayMode === "quizizz" ? allowBack : true,
+          } as any,
+          lock_mode: {
+            ...(lockMode || {}),
+            allow_back: displayMode === "quizizz" ? allowBack : true,
+            enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+            min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+            has_password: passwordConfig.requirePassword,
+            require_password: passwordConfig.requirePassword,
+            password_hash: passHash,
+            encrypted_password: encPass,
+          } as any,
+          open_at: schedule.open_at,
+          close_at: schedule.close_at,
+          auto_submit_on_close: schedule.auto_submit_on_close,
+          original_file_url,
+          original_file_name,
+          original_file_path,
+          created_by: verifiedUid,
+          teacher_name: profile?.full_name || currentUser?.name || "Giáo viên",
+          school_name: profile?.school_name || currentUser?.school || "",
+          subject_name: profile?.subject_name || currentUser?.subject || "",
+        };
+
+        const canIncludeFolderId = Boolean(targetFolderId && !isCapabilityUnavailable("col:exams.folder_id"));
+        if (canIncludeFolderId) {
+          insertPayload.folder_id = targetFolderId;
+        }
+
+        if (pendingDraft?.id) {
+          const updPayload = { ...insertPayload };
+          delete updPayload.created_by;
+          let updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
+          if (canIncludeFolderId && updRes.error && isMissingColumnError(updRes.error, "folder_id")) {
+            markCapabilityUnavailable("col:exams.folder_id");
+            delete updPayload.folder_id;
+            updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
+          } else if (canIncludeFolderId && !updRes.error) {
+            markCapabilityAvailable("col:exams.folder_id");
+            folderIdPersistedOnExam = true;
+          }
+          if (!updRes.error && updRes.data?.id) {
+            return updRes;
+          }
+        }
+
+        let res = await supabase.from("exams").insert(insertPayload).select("id").single();
+        if (canIncludeFolderId && res.error && isMissingColumnError(res.error, "folder_id")) {
+          markCapabilityUnavailable("col:exams.folder_id");
+          delete insertPayload.folder_id;
+          res = await supabase.from("exams").insert(insertPayload).select("id").single();
+        } else if (canIncludeFolderId && !res.error) {
+          markCapabilityAvailable("col:exams.folder_id");
+          folderIdPersistedOnExam = true;
+        }
+        return res;
+      }, currentUser as any);
+
+      if (error || !data?.id) {
+        console.error("[Exam Create Error Safe Debug]", {
+          code: error?.code,
+          message: error?.message,
         });
+        toast.error("Lỗi lưu đề thi vào hệ thống: " + (error?.message || "Không thể tạo đề thi"));
+        return;
       }
 
-      const insertPayload: any = {
+      pendingCreatedExamRef.current = { id: data.id, code: examCode };
+
+      // BƯỚC 4, 5, 6: Lưu mã bài thi vào database và kiểm tra việc lưu mã thành công
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes({
+          id: data.id,
+          title,
+          duration_minutes: duration,
+          teacher_name: profile?.full_name || "Giáo viên",
+          school_name: profile?.school_name || "",
+          subject_name: profile?.subject_name || "",
+          open_at: schedule.open_at,
+          close_at: schedule.close_at,
+          team_config: finalTeamConfig as any,
+        }),
+        12000,
+        "teacher.syncExamAssignmentCodes"
+      );
+
+      if (!syncRes.success) {
+        toast.error("Lỗi đồng bộ mã bài thi lên máy chủ: " + (syncRes.error || "Không thể lưu mã bài thi"));
+        return;
+      }
+
+      const effectiveExamCode = syncRes.primaryCode || examCode;
+      const confirmedTeamConfig = {
+        ...(finalTeamConfig || {}),
+        primary_code: effectiveExamCode,
+      };
+
+      // BƯỚC 7, 8, 9: Sau khi dữ liệu đã tồn tại trên server mới lưu bộ nhớ đệm và chuyển sang trang chia sẻ
+      const createdExamPayload = {
+        id: data.id,
+        title,
+        duration_minutes: duration,
+        teacher_name: profile?.full_name || "Giáo viên",
+        school_name: profile?.school_name || "",
+        subject_name: profile?.subject_name || "",
+        open_at: schedule.open_at,
+        close_at: schedule.close_at,
+        display_mode: displayMode,
+        created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
+        team_config: confirmedTeamConfig as any,
+      };
+
+      let primaryShortCode: string | undefined;
+      try {
+        const shortLinkRes = await withRequestTimeout(
+          ensureExamShortLink({ exam: createdExamPayload }),
+          10000,
+          "teacher.ensureExamShortLink"
+        );
+        primaryShortCode = shortLinkRes?.shortCode;
+      } catch (slErr: any) {
+        toast.warning(slErr?.message || "Đề thi đã tạo nhưng link ngắn sẽ được đồng bộ lại ở trang chia sẻ.");
+      }
+
+      const primaryAssign: ExamAssignment = {
+        id: `primary_${data.id}`,
+        examId: data.id,
+        code: effectiveExamCode,
+        shortCode: primaryShortCode,
+        className: "Chung",
+        title,
+        teacherName: profile?.full_name || "Giáo viên",
+        schoolName: profile?.school_name || "",
+        subjectName: profile?.subject_name || "",
+        durationMinutes: duration,
+        openAt: schedule.open_at,
+        closeAt: schedule.close_at,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.id,
+      };
+      saveLocalAssignments([primaryAssign, ...getLocalAssignments().filter((a) => a.examId !== data.id)]);
+
+      saveUnifiedExam({
+        id: data.id,
         title,
         questions: examToSave as any,
         duration_minutes: duration,
-        max_attempts: maxAttempts,
-        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+        created_at: new Date().toISOString(),
+        created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
+        teacher_name: profile?.full_name || "Giáo viên",
+        school_name: profile?.school_name || "",
+        subject_name: profile?.subject_name || "",
+        manual_closed: false,
+        display_mode: displayMode,
+        allow_back: displayMode === "quizizz" ? allowBack : true,
+        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
         scoring: finalScoring as any,
         allow_review: allowReview,
-        display_mode: displayMode,
-        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-        team_config: {
-          ...(finalTeamConfig || {}),
-          allow_back: displayMode === "quizizz" ? allowBack : true,
-        } as any,
+        open_at: schedule.open_at,
+        close_at: schedule.close_at,
+        team_config: confirmedTeamConfig as any,
+        folder_id: targetFolderId || null,
         lock_mode: {
           ...(lockMode || {}),
           allow_back: displayMode === "quizizz" ? allowBack : true,
@@ -450,173 +651,28 @@ export default function Teacher() {
           password_hash: passHash,
           encrypted_password: encPass,
         } as any,
-        open_at: schedule.open_at,
-        close_at: schedule.close_at,
-        auto_submit_on_close: schedule.auto_submit_on_close,
-        original_file_url,
-        original_file_name,
-        original_file_path,
-        created_by: verifiedUid,
-        teacher_name: profile?.full_name || currentUser?.name || "Giáo viên",
-        school_name: profile?.school_name || currentUser?.school || "",
-        subject_name: profile?.subject_name || currentUser?.subject || "",
-      };
+      });
+
+      pendingCreatedExamRef.current = null;
 
       if (targetFolderId) {
-        insertPayload.folder_id = targetFolderId;
+        await moveExamToFolder(data.id, targetFolderId, {
+          localOnly: folderIdPersistedOnExam,
+        });
       }
 
-      if (pendingDraft?.id) {
-        const updPayload = { ...insertPayload };
-        delete updPayload.created_by;
-        let updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
-        if (
-          updRes.error &&
-          (updRes.error.code === "42703" || updRes.error.code === "PGRST204" || updRes.error.message?.includes("folder_id"))
-        ) {
-          delete updPayload.folder_id;
-          updRes = await supabase.from("exams").update(updPayload).eq("id", pendingDraft.id).select("id").single();
-        }
-        if (!updRes.error && updRes.data?.id) {
-          return updRes;
-        }
+      if (targetFolderName) {
+        toast.success(`Đã tạo đề thi thành công trong thư mục "${targetFolderName}"!`);
+      } else {
+        toast.success("Tạo đề thi và lưu mã bài thi thành công!");
       }
-
-      let res = await supabase.from("exams").insert(insertPayload).select("id").single();
-      // If error is code 42703/PGRST204 (folder_id column not created yet in remote Supabase), retry safely without folder_id in payload
-      if (
-        res.error &&
-        (res.error.code === "42703" || res.error.code === "PGRST204" || res.error.message?.includes("folder_id"))
-      ) {
-        delete insertPayload.folder_id;
-        res = await supabase.from("exams").insert(insertPayload).select("id").single();
-      }
-      return res;
-    }, currentUser as any);
-
-    if (error || !data?.id) {
+      navigate(`/exam/${data.id}/share${targetFolderId ? `?folder=${targetFolderId}` : ""}`);
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tạo đề thi, vui lòng thử lại.");
+    } finally {
+      savingRef.current = false;
       setSaving(false);
-      console.error("[Exam Create Error Safe Debug]", {
-        code: error?.code,
-        message: error?.message,
-      });
-      toast.error("Lỗi lưu đề thi vào hệ thống: " + (error?.message || "Không thể tạo đề thi"));
-      return;
     }
-
-    pendingCreatedExamRef.current = { id: data.id, code: examCode };
-
-    // BƯỚC 4, 5, 6: Lưu mã bài thi vào database và kiểm tra việc lưu mã thành công
-    const syncRes = await syncExamAssignmentCodes({
-      id: data.id,
-      title,
-      duration_minutes: duration,
-      teacher_name: profile?.full_name || "Giáo viên",
-      school_name: profile?.school_name || "",
-      subject_name: profile?.subject_name || "",
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      team_config: finalTeamConfig as any,
-    });
-
-    if (!syncRes.success) {
-      setSaving(false);
-      toast.error("Lỗi đồng bộ mã bài thi lên máy chủ: " + (syncRes.error || "Không thể lưu mã bài thi"));
-      return;
-    }
-
-    const effectiveExamCode = syncRes.primaryCode || examCode;
-    const confirmedTeamConfig = {
-      ...(finalTeamConfig || {}),
-      primary_code: effectiveExamCode,
-    };
-
-    // BƯỚC 7, 8, 9: Sau khi dữ liệu đã tồn tại trên server mới lưu bộ nhớ đệm và chuyển sang trang chia sẻ
-    const createdExamPayload = {
-      id: data.id,
-      title,
-      duration_minutes: duration,
-      teacher_name: profile?.full_name || "Giáo viên",
-      school_name: profile?.school_name || "",
-      subject_name: profile?.subject_name || "",
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      display_mode: displayMode,
-      created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
-      team_config: confirmedTeamConfig as any,
-    };
-
-    let primaryShortCode: string | undefined;
-    try {
-      const shortLinkRes = await ensureExamShortLink({ exam: createdExamPayload });
-      primaryShortCode = shortLinkRes?.shortCode;
-    } catch (slErr: any) {
-      toast.warning(slErr?.message || "Đề thi đã tạo nhưng link ngắn sẽ được đồng bộ lại ở trang chia sẻ.");
-    }
-
-    const primaryAssign: ExamAssignment = {
-      id: `primary_${data.id}`,
-      examId: data.id,
-      code: effectiveExamCode,
-      shortCode: primaryShortCode,
-      className: "Chung",
-      title,
-      teacherName: profile?.full_name || "Giáo viên",
-      schoolName: profile?.school_name || "",
-      subjectName: profile?.subject_name || "",
-      durationMinutes: duration,
-      openAt: schedule.open_at,
-      closeAt: schedule.close_at,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser?.id,
-    };
-    saveLocalAssignments([primaryAssign, ...getLocalAssignments().filter((a) => a.examId !== data.id)]);
-
-    saveUnifiedExam({
-      id: data.id,
-      title,
-      questions: examToSave as any,
-      duration_minutes: duration,
-      created_at: new Date().toISOString(),
-      created_by: isUuid(currentUser?.id) ? currentUser?.id : null,
-      teacher_name: profile?.full_name || "Giáo viên",
-      school_name: profile?.school_name || "",
-      subject_name: profile?.subject_name || "",
-      manual_closed: false,
-      display_mode: displayMode,
-      allow_back: displayMode === "quizizz" ? allowBack : true,
-      instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-      scoring: finalScoring as any,
-      allow_review: allowReview,
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      team_config: confirmedTeamConfig as any,
-      folder_id: targetFolderId || null,
-      lock_mode: {
-        ...(lockMode || {}),
-        allow_back: displayMode === "quizizz" ? allowBack : true,
-        enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-        min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-        has_password: passwordConfig.requirePassword,
-        require_password: passwordConfig.requirePassword,
-        password_hash: passHash,
-        encrypted_password: encPass,
-      } as any,
-    });
-
-    pendingCreatedExamRef.current = null;
-
-    if (targetFolderId) {
-      await moveExamToFolder(data.id, targetFolderId);
-    }
-
-    setSaving(false);
-    if (targetFolderName) {
-      toast.success(`Đã tạo đề thi thành công trong thư mục "${targetFolderName}"!`);
-    } else {
-      toast.success("Tạo đề thi và lưu mã bài thi thành công!");
-    }
-    navigate(`/exam/${data.id}/share${targetFolderId ? `?folder=${targetFolderId}` : ""}`);
   };
 
 

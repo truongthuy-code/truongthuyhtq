@@ -25,12 +25,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
 import { getExamPublicOrigin } from "@/lib/examAssignments";
 import { formatScore, normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 const PIE_COLORS = ["hsl(var(--success))", "hsl(var(--destructive))"];
 const BAR_COLOR = "hsl(var(--primary))";
 
 export default function Reports() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [examId, setExamId] = useState<string>("all");
   const [subs, setSubs] = useState<any[]>([]);
@@ -40,35 +41,42 @@ export default function Reports() {
 
   const load = async () => {
     setLoading(true);
-    let exQ = supabase.from("exams").select("id,title,max_attempts,scoring,created_by").order("created_at", { ascending: false });
-    if (!isAdmin && user) {
-      if (isUuid(user.id)) {
-        exQ = exQ.eq("created_by", user.id);
+    try {
+      let exQ = supabase.from("exams").select("id,title,max_attempts,scoring,created_by").order("created_at", { ascending: false });
+      if (!isAdmin && user) {
+        if (isUuid(user.id)) {
+          exQ = exQ.eq("created_by", user.id);
+        }
       }
-    }
-    const { data: ex } = await exQ;
-    const loadedExams = ex || [];
-    setExams(loadedExams);
+      const { data: ex } = await withRequestTimeout<any>(exQ, 10000, "reports.loadExams");
+      const loadedExams = ex || [];
+      setExams(loadedExams);
 
-    const examIds = loadedExams.map((e: any) => e.id);
+      const examIds = loadedExams.map((e: any) => e.id);
 
-    let q = supabase.from("submissions").select("*").order("score", { ascending: false });
-    if (examId !== "all") {
-      q = q.eq("exam_id", examId);
-    } else if (!isAdmin && user) {
-      if (examIds.length > 0) {
-        q = q.in("exam_id", examIds);
-      } else {
-        setSubs([]);
-        setLoading(false);
-        return;
+      let q = supabase.from("submissions").select("*").order("score", { ascending: false });
+      if (examId !== "all") {
+        q = q.eq("exam_id", examId);
+      } else if (!isAdmin && user) {
+        if (examIds.length > 0) {
+          q = q.in("exam_id", examIds);
+        } else {
+          setSubs([]);
+          return;
+        }
       }
+      const { data: s } = await withRequestTimeout<any>(q, 10000, "reports.loadSubmissions");
+      setSubs(s || []);
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải báo cáo kết quả");
+    } finally {
+      setLoading(false);
     }
-    const { data: s } = await q;
-    setSubs(s || []);
-    setLoading(false);
   };
-  useEffect(() => { load(); }, [examId, isAdmin, user]);
+  useEffect(() => {
+    if (authLoading) return;
+    load();
+  }, [authLoading, examId, isAdmin, user]);
 
   const normalizedSubs = useMemo(() => {
     return subs

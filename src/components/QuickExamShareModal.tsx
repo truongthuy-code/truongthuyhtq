@@ -35,6 +35,7 @@ import {
   getExamPublicOrigin,
 } from "@/lib/examAssignments";
 import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 interface QuickExamShareModalProps {
   open: boolean;
@@ -55,6 +56,7 @@ export default function QuickExamShareModal({
   const [creatingAssign, setCreatingAssign] = useState(false);
   const [syncingCodes, setSyncingCodes] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const creatingAssignRef = useRef(false);
 
   const [selectedQR, setSelectedQR] = useState<{
     open: boolean;
@@ -74,49 +76,70 @@ export default function QuickExamShareModal({
     setSyncError(null);
     const errors: string[] = [];
 
-    const syncRes = await syncExamAssignmentCodes(targetExam);
-    if (!syncRes.success) {
-      errors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
-    }
-
-    const effectiveExam = syncRes.primaryCode
-      ? {
-          ...targetExam,
-          team_config: {
-            ...((targetExam.team_config as any) || {}),
-            primary_code: syncRes.primaryCode,
-          },
-        }
-      : targetExam;
-
-    if (syncRes.primaryCode) {
-      setPrimaryCode(syncRes.primaryCode);
-    }
-
     try {
-      const sl = await ensureExamShortLink({ exam: effectiveExam });
-      if (sl?.shortCode) setShortCode(sl.shortCode);
-    } catch (err: any) {
-      errors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
-    }
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes(targetExam),
+        12000,
+        "quickShare.syncExamAssignmentCodes"
+      );
+      if (!syncRes.success) {
+        errors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
+      }
 
-    const list = await getAssignmentsForExam(targetExam.id, effectiveExam);
-    const enrichedList = await Promise.all(
-      list.map(async (item) => {
-        if (item.shortCode) return item;
-        try {
-          const sl = await ensureExamShortLink({ exam: effectiveExam, assignment: item });
-          return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
-        } catch {
-          return item;
-        }
-      })
-    );
-    setAssignments(enrichedList);
-    if (errors.length > 0) {
-      setSyncError(errors[0]);
+      const effectiveExam = syncRes.primaryCode
+        ? {
+            ...targetExam,
+            team_config: {
+              ...((targetExam.team_config as any) || {}),
+              primary_code: syncRes.primaryCode,
+            },
+          }
+        : targetExam;
+
+      if (syncRes.primaryCode) {
+        setPrimaryCode(syncRes.primaryCode);
+      }
+
+      try {
+        const sl = await withRequestTimeout(
+          ensureExamShortLink({ exam: effectiveExam }),
+          10000,
+          "quickShare.ensureExamShortLink"
+        );
+        if (sl?.shortCode) setShortCode(sl.shortCode);
+      } catch (err: any) {
+        errors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
+      }
+
+      const list = await withRequestTimeout(
+        getAssignmentsForExam(targetExam.id, effectiveExam),
+        10000,
+        "quickShare.getAssignmentsForExam"
+      );
+      const enrichedList = await Promise.all(
+        list.map(async (item) => {
+          if (item.shortCode) return item;
+          try {
+            const sl = await withRequestTimeout(
+              ensureExamShortLink({ exam: effectiveExam, assignment: item }),
+              8000,
+              "quickShare.ensureAssignmentShortLink"
+            );
+            return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
+          } catch {
+            return item;
+          }
+        })
+      );
+      setAssignments(enrichedList);
+      if (errors.length > 0) {
+        setSyncError(errors[0]);
+      }
+    } catch (err: any) {
+      setSyncError(err?.message || "Quá thời gian đồng bộ mã bài thi và link ngắn.");
+    } finally {
+      setSyncingCodes(false);
     }
-    setSyncingCodes(false);
   };
 
   useEffect(() => {
@@ -228,34 +251,49 @@ export default function QuickExamShareModal({
 
   const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (creatingAssignRef.current) return;
     if (!newClass.trim()) {
       toast.error("Vui lòng nhập tên lớp hoặc đợt thi (ví dụ: 12A1)");
       return;
     }
+    creatingAssignRef.current = true;
     setCreatingAssign(true);
     try {
-      const created = await createAssignment({
-        exam,
-        className: newClass.trim(),
-        customCode: newCustomCode.trim() || undefined,
-      });
+      const created = await withRequestTimeout(
+        createAssignment({
+          exam,
+          className: newClass.trim(),
+          customCode: newCustomCode.trim() || undefined,
+        }),
+        12000,
+        "quickShare.createAssignment"
+      );
       setAssignments((prev) => [created, ...prev]);
       setNewClass("");
       setNewCustomCode("");
       toast.success(`Đã tạo mã giao bài [${created.code}] cho lớp ${created.className}!`);
     } catch (err: any) {
-      toast.error("Lỗi tạo lượt giao bài: " + err.message);
+      toast.error("Lỗi tạo lượt giao bài: " + (err?.message || "Không thể tạo lượt giao bài"));
     } finally {
+      creatingAssignRef.current = false;
       setCreatingAssign(false);
     }
   };
 
   const handleDeleteAssignment = async (assignId: string, assignCode: string) => {
     if (!confirm(`Bạn có chắc muốn xóa mã giao bài ${assignCode}?`)) return;
-    const ok = await deleteAssignment(exam.id, assignId);
-    if (ok) {
-      setAssignments((prev) => prev.filter((a) => a.id !== assignId));
-      toast.success("Đã xóa lượt giao bài");
+    try {
+      const ok = await withRequestTimeout(
+        deleteAssignment(exam.id, assignId),
+        10000,
+        "quickShare.deleteAssignment"
+      );
+      if (ok) {
+        setAssignments((prev) => prev.filter((a) => a.id !== assignId));
+        toast.success("Đã xóa lượt giao bài");
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể xóa lượt giao bài");
     }
   };
 

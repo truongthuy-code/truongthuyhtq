@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,13 @@ import TeamModeSettings, { DEFAULT_TEAM_CONFIG, TeamConfig, normalizeTeamConfig 
 import { useAuth } from "@/hooks/useAuth";
 import { syncExamAssignmentCodes } from "@/lib/examAssignments";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingColumnError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import { getLocalStoredExams, saveUnifiedExam } from "@/lib/allExamsStorage";
 import { getAllSubmissions } from "@/lib/studentStorage";
 import ExamPasswordSettings, { ExamPasswordConfig } from "@/components/ExamPasswordSettings";
@@ -39,6 +46,7 @@ export default function EditExam() {
   const { user, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [title, setTitle] = useState("");
   const [duration, setDuration] = useState(45);
   const [maxAttempts, setMaxAttempts] = useState(1);
@@ -78,119 +86,137 @@ export default function EditExam() {
 
   useEffect(() => {
     if (!id) return;
+    let active = true;
     (async () => {
-      let examData: any = null;
       try {
-        const { data, error } = await supabase.from("exams").select("*").eq("id", id).maybeSingle();
-        if (!error && data) examData = data;
-      } catch {}
-
-      if (!examData) {
-        // Fallback to local unified exams store
-        const localList = getLocalStoredExams();
-        const found = localList.find((e) => e.id === id);
-        if (found) examData = found;
-      }
-
-      if (!examData) {
-        toast.error("Không tải được đề thi");
-        navigate("/");
-        return;
-      }
-
-      if (!isAdmin && user && examData.created_by && examData.created_by !== user.id) {
-        toast.error("Bạn không có quyền chỉnh sửa đề thi của giáo viên khác");
-        navigate("/");
-        return;
-      }
-
-      let parsedQs = examData.questions;
-      if (typeof parsedQs === "string") {
+        let examData: any = null;
         try {
-          parsedQs = JSON.parse(parsedQs);
+          const { data, error } = await withRequestTimeout<any>(
+            supabase.from("exams").select("*").eq("id", id).maybeSingle(),
+            10000,
+            "editExam.loadExam"
+          );
+          if (!error && data) examData = data;
         } catch {}
-      }
-      setExamQuestions(parsedQs || null);
 
-      setTitle(examData.title);
-      setDuration(examData.duration_minutes || 45);
-      setMaxAttempts(examData.max_attempts || 1);
-      setShuffleQ({ p1: !!examData.shuffle_q_p1, p2: !!examData.shuffle_q_p2, p3: !!examData.shuffle_q_p3 });
-      setShuffleO({ p1: !!examData.shuffle_o_p1, p2: !!examData.shuffle_o_p2, p3: !!examData.shuffle_o_p3 });
-      const rawScoring = examData.scoring as any;
-      const loadedScoring = isScale10Scoring(rawScoring)
-        ? reconcileScale10Scoring(parsedQs, rawScoring)
-        : (rawScoring || DEFAULT_SCORING);
-      setScoring(loadedScoring);
-      setInitialScoringSnapshot(JSON.stringify(loadedScoring));
-
-      // Check existing submissions to safeguard published scoring configuration
-      let subCount = getAllSubmissions().filter((s) => s.examId === id).length;
-      try {
-        const { count } = await supabase
-          .from("submissions")
-          .select("id", { count: "exact", head: true })
-          .eq("exam_id", id);
-        if (typeof count === "number") {
-          subCount = Math.max(subCount, count);
+        if (!examData) {
+          // Fallback to local unified exams store
+          const localList = getLocalStoredExams();
+          const found = localList.find((e) => e.id === id);
+          if (found) examData = found;
         }
-      } catch {}
-      setExistingSubmissionsCount(subCount);
-      setAllowReview(!!examData.allow_review);
-      const savedEnableMin = !!(
-        (examData as any).enable_min_correct_percentage ??
-        (examData as any).lock_mode?.enable_min_correct_percentage ??
-        (examData as any).scoring?.enable_min_correct_percentage ??
-        false
-      );
-      setEnableMinCorrect(savedEnableMin);
 
-      const savedMinPct = Number(
-        (examData as any).min_correct_percentage_for_review ??
-        (examData as any).lock_mode?.min_correct_percentage_for_review ??
-        (examData as any).scoring?.min_correct_percentage_for_review ??
-        70
-      );
-      setMinCorrectPercentage(isNaN(savedMinPct) || savedMinPct <= 0 ? 70 : Math.max(0, Math.min(100, savedMinPct)));
-      setDisplayMode(((examData as any).display_mode as "standard" | "quizizz" | "team") || "standard");
-      setTeamConfig(normalizeTeamConfig((examData as any).team_config));
-      setInstantFeedback(!!(examData as any).instant_feedback);
-      setAllowBack(
-        (examData as any).allow_back !== false &&
-        (examData as any).lock_mode?.allow_back !== false &&
-        (examData as any).team_config?.allow_back !== false
-      );
-      setLockMode({ ...DEFAULT_LOCK, ...((examData as any).lock_mode || {}) });
-      setSchedule({
-        open_at: (examData as any).open_at ?? null,
-        close_at: (examData as any).close_at ?? null,
-        auto_submit_on_close: (examData as any).auto_submit_on_close ?? true,
-      });
+        if (!active) return;
 
-      const lockData = (examData as any).lock_mode || {};
-      const reqPass = !!(lockData.has_password || lockData.require_password || (examData as any).has_password);
-      const decPass = lockData.encrypted_password
-        ? decryptExamPassword(lockData.encrypted_password, id)
-        : (lockData.password || "");
-      setPasswordConfig({
-        requirePassword: reqPass,
-        password: decPass,
-      });
+        if (!examData) {
+          toast.error("Không tải được đề thi");
+          navigate("/");
+          return;
+        }
 
-      // Load folders
-      try {
-        const fList = await getFolders(user?.id, isAdmin);
-        setFolders(fList);
-        const fId = getFolderIdForExam(examData);
-        setSelectedFolderId(fId || "none");
-      } catch {}
+        if (!isAdmin && user && examData.created_by && examData.created_by !== user.id) {
+          toast.error("Bạn không có quyền chỉnh sửa đề thi của giáo viên khác");
+          navigate("/");
+          return;
+        }
 
-      setLoading(false);
+        let parsedQs = examData.questions;
+        if (typeof parsedQs === "string") {
+          try {
+            parsedQs = JSON.parse(parsedQs);
+          } catch {}
+        }
+        setExamQuestions(parsedQs || null);
+
+        setTitle(examData.title);
+        setDuration(examData.duration_minutes || 45);
+        setMaxAttempts(examData.max_attempts || 1);
+        setShuffleQ({ p1: !!examData.shuffle_q_p1, p2: !!examData.shuffle_q_p2, p3: !!examData.shuffle_q_p3 });
+        setShuffleO({ p1: !!examData.shuffle_o_p1, p2: !!examData.shuffle_o_p2, p3: !!examData.shuffle_o_p3 });
+        const rawScoring = examData.scoring as any;
+        const loadedScoring = isScale10Scoring(rawScoring)
+          ? reconcileScale10Scoring(parsedQs, rawScoring)
+          : (rawScoring || DEFAULT_SCORING);
+        setScoring(loadedScoring);
+        setInitialScoringSnapshot(JSON.stringify(loadedScoring));
+
+        // Check existing submissions to safeguard published scoring configuration
+        let subCount = getAllSubmissions().filter((s) => s.examId === id).length;
+        try {
+          const { count } = await withRequestTimeout<any>(
+            supabase
+              .from("submissions")
+              .select("id", { count: "exact", head: true })
+              .eq("exam_id", id),
+            8000,
+            "editExam.loadSubCount"
+          );
+          if (typeof count === "number") {
+            subCount = Math.max(subCount, count);
+          }
+        } catch {}
+        if (!active) return;
+        setExistingSubmissionsCount(subCount);
+        setAllowReview(!!examData.allow_review);
+        const savedEnableMin = !!(
+          (examData as any).enable_min_correct_percentage ??
+          (examData as any).lock_mode?.enable_min_correct_percentage ??
+          (examData as any).scoring?.enable_min_correct_percentage ??
+          false
+        );
+        setEnableMinCorrect(savedEnableMin);
+
+        const savedMinPct = Number(
+          (examData as any).min_correct_percentage_for_review ??
+          (examData as any).lock_mode?.min_correct_percentage_for_review ??
+          (examData as any).scoring?.min_correct_percentage_for_review ??
+          70
+        );
+        setMinCorrectPercentage(isNaN(savedMinPct) || savedMinPct <= 0 ? 70 : Math.max(0, Math.min(100, savedMinPct)));
+        setDisplayMode(((examData as any).display_mode as "standard" | "quizizz" | "team") || "standard");
+        setTeamConfig(normalizeTeamConfig((examData as any).team_config));
+        setInstantFeedback(!!(examData as any).instant_feedback);
+        setAllowBack(
+          (examData as any).allow_back !== false &&
+          (examData as any).lock_mode?.allow_back !== false &&
+          (examData as any).team_config?.allow_back !== false
+        );
+        setLockMode({ ...DEFAULT_LOCK, ...((examData as any).lock_mode || {}) });
+        setSchedule({
+          open_at: (examData as any).open_at ?? null,
+          close_at: (examData as any).close_at ?? null,
+          auto_submit_on_close: (examData as any).auto_submit_on_close ?? true,
+        });
+
+        const lockData = (examData as any).lock_mode || {};
+        const reqPass = !!(lockData.has_password || lockData.require_password || (examData as any).has_password);
+        const decPass = lockData.encrypted_password
+          ? decryptExamPassword(lockData.encrypted_password, id)
+          : (lockData.password || "");
+        setPasswordConfig({
+          requirePassword: reqPass,
+          password: decPass,
+        });
+
+        // Load folders
+        try {
+          const fList = await withRequestTimeout(getFolders(user?.id, isAdmin), 10000, "editExam.getFolders");
+          if (!active) return;
+          setFolders(fList);
+          const fId = getFolderIdForExam(examData);
+          setSelectedFolderId(fId || "none");
+        } catch {}
+      } finally {
+        if (active) setLoading(false);
+      }
     })();
+    return () => {
+      active = false;
+    };
   }, [id, navigate, isAdmin, user?.id]);
 
   const onSave = async () => {
-    if (!id) return;
+    if (!id || savingRef.current) return;
 
     if (passwordConfig.requirePassword && !passwordConfig.password.trim()) {
       toast.error("Vui lòng nhập mật khẩu bài thi trước khi lưu!");
@@ -207,111 +233,134 @@ export default function EditExam() {
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
 
-    const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
-      ? await sha256(passwordConfig.password.trim())
-      : "";
-    const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
-      ? encryptExamPassword(passwordConfig.password.trim(), id)
-      : "";
+    try {
+      const passHash = passwordConfig.requirePassword && passwordConfig.password.trim()
+        ? await sha256(passwordConfig.password.trim())
+        : "";
+      const encPass = passwordConfig.requirePassword && passwordConfig.password.trim()
+        ? encryptExamPassword(passwordConfig.password.trim(), id)
+        : "";
 
-    const baseScoring = isScale10Scoring(scoring)
-      ? reconcileScale10Scoring(examQuestions, scoring)
-      : (scoring as any);
+      const baseScoring = isScale10Scoring(scoring)
+        ? reconcileScale10Scoring(examQuestions, scoring)
+        : (scoring as any);
 
-    const finalScoring: any = {
-      ...baseScoring,
-      enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
-      min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-    };
-
-    const syncedQuestions =
-      examQuestions && isScale10Scoring(finalScoring) && !Array.isArray(examQuestions) && (examQuestions.partI || examQuestions.partII || examQuestions.partIII)
-        ? attachQuestionScores(examQuestions, finalScoring)
-        : examQuestions;
-
-    const updates: any = {
-      title,
-      duration_minutes: duration,
-      max_attempts: maxAttempts,
-      shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
-      shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
-      shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
-      shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
-      scoring: finalScoring,
-      ...(syncedQuestions ? { questions: syncedQuestions } : {}),
-      allow_review: allowReview,
-      display_mode: displayMode,
-      instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
-      team_config: {
-        ...(teamConfig || {}),
-        allow_back: displayMode === "quizizz" ? allowBack : true,
-      } as any,
-      lock_mode: {
-        ...(lockMode || {}),
-        allow_back: displayMode === "quizizz" ? allowBack : true,
+      const finalScoring: any = {
+        ...baseScoring,
         enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
         min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
-        has_password: passwordConfig.requirePassword,
-        require_password: passwordConfig.requirePassword,
-        password_hash: passHash,
-        encrypted_password: encPass,
-      } as any,
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      auto_submit_on_close: schedule.auto_submit_on_close,
-      folder_id: selectedFolderId === "none" ? null : selectedFolderId,
-    };
+      };
 
-    const targetFolderId = selectedFolderId === "none" ? null : selectedFolderId;
-    await moveExamToFolder(id, targetFolderId);
+      const syncedQuestions =
+        examQuestions && isScale10Scoring(finalScoring) && !Array.isArray(examQuestions) && (examQuestions.partI || examQuestions.partII || examQuestions.partIII)
+          ? attachQuestionScores(examQuestions, finalScoring)
+          : examQuestions;
 
-    try {
-      await withSupabaseAuthRetry(async () => {
-        let res = await supabase.from("exams").update(updates as any).eq("id", id);
-        if (
-          res.error &&
-          (res.error.code === "42703" || res.error.code === "PGRST204" || res.error.message?.includes("folder_id"))
-        ) {
-          const fallbackUpdates = { ...updates };
-          delete fallbackUpdates.folder_id;
-          res = await supabase.from("exams").update(fallbackUpdates as any).eq("id", id);
+      const targetFolderId = selectedFolderId === "none" ? null : selectedFolderId;
+      const canIncludeFolderId = !isCapabilityUnavailable("col:exams.folder_id");
+
+      const updates: any = {
+        title,
+        duration_minutes: duration,
+        max_attempts: maxAttempts,
+        shuffle_questions: shuffleQ.p1 || shuffleQ.p2 || shuffleQ.p3,
+        shuffle_options: shuffleO.p1 || shuffleO.p2 || shuffleO.p3,
+        shuffle_q_p1: shuffleQ.p1, shuffle_q_p2: shuffleQ.p2, shuffle_q_p3: shuffleQ.p3,
+        shuffle_o_p1: shuffleO.p1, shuffle_o_p2: shuffleO.p2, shuffle_o_p3: shuffleO.p3,
+        scoring: finalScoring,
+        ...(syncedQuestions ? { questions: syncedQuestions } : {}),
+        allow_review: allowReview,
+        display_mode: displayMode,
+        instant_feedback: (displayMode === "standard" || displayMode === "quizizz") ? instantFeedback : false,
+        team_config: {
+          ...(teamConfig || {}),
+          allow_back: displayMode === "quizizz" ? allowBack : true,
+        } as any,
+        lock_mode: {
+          ...(lockMode || {}),
+          allow_back: displayMode === "quizizz" ? allowBack : true,
+          enable_min_correct_percentage: displayMode === "standard" ? enableMinCorrect : false,
+          min_correct_percentage_for_review: displayMode === "standard" ? minCorrectPercentage : 0,
+          has_password: passwordConfig.requirePassword,
+          require_password: passwordConfig.requirePassword,
+          password_hash: passHash,
+          encrypted_password: encPass,
+        } as any,
+        open_at: schedule.open_at,
+        close_at: schedule.close_at,
+        auto_submit_on_close: schedule.auto_submit_on_close,
+        ...(canIncludeFolderId ? { folder_id: targetFolderId } : {}),
+      };
+
+      let folderIdPersistedOnExam = false;
+      let primaryUpdateFailed = false;
+      try {
+        const updResult = await withSupabaseAuthRetry(async () => {
+          let res = await supabase.from("exams").update(updates as any).eq("id", id);
+          if (canIncludeFolderId && res.error && isMissingColumnError(res.error, "folder_id")) {
+            markCapabilityUnavailable("col:exams.folder_id");
+            const fallbackUpdates = { ...updates };
+            delete fallbackUpdates.folder_id;
+            res = await supabase.from("exams").update(fallbackUpdates as any).eq("id", id);
+          } else if (canIncludeFolderId && !res.error) {
+            markCapabilityAvailable("col:exams.folder_id");
+            folderIdPersistedOnExam = true;
+          }
+          return res;
+        }, user as any);
+        if (updResult?.error) {
+          primaryUpdateFailed = true;
+          console.warn("Supabase update error:", updResult.error);
         }
-        return res;
-      }, user as any);
+      } catch (err: any) {
+        primaryUpdateFailed = true;
+        console.warn("Supabase update error:", err);
+      }
+
+      await moveExamToFolder(id, targetFolderId, {
+        localOnly: folderIdPersistedOnExam || primaryUpdateFailed,
+      });
+
+      // Save to unified local store as well
+      const localList = getLocalStoredExams();
+      const existing = localList.find((e) => e.id === id);
+      saveUnifiedExam({
+        ...(existing || { id, created_at: new Date().toISOString() }),
+        ...updates,
+        folder_id: targetFolderId,
+      } as any);
+
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes({
+          id,
+          title,
+          duration_minutes: duration,
+          teacher_name: existing?.teacher_name,
+          school_name: existing?.school_name,
+          subject_name: existing?.subject_name,
+          open_at: schedule.open_at,
+          close_at: schedule.close_at,
+          team_config: updates.team_config as any,
+        }),
+        12000,
+        "editExam.syncCodes"
+      );
+
+      if (!syncRes.success) {
+        toast.warning("Đã lưu cài đặt đề thi nhưng đồng bộ mã bài thi gặp lỗi: " + (syncRes.error || "Vui lòng kiểm tra lại ở mục Chia sẻ."));
+      } else {
+        toast.success("Đã lưu cài đặt đề thi thành công!");
+      }
+      navigate(isAdmin ? "/admin" : targetFolderId ? `/?folder=${targetFolderId}` : "/");
     } catch (err: any) {
-      console.warn("Supabase update error:", err);
+      toast.error(err?.message || "Không thể lưu cài đặt đề thi, vui lòng thử lại.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-
-    // Save to unified local store as well
-    const localList = getLocalStoredExams();
-    const existing = localList.find((e) => e.id === id);
-    saveUnifiedExam({
-      ...(existing || { id, created_at: new Date().toISOString() }),
-      ...updates,
-      folder_id: targetFolderId,
-    } as any);
-
-    const syncRes = await syncExamAssignmentCodes({
-      id,
-      title,
-      duration_minutes: duration,
-      teacher_name: existing?.teacher_name,
-      school_name: existing?.school_name,
-      subject_name: existing?.subject_name,
-      open_at: schedule.open_at,
-      close_at: schedule.close_at,
-      team_config: updates.team_config as any,
-    });
-
-    setSaving(false);
-    if (!syncRes.success) {
-      toast.warning("Đã lưu cài đặt đề thi nhưng đồng bộ mã bài thi gặp lỗi: " + (syncRes.error || "Vui lòng kiểm tra lại ở mục Chia sẻ."));
-    } else {
-      toast.success("Đã lưu cài đặt đề thi thành công!");
-    }
-    navigate(isAdmin ? "/admin" : targetFolderId ? `/?folder=${targetFolderId}` : "/");
   };
 
   if (loading) return <div className="min-h-screen grid place-items-center text-muted-foreground">Đang tải…</div>;

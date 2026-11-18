@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ArrowLeft, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 import { formatScore, normalizeSubmissionToScale10 } from "@/lib/grading";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import { toast } from "sonner";
 
 export default function Results() {
   const { id } = useParams();
@@ -15,13 +17,25 @@ export default function Results() {
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
+    if (!id) return;
     setLoading(true);
-    const [{ data: e }, { data: s }] = await Promise.all([
-      supabase.from("exams").select("*").eq("id", id!).maybeSingle(),
-      supabase.from("submissions").select("*").eq("exam_id", id!).order("submitted_at", { ascending: false }),
-    ]);
-    const normSubs = (s || []).map((row: any) => normalizeSubmissionToScale10(row, e));
-    setExam(e); setSubs(normSubs); setLoading(false);
+    try {
+      const [{ data: e }, { data: s }] = await withRequestTimeout(
+        Promise.all([
+          supabase.from("exams").select("*").eq("id", id).maybeSingle(),
+          supabase.from("submissions").select("*").eq("exam_id", id).order("submitted_at", { ascending: false }),
+        ]),
+        10000,
+        "results.load"
+      );
+      const normSubs = (s || []).map((row: any) => normalizeSubmissionToScale10(row, e));
+      setExam(e);
+      setSubs(normSubs);
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải kết quả bài thi");
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => { load(); }, [id]);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,8 +78,11 @@ export function CreateOrEditFolderModal({
   const [color, setColor] = useState("sky");
   const [icon, setIcon] = useState("folder");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
+    submittingRef.current = false;
+    setSubmitting(false);
     if (open) {
       if (folder) {
         setName(folder.name || "");
@@ -95,12 +98,14 @@ export function CreateOrEditFolderModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     const cleanName = name.trim();
     if (!cleanName) {
       toast.error("Vui lòng nhập tên thư mục");
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       if (isEditing && folder) {
@@ -139,6 +144,7 @@ export function CreateOrEditFolderModal({
       console.error("[CreateOrEditFolderModal] Save folder failed:", err);
       toast.error(err?.message || "Không thể lưu thư mục");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -305,10 +311,18 @@ export function DeleteFolderModal({
   onSuccess,
 }: DeleteFolderModalProps) {
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    submittingRef.current = false;
+    setSubmitting(false);
+  }, [open, folder]);
 
   if (!folder) return null;
 
   const handleDelete = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       await deleteFolder(folder.id, teacherId || folder.teacher_id, isAdmin);
@@ -322,6 +336,7 @@ export function DeleteFolderModal({
     } catch (err: any) {
       toast.error(err?.message || "Không thể xóa thư mục");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -428,8 +443,11 @@ export function MoveExamModal({
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
+    submittingRef.current = false;
+    setSubmitting(false);
     if (open) {
       setSelectedFolderId(currentFolderId ?? null);
       setSearchTerm("");
@@ -451,6 +469,8 @@ export function MoveExamModal({
   if (count === 0) return null;
 
   const handleMove = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       if (count === 1) {
@@ -472,6 +492,7 @@ export function MoveExamModal({
     } catch (err: any) {
       toast.error(err?.message || "Không thể chuyển đề thi");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -636,8 +657,11 @@ export function MoveFolderModal({
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
+    submittingRef.current = false;
+    setSubmitting(false);
     if (open && folder) {
       setSelectedParentId(folder.parent_id ?? null);
       setSearchTerm("");
@@ -667,11 +691,13 @@ export function MoveFolderModal({
   const isUnchanged = selectedParentId === currentParentId;
 
   const handleConfirmMove = async () => {
+    if (submittingRef.current) return;
     if (isUnchanged) {
       onOpenChange(false);
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       const updated = await moveFolder(folder.id, selectedParentId, teacherId, isAdmin);
@@ -684,6 +710,7 @@ export function MoveFolderModal({
     } catch (err: any) {
       toast.error(err?.message || "Không thể di chuyển thư mục");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

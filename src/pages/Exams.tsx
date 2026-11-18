@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -30,13 +30,20 @@ import {
 import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingTableOrRpcError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import { fetchAllExamsForAdmin } from "@/lib/allExamsStorage";
 import { attachQuestionScores, isScale10Scoring, reconcileScale10Scoring } from "@/lib/grading";
 
 const PAGE_SIZE = 10;
 
 export default function Exams() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [exams, setExams] = useState<any[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -46,89 +53,117 @@ export default function Exams() {
   const [viewingLeaderboardExamId, setViewingLeaderboardExamId] = useState<string | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<any | null>(null);
   const [shareModalExam, setShareModalExam] = useState<any | null>(null);
+  const copyingIdRef = useRef<string | null>(null);
+  const duplicatingRef = useRef(false);
 
   const load = async () => {
     setLoading(true);
+    try {
+      if (isAdmin) {
+        // Super Admin / Admin loads all exams from all teachers
+        const allExams = await withRequestTimeout(fetchAllExamsForAdmin(user), 12000, "exams.load.admin");
+        setExams(allExams);
+        const subQ = supabase.from("submissions").select("exam_id,student_class");
+        const { data: subs } = await withRequestTimeout<any>(subQ, 10000, "exams.load.adminSubs");
+        const c: Record<string, number> = {};
+        (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
+        setCounts(c);
+        return;
+      }
 
-    if (isAdmin) {
-      // Super Admin / Admin loads all exams from all teachers
-      const allExams = await fetchAllExamsForAdmin(user);
-      setExams(allExams);
-      const examIds = allExams.map((e: any) => e.id);
+      let q = supabase.from("exams")
+        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,instant_feedback")
+        .order("created_at", { ascending: false });
+
+      if (user && isUuid(user.id)) {
+        q = q.eq("created_by", user.id);
+      }
+
+      const { data: ex } = await withRequestTimeout<any>(q, 10000, "exams.load.teacher");
+      let loadedExams = ex || [];
+
+      // Fallback: If ex returned empty for this teacher, check schools registry
+      if (loadedExams.length === 0 && user && !isCapabilityUnavailable("rpc:get_exam_for_student")) {
+        try {
+          const { data: schRows } = await withRequestTimeout<any>(
+            supabase
+              .from("schools")
+              .select("name")
+              .like("name_key", "assign_code:%"),
+            8000,
+            "exams.load.schoolsFallback"
+          );
+
+          const foundIds = new Set<string>();
+          for (const r of (schRows || [])) {
+            try {
+              const p = JSON.parse(r.name);
+              const teacherMatch =
+                (user.email && p.teacherEmail?.toLowerCase() === user.email.toLowerCase()) ||
+                (p.createdBy && p.createdBy === user.id) ||
+                (user.name && p.teacherName?.toLowerCase() === user.name.toLowerCase());
+              if (teacherMatch && p.examId && isUuid(p.examId)) {
+                foundIds.add(p.examId);
+              }
+            } catch {}
+          }
+
+          if (foundIds.size > 0) {
+            const idsArr = Array.from(foundIds);
+            const fetched: any[] = [];
+            for (let i = 0; i < idsArr.length; i += 5) {
+              if (isCapabilityUnavailable("rpc:get_exam_for_student")) break;
+              const batch = idsArr.slice(i, i + 5);
+              const resBatch = await Promise.all(
+                batch.map(async (eid) => {
+                  const { data: d, error: rErr } = await withRequestTimeout<any>(
+                    supabase.rpc("get_exam_for_student", { p_exam_id: eid }),
+                    6000,
+                    "exams.load.getExamForStudent"
+                  );
+                  if (rErr && isMissingTableOrRpcError(rErr, "get_exam_for_student")) {
+                    markCapabilityUnavailable("rpc:get_exam_for_student");
+                    return null;
+                  }
+                  if (!rErr && d) {
+                    markCapabilityAvailable("rpc:get_exam_for_student");
+                    return { ...d, id: eid };
+                  }
+                  return null;
+                })
+              );
+              fetched.push(...resBatch.filter(Boolean));
+            }
+            loadedExams = fetched;
+          }
+        } catch {}
+      }
+
+      setExams(loadedExams);
+
+      const examIds = loadedExams.map((e: any) => e.id);
       let subQ = supabase.from("submissions").select("exam_id,student_class");
-      const { data: subs } = await subQ;
+      if (examIds.length > 0) {
+        subQ = subQ.in("exam_id", examIds);
+      } else {
+        setCounts({});
+        return;
+      }
+
+      const { data: subs } = await withRequestTimeout<any>(subQ, 10000, "exams.load.subs");
       const c: Record<string, number> = {};
       (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
       setCounts(c);
+    } catch (err) {
+      console.warn("Error loading exams:", err);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    let q = supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_path,scoring,allow_review,open_at,close_at,manual_closed,display_mode,team_config,created_by,instant_feedback")
-      .order("created_at", { ascending: false });
-
-    if (user && isUuid(user.id)) {
-      q = q.eq("created_by", user.id);
-    }
-
-    const { data: ex } = await q;
-    let loadedExams = ex || [];
-
-    // Fallback: If ex returned empty for this teacher, check schools registry
-    if (loadedExams.length === 0 && user) {
-      try {
-        const { data: schRows } = await supabase
-          .from("schools")
-          .select("name")
-          .like("name_key", "assign_code:%");
-
-        const foundIds = new Set<string>();
-        for (const r of (schRows || [])) {
-          try {
-            const p = JSON.parse(r.name);
-            const teacherMatch =
-              (user.email && p.teacherEmail?.toLowerCase() === user.email.toLowerCase()) ||
-              (p.createdBy && p.createdBy === user.id) ||
-              (user.name && p.teacherName?.toLowerCase() === user.name.toLowerCase());
-            if (teacherMatch && p.examId && isUuid(p.examId)) {
-              foundIds.add(p.examId);
-            }
-          } catch {}
-        }
-
-        if (foundIds.size > 0) {
-          const fetched = await Promise.all(
-            Array.from(foundIds).map(async (eid) => {
-              const { data: d } = await supabase.rpc("get_exam_for_student", { p_exam_id: eid });
-              return d ? { ...d, id: eid } : null;
-            })
-          );
-          loadedExams = fetched.filter(Boolean) as any[];
-        }
-      } catch {}
-    }
-
-    setExams(loadedExams);
-    loadedExams.forEach((e: any) => syncExamAssignmentCodes(e).catch(() => {}));
-
-    const examIds = loadedExams.map((e: any) => e.id);
-    let subQ = supabase.from("submissions").select("exam_id,student_class");
-    if (examIds.length > 0) {
-      subQ = subQ.in("exam_id", examIds);
-    } else {
-      setCounts({});
-      setLoading(false);
-      return;
-    }
-
-    const { data: subs } = await subQ;
-    const c: Record<string, number> = {};
-    (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
-    setCounts(c);
-    setLoading(false);
   };
-  useEffect(() => { load(); }, [isAdmin, user]);
+  useEffect(() => {
+    if (authLoading) return;
+    load();
+  }, [authLoading, isAdmin, user]);
 
   const classes = useMemo(() => {
     const set = new Set<string>();
@@ -162,15 +197,23 @@ export default function Exams() {
   };
 
   const setClosed = async (exam: any, closed: boolean) => {
-    const updates: any = { manual_closed: closed };
-    if (closed) updates.allow_review = true;
-    const { error } = await supabase.from("exams").update(updates).eq("id", exam.id);
-    if (error) return toast.error(error.message);
-    if (closed) {
-      publishExamClosed(exam.id, exam.questions, exam.title);
+    try {
+      const updates: any = { manual_closed: closed };
+      if (closed) updates.allow_review = true;
+      const { error } = await withRequestTimeout<any>(
+        supabase.from("exams").update(updates).eq("id", exam.id),
+        10000,
+        "exams.setClosed"
+      );
+      if (error) return toast.error(error.message);
+      if (closed) {
+        publishExamClosed(exam.id, exam.questions, exam.title);
+      }
+      toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
+      load();
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể cập nhật trạng thái đề thi");
     }
-    toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
-    load();
   };
 
   const confirmClose = (exam: any) => {
@@ -180,89 +223,140 @@ export default function Exams() {
   };
 
   const copyLink = async (examObj: any) => {
+    if (copyingIdRef.current === examObj.id) return;
+    copyingIdRef.current = examObj.id;
     try {
-      const syncRes = await syncExamAssignmentCodes(examObj);
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes(examObj),
+        12000,
+        "exams.copyLink.sync"
+      );
       const primaryCode = syncRes?.primaryCode || getExamPrimaryCode(examObj);
       if (/^\d{6}$/.test(primaryCode)) {
         await navigator.clipboard.writeText(getShortExamUrl(primaryCode));
       } else {
-        const sl = await ensureExamShortLink({ exam: examObj });
+        const sl = await withRequestTimeout(
+          ensureExamShortLink({ exam: examObj }),
+          12000,
+          "exams.copyLink.shortLink"
+        );
         await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
       }
       toast.success("Đã sao chép link ngắn bài thi");
     } catch (err: any) {
       toast.error(err?.message || "Không thể tạo link ngắn bài thi");
+    } finally {
+      if (copyingIdRef.current === examObj.id) {
+        copyingIdRef.current = null;
+      }
     }
   };
   const deleteExam = async (exam: any) => {
     if (!confirm(`Xóa đề "${exam.title}"?`)) return;
-    await supabase.from("submissions").delete().eq("exam_id", exam.id);
-    const { error } = await withSupabaseAuthRetry(async () => {
-      return await supabase.from("exams").delete().eq("id", exam.id);
-    }, user as any);
-    if (error) return toast.error(error.message);
-    toast.success("Đã xóa đề"); load();
+    try {
+      await withRequestTimeout<any>(
+        supabase.from("submissions").delete().eq("exam_id", exam.id),
+        10000,
+        "exams.deleteExam.subs"
+      );
+      const { error } = await withSupabaseAuthRetry(async () => {
+        return await supabase.from("exams").delete().eq("id", exam.id);
+      }, user as any);
+      if (error) return toast.error(error.message);
+      toast.success("Đã xóa đề");
+      load();
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể xóa đề thi");
+    }
   };
   const resetResults = async (exam: any) => {
     if (!confirm(`Xóa toàn bộ bài nộp của "${exam.title}"?`)) return;
-    const { error } = await supabase.from("submissions").delete().eq("exam_id", exam.id);
-    if (error) return toast.error(error.message);
-    toast.success("Đã reset kết quả"); load();
+    try {
+      const { error } = await withRequestTimeout<any>(
+        supabase.from("submissions").delete().eq("exam_id", exam.id),
+        10000,
+        "exams.resetResults"
+      );
+      if (error) return toast.error(error.message);
+      toast.success("Đã reset kết quả");
+      load();
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể reset kết quả");
+    }
   };
   const duplicate = async (exam: any, copyMusic = true) => {
-    const { id, created_at, allow_back, ...rest } = exam as any;
-    let finalTeamConfig = rest.team_config;
+    if (duplicatingRef.current) return;
+    duplicatingRef.current = true;
+    try {
+      const { id, created_at, allow_back, ...rest } = exam as any;
+      let finalTeamConfig = rest.team_config;
 
-    // Nếu không muốn sao chép nhạc nền, gỡ bỏ nhạc nền khỏi bản sao
-    if (!copyMusic && finalTeamConfig) {
-      finalTeamConfig = {
-        ...finalTeamConfig,
-        music: {
-          enabled: false,
-          volume: 0.4,
-          loop: true,
-          useDefault: false,
-          customName: null,
-          customUrl: null,
-          idbKey: null,
-        },
+      // Nếu không muốn sao chép nhạc nền, gỡ bỏ nhạc nền khỏi bản sao
+      if (!copyMusic && finalTeamConfig) {
+        finalTeamConfig = {
+          ...finalTeamConfig,
+          music: {
+            enabled: false,
+            volume: 0.4,
+            loop: true,
+            useDefault: false,
+            customName: null,
+            customUrl: null,
+            idbKey: null,
+          },
+        };
+      }
+
+      const newExamCode = await withRequestTimeout(
+        generateUniqueNumericExamCode(),
+        10000,
+        "exams.duplicate.code"
+      );
+      const finalTeamConfigWithCode = {
+        ...(finalTeamConfig || {}),
+        primary_code: newExamCode,
       };
+
+      const syncedScoring = isScale10Scoring(rest.scoring)
+        ? reconcileScale10Scoring(rest.questions, rest.scoring)
+        : rest.scoring;
+      const syncedQuestions =
+        rest.questions && isScale10Scoring(syncedScoring) && !Array.isArray(rest.questions) && (rest.questions.partI || rest.questions.partII || rest.questions.partIII)
+          ? attachQuestionScores(rest.questions, syncedScoring)
+          : rest.questions;
+
+      const { error } = await withSupabaseAuthRetry(async (uid) => {
+        let createdByUuid = isUuid(uid) ? uid : (isUuid(user?.id) ? user.id : null);
+        if (!createdByUuid) {
+          try {
+            const { data: uData } = await withRequestTimeout<any>(
+              supabase.auth.getUser(),
+              4500,
+              "exams.duplicate.getUser"
+            );
+            if (uData?.user?.id) createdByUuid = uData.user.id;
+          } catch {}
+        }
+
+        return await supabase.from("exams").insert({
+          ...rest,
+          scoring: syncedScoring,
+          questions: syncedQuestions,
+          team_config: finalTeamConfigWithCode,
+          title: `${exam.title} (Bản sao)`,
+          created_by: createdByUuid,
+        } as any);
+      }, user as any);
+
+      if (error) return toast.error(error.message);
+      toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");
+      setDuplicateTarget(null);
+      load();
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể sao chép đề thi");
+    } finally {
+      duplicatingRef.current = false;
     }
-
-    const newExamCode = await generateUniqueNumericExamCode();
-    const finalTeamConfigWithCode = {
-      ...(finalTeamConfig || {}),
-      primary_code: newExamCode,
-    };
-
-    const syncedScoring = isScale10Scoring(rest.scoring)
-      ? reconcileScale10Scoring(rest.questions, rest.scoring)
-      : rest.scoring;
-    const syncedQuestions =
-      rest.questions && isScale10Scoring(syncedScoring) && !Array.isArray(rest.questions) && (rest.questions.partI || rest.questions.partII || rest.questions.partIII)
-        ? attachQuestionScores(rest.questions, syncedScoring)
-        : rest.questions;
-
-    const { error } = await withSupabaseAuthRetry(async (uid) => {
-      const currentAuthUser = (await supabase.auth.getUser()).data.user;
-      const createdByUuid = currentAuthUser?.id || (isUuid(uid)
-        ? uid
-        : (isUuid(user?.id) ? user.id : null));
-
-      return await supabase.from("exams").insert({
-        ...rest,
-        scoring: syncedScoring,
-        questions: syncedQuestions,
-        team_config: finalTeamConfigWithCode,
-        title: `${exam.title} (Bản sao)`,
-        created_by: createdByUuid,
-      } as any);
-    }, user as any);
-
-    if (error) return toast.error(error.message);
-    toast.success(copyMusic ? "Đã sao chép đề (kèm nhạc nền)" : "Đã sao chép đề (không kèm nhạc nền)");
-    setDuplicateTarget(null);
-    load();
   };
 
   const handleDuplicateClick = (exam: any) => {
@@ -281,12 +375,20 @@ export default function Exams() {
     }
   };
   const downloadOriginal = async (exam: any) => {
-    if (exam.original_file_path) {
-      const { data, error } = await supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300);
-      if (error || !data) return toast.error("Không tạo được link tải");
-      window.open(data.signedUrl, "_blank");
-    } else if (exam.original_file_url) window.open(exam.original_file_url, "_blank");
-    else toast.info("Đề này không có file gốc");
+    try {
+      if (exam.original_file_path) {
+        const { data, error } = await withRequestTimeout<any>(
+          supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300),
+          10000,
+          "exams.downloadOriginal"
+        );
+        if (error || !data) return toast.error("Không tạo được link tải");
+        window.open(data.signedUrl, "_blank");
+      } else if (exam.original_file_url) window.open(exam.original_file_url, "_blank");
+      else toast.info("Đề này không có file gốc");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải file gốc");
+    }
   };
 
   return (

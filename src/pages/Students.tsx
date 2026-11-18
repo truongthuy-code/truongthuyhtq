@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/useAuth";
 import { isUuid } from "@/lib/teacherStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 type Student = {
   id: string;
@@ -42,7 +43,7 @@ const SAMPLE: Student[] = [
 ];
 
 export default function Students() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [manual, setManual] = useState<Student[]>([]);
   const [fromSubs, setFromSubs] = useState<Student[]>([]);
   const [query, setQuery] = useState("");
@@ -56,13 +57,20 @@ export default function Students() {
     const m = loadManual();
     setManual(m.length ? m : SAMPLE);
     if (!m.length) saveManual(SAMPLE);
+    if (authLoading) return;
+    let active = true;
     (async () => {
-      let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,submitted_at");
+      try {
+        let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,submitted_at");
 
-      if (!isAdmin && user) {
-        if (isUuid(user.id)) {
-          const { data: myExams } = await supabase.from("exams").select("id").eq("created_by", user.id);
-          const myExamIds = (myExams || []).map((e) => e.id);
+        if (!isAdmin && user && isUuid(user.id)) {
+          const { data: myExams } = await withRequestTimeout<any>(
+            supabase.from("exams").select("id").eq("created_by", user.id),
+            10000,
+            "students.myExams"
+          );
+          if (!active) return;
+          const myExamIds = (myExams || []).map((e: any) => e.id);
           if (myExamIds.length > 0) {
             subQ = subQ.in("exam_id", myExamIds);
           } else {
@@ -70,23 +78,29 @@ export default function Students() {
             return;
           }
         }
-      }
 
-      const { data } = await subQ;
-      const seen = new Map<string, Student>();
-      (data || []).forEach((s: any) => {
-        const key = `${s.student_name}__${s.student_class}`;
-        if (!seen.has(key)) {
-          seen.set(key, {
-            id: `sub:${key}`, name: s.student_name, klass: s.student_class,
-            email: "", username: "", status: "approved",
-            createdAt: s.submitted_at, source: "submission",
-          });
-        }
-      });
-      setFromSubs(Array.from(seen.values()));
+        const { data } = await withRequestTimeout<any>(subQ, 10000, "students.submissions");
+        if (!active) return;
+        const seen = new Map<string, Student>();
+        (data || []).forEach((s: any) => {
+          const key = `${s.student_name}__${s.student_class}`;
+          if (!seen.has(key)) {
+            seen.set(key, {
+              id: `sub:${key}`, name: s.student_name, klass: s.student_class,
+              email: "", username: "", status: "approved",
+              createdAt: s.submitted_at, source: "submission",
+            });
+          }
+        });
+        setFromSubs(Array.from(seen.values()));
+      } catch (err) {
+        console.warn("Students load error:", err);
+      }
     })();
-  }, [isAdmin, user]);
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAdmin, user]);
 
   const all = useMemo(() => {
     const merged = [...manual, ...fromSubs.filter(s => !manual.some(m => m.name === s.name && m.klass === s.klass))];

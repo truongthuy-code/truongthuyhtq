@@ -1,6 +1,12 @@
 import { supabase } from "@/integrations/supabase/client";
 import { generateUuid, isUuid } from "@/lib/teacherStorage";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { isRequestTimeoutError, withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 
 export interface ExamFolder {
   id: string;
@@ -495,6 +501,21 @@ export function resetFolderStorageAvailabilityCache(): void {
   cachedExamFoldersTableAvailable = null;
 }
 
+function isExamFoldersUnavailable(): boolean {
+  if (!isVitestEnv && cachedExamFoldersTableAvailable === false) return true;
+  return isCapabilityUnavailable("table:exam_folders");
+}
+
+function markExamFoldersUnavailable(): void {
+  if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+  markCapabilityUnavailable("table:exam_folders");
+}
+
+function markExamFoldersAvailable(): void {
+  if (!isVitestEnv) cachedExamFoldersTableAvailable = true;
+  markCapabilityAvailable("table:exam_folders");
+}
+
 function isMissingFolderIdColumnError(err: any): boolean {
   if (!err) return false;
   const code = String(err?.code || "").toUpperCase();
@@ -530,19 +551,28 @@ async function upsertSchoolRegistryRow(nameKey: string, jsonValue: string): Prom
   if (!schoolsApi || typeof schoolsApi.select !== "function") {
     return { error: new Error("Schools registry unavailable") };
   }
-  const { data: existing, error: selErr } = await schoolsApi
-    .select("id")
-    .eq("name_key", nameKey)
-    .maybeSingle();
+  const { data: existing, error: selErr } = await withRequestTimeout<any>(
+    schoolsApi.select("id").eq("name_key", nameKey).maybeSingle(),
+    8000,
+    "folderStorage.upsertSchoolRegistryRow.select"
+  );
 
   if (selErr) return { error: selErr };
 
   if (existing) {
-    const updRes = await schoolsApi.update({ name: jsonValue }).eq("name_key", nameKey);
+    const updRes = await withRequestTimeout<any>(
+      schoolsApi.update({ name: jsonValue }).eq("name_key", nameKey),
+      8000,
+      "folderStorage.upsertSchoolRegistryRow.update"
+    );
     return { error: updRes?.error || null };
   }
 
-  const insRes = await schoolsApi.insert({ name_key: nameKey, name: jsonValue });
+  const insRes = await withRequestTimeout<any>(
+    schoolsApi.insert({ name_key: nameKey, name: jsonValue }),
+    8000,
+    "folderStorage.upsertSchoolRegistryRow.insert"
+  );
   return { error: insRes?.error || null };
 }
 
@@ -551,7 +581,11 @@ async function deleteSchoolRegistryRow(nameKey: string): Promise<{ error: any }>
   if (!schoolsApi || typeof schoolsApi.delete !== "function") {
     return { error: null };
   }
-  const delRes = await schoolsApi.delete().eq("name_key", nameKey);
+  const delRes = await withRequestTimeout<any>(
+    schoolsApi.delete().eq("name_key", nameKey),
+    8000,
+    "folderStorage.deleteSchoolRegistryRow"
+  );
   return { error: delRes?.error || null };
 }
 
@@ -564,7 +598,11 @@ async function fetchFoldersFromSchoolsFallback(): Promise<{ data: ExamFolder[]; 
   if (!baseQuery || typeof baseQuery.like !== "function") {
     return { data: [], error: null };
   }
-  const { data, error } = await baseQuery.like("name_key", `${SCHOOLS_FOLDER_KEY_PREFIX}%`);
+  const { data, error } = await withRequestTimeout<any>(
+    baseQuery.like("name_key", `${SCHOOLS_FOLDER_KEY_PREFIX}%`),
+    8000,
+    "folderStorage.fetchFoldersFromSchoolsFallback"
+  );
 
   if (error || !Array.isArray(data)) {
     return { data: [], error };
@@ -605,7 +643,11 @@ export async function syncRemoteExamFolderMappings(): Promise<Record<string, str
     if (!baseQuery || typeof baseQuery.like !== "function") {
       return localMap;
     }
-    const { data, error } = await baseQuery.like("name_key", `${SCHOOLS_EXAM_MAP_KEY_PREFIX}%`);
+    const { data, error } = await withRequestTimeout<any>(
+      baseQuery.like("name_key", `${SCHOOLS_EXAM_MAP_KEY_PREFIX}%`),
+      8000,
+      "folderStorage.syncRemoteExamFolderMappings"
+    );
 
     if (error || !Array.isArray(data) || data.length === 0) {
       return localMap;
@@ -637,6 +679,10 @@ export async function syncRemoteExamFolderMappings(): Promise<Record<string, str
 }
 
 function formatSupabaseFolderError(err: any, action: "create" | "update" | "delete"): string {
+  if (isRequestTimeoutError(err)) {
+    const actionLabel = action === "create" ? "tạo" : action === "update" ? "cập nhật" : "xóa";
+    return `Kết nối máy chủ bị quá thời gian phản hồi khi ${actionLabel} thư mục. Vui lòng thử lại.`;
+  }
   const code = String(err?.code || "");
   const msg = String(err?.message || err?.details || err?.hint || "");
   const lower = msg.toLowerCase();
@@ -734,7 +780,7 @@ export async function getFolders(teacherId?: string | null, isAdmin?: boolean): 
     }
 
     let remoteRows: any[] | null = null;
-    let shouldUseSchoolsFallback = !isVitestEnv && cachedExamFoldersTableAvailable === false;
+    let shouldUseSchoolsFallback = isExamFoldersUnavailable();
 
     if (!shouldUseSchoolsFallback) {
       let q = (supabase.from("exam_folders") as any).select("*").order("name", { ascending: true });
@@ -742,12 +788,12 @@ export async function getFolders(teacherId?: string | null, isAdmin?: boolean): 
         q = q.eq("teacher_id", teacherId);
       }
 
-      const { data, error } = await q;
+      const { data, error } = await withRequestTimeout<any>(q, 8000, "folderStorage.getFolders");
       if (!error && Array.isArray(data)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = true;
+        markExamFoldersAvailable();
         remoteRows = data;
       } else if (isExamFoldersTableMissingError(error)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+        markExamFoldersUnavailable();
         shouldUseSchoolsFallback = true;
       } else if (error) {
         console.warn("[FolderStorage] Supabase getFolders warning:", error?.message || error);
@@ -791,6 +837,23 @@ export async function getFolders(teacherId?: string | null, isAdmin?: boolean): 
   return filterFoldersByAccess(localList, teacherId, isAdmin);
 }
 
+function hasDuplicateFolderNameInList(
+  folders: ExamFolder[],
+  name: string,
+  excludeId?: string,
+  parentId: string | null = null
+): boolean {
+  const cleanName = (name || "").trim().toLowerCase();
+  if (!cleanName) return false;
+  const targetParentId = parentId || null;
+
+  return folders.some((f) => {
+    if (excludeId && f.id === excludeId) return false;
+    if ((f.parent_id || null) !== targetParentId) return false;
+    return (f.name || "").trim().toLowerCase() === cleanName;
+  });
+}
+
 /**
  * Kiểm tra tên thư mục có bị trùng trong CÙNG CẤP thư mục cha (và cùng giáo viên) không
  */
@@ -803,14 +866,9 @@ export async function checkDuplicateFolderName(
 ): Promise<boolean> {
   const cleanName = (name || "").trim().toLowerCase();
   if (!cleanName) return false;
-  const targetParentId = parentId || null;
 
   const folders = await getFolders(teacherId, isAdmin);
-  return folders.some((f) => {
-    if (excludeId && f.id === excludeId) return false;
-    if ((f.parent_id || null) !== targetParentId) return false;
-    return (f.name || "").trim().toLowerCase() === cleanName;
-  });
+  return hasDuplicateFolderNameInList(folders, cleanName, excludeId, parentId);
 }
 
 /**
@@ -849,14 +907,7 @@ export async function createFolder(input: {
     }
   }
 
-  const dupScopeTeacherId = parentFolder?.teacher_id || input.teacher_id;
-  const isDup = await checkDuplicateFolderName(
-    cleanName,
-    dupScopeTeacherId,
-    undefined,
-    input.isAdmin,
-    parentId
-  );
+  const isDup = hasDuplicateFolderNameInList(visibleFolders, cleanName, undefined, parentId);
   if (isDup) {
     throw new Error(
       parentId
@@ -928,7 +979,7 @@ export async function createFolder(input: {
         updated_at: folderRecord.updated_at,
       };
 
-      if (!isVitestEnv && cachedExamFoldersTableAvailable === false) {
+      if (isExamFoldersUnavailable()) {
         return await upsertSchoolRegistryRow(
           `${SCHOOLS_FOLDER_KEY_PREFIX}${folderRecord.id}`,
           JSON.stringify(folderRecord)
@@ -938,13 +989,13 @@ export async function createFolder(input: {
       let res = await (supabase.from("exam_folders") as any).insert(payload);
 
       if (!res?.error) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = true;
+        markExamFoldersAvailable();
         return res;
       }
 
       // Nếu bảng exam_folders chưa được tạo trên Supabase (PGRST205), đồng bộ sang bảng schools registry
       if (isExamFoldersTableMissingError(res.error)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+        markExamFoldersUnavailable();
         const fallbackRes = await upsertSchoolRegistryRow(
           `${SCHOOLS_FOLDER_KEY_PREFIX}${folderRecord.id}`,
           JSON.stringify(folderRecord)
@@ -1030,13 +1081,7 @@ export async function updateFolder(
   }
 
   if (updates.name !== undefined || updates.parent_id !== undefined) {
-    const isDup = await checkDuplicateFolderName(
-      nextName,
-      existing.teacher_id || teacherId,
-      id,
-      isAdmin,
-      nextParentId
-    );
+    const isDup = hasDuplicateFolderNameInList(allFolders, nextName, id, nextParentId);
     if (isDup) {
       throw new Error(`Tên thư mục "${nextName}" đã tồn tại ở cấp thư mục này.`);
     }
@@ -1069,7 +1114,7 @@ export async function updateFolder(
   let syncResult: { data?: any; error?: any } | undefined;
   try {
     syncResult = await withSupabaseAuthRetry(async (uid) => {
-      if (!isVitestEnv && cachedExamFoldersTableAvailable === false) {
+      if (isExamFoldersUnavailable()) {
         return await upsertSchoolRegistryRow(
           `${SCHOOLS_FOLDER_KEY_PREFIX}${updatedFolder.id}`,
           JSON.stringify(updatedFolder)
@@ -1090,7 +1135,7 @@ export async function updateFolder(
         .eq("id", id);
 
       if (isExamFoldersTableMissingError(res?.error)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+        markExamFoldersUnavailable();
         const fallbackRes = await upsertSchoolRegistryRow(
           `${SCHOOLS_FOLDER_KEY_PREFIX}${updatedFolder.id}`,
           JSON.stringify(updatedFolder)
@@ -1226,7 +1271,7 @@ export async function deleteFolder(
   let syncResult: { data?: any; error?: any } | undefined;
   try {
     syncResult = await withSupabaseAuthRetry(async () => {
-      if (!isVitestEnv && cachedExamFoldersTableAvailable === false) {
+      if (isExamFoldersUnavailable()) {
         return await deleteFromSchoolsFallback();
       }
 
@@ -1236,7 +1281,7 @@ export async function deleteFolder(
         .eq("parent_id", id);
 
       if (isExamFoldersTableMissingError(reparentRes?.error)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+        markExamFoldersUnavailable();
         const fallbackRes = await deleteFromSchoolsFallback();
         return fallbackRes?.error ? reparentRes : fallbackRes;
       }
@@ -1246,17 +1291,23 @@ export async function deleteFolder(
       }
 
       // Unlink exams trực tiếp khỏi thư mục (chịu lỗi nếu cột folder_id chưa tạo)
-      const unlinkRes = await (supabase.from("exams") as any)
-        .update({ folder_id: null })
-        .eq("folder_id", id);
-      if (unlinkRes?.error && !isMissingFolderIdColumnError(unlinkRes.error)) {
-        console.warn("[FolderStorage] Unlink exams folder_id warning:", unlinkRes.error);
+      if (!isCapabilityUnavailable("col:exams.folder_id")) {
+        const unlinkRes = await (supabase.from("exams") as any)
+          .update({ folder_id: null })
+          .eq("folder_id", id);
+        if (unlinkRes?.error) {
+          if (isMissingFolderIdColumnError(unlinkRes.error)) {
+            markCapabilityUnavailable("col:exams.folder_id");
+          } else {
+            console.warn("[FolderStorage] Unlink exams folder_id warning:", unlinkRes.error);
+          }
+        }
       }
 
       // Delete folder
       const delRes = await (supabase.from("exam_folders") as any).delete().eq("id", id);
       if (isExamFoldersTableMissingError(delRes?.error)) {
-        if (!isVitestEnv) cachedExamFoldersTableAvailable = false;
+        markExamFoldersUnavailable();
         const fallbackRes = await deleteFromSchoolsFallback();
         return fallbackRes?.error ? delRes : fallbackRes;
       }
@@ -1288,7 +1339,11 @@ export async function deleteFolder(
 /**
  * Chuyển một đề thi vào một thư mục bất kỳ cấp độ (hoặc đưa về Chưa phân loại nếu folderId là null)
  */
-export async function moveExamToFolder(examId: string, folderId: string | null): Promise<boolean> {
+export async function moveExamToFolder(
+  examId: string,
+  folderId: string | null,
+  options?: { localOnly?: boolean }
+): Promise<boolean> {
   if (!examId) return false;
 
   const mappings = getExamFolderMapping();
@@ -1296,13 +1351,28 @@ export async function moveExamToFolder(examId: string, folderId: string | null):
   saveExamFolderMapping(mappings);
   updateUnifiedExamsFolderId([examId], folderId);
 
+  if (options?.localOnly) {
+    return true;
+  }
+
   try {
     await withSupabaseAuthRetry(async () => {
+      if (isCapabilityUnavailable("col:exams.folder_id")) {
+        if (folderId) {
+          return await upsertSchoolRegistryRow(
+            `${SCHOOLS_EXAM_MAP_KEY_PREFIX}${examId}`,
+            JSON.stringify({ examId, folderId, updated_at: new Date().toISOString() })
+          );
+        }
+        return await deleteSchoolRegistryRow(`${SCHOOLS_EXAM_MAP_KEY_PREFIX}${examId}`);
+      }
+
       const res = await (supabase.from("exams") as any)
         .update({ folder_id: folderId })
         .eq("id", examId);
 
       if (isMissingFolderIdColumnError(res?.error)) {
+        markCapabilityUnavailable("col:exams.folder_id");
         if (folderId) {
           return await upsertSchoolRegistryRow(
             `${SCHOOLS_EXAM_MAP_KEY_PREFIX}${examId}`,
@@ -1335,11 +1405,7 @@ export async function moveExamsToFolder(examIds: string[], folderId: string | nu
 
   try {
     await withSupabaseAuthRetry(async () => {
-      const res = await (supabase.from("exams") as any)
-        .update({ folder_id: folderId })
-        .in("id", examIds);
-
-      if (isMissingFolderIdColumnError(res?.error)) {
+      const saveFallback = async () => {
         for (const eid of examIds) {
           if (folderId) {
             await upsertSchoolRegistryRow(
@@ -1351,6 +1417,19 @@ export async function moveExamsToFolder(examIds: string[], folderId: string | nu
           }
         }
         return { data: null, error: null };
+      };
+
+      if (isCapabilityUnavailable("col:exams.folder_id")) {
+        return await saveFallback();
+      }
+
+      const res = await (supabase.from("exams") as any)
+        .update({ folder_id: folderId })
+        .in("id", examIds);
+
+      if (isMissingFolderIdColumnError(res?.error)) {
+        markCapabilityUnavailable("col:exams.folder_id");
+        return await saveFallback();
       }
       return res;
     });

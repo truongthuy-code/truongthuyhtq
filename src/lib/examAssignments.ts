@@ -2,6 +2,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { findSampleExam, getSampleExamById } from "@/lib/sampleExams";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
 import { getLocalStoredExams } from "@/lib/allExamsStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingTableOrRpcError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import {
   ExamAccessErrorType,
   classifySupabaseError,
@@ -110,54 +117,94 @@ export async function isExamCodeTaken(code: string): Promise<boolean> {
   }
 
   // 3. Authoritative global check via SECURITY DEFINER RPC (sees ALL teachers' exams & short links)
-  try {
-    const { data: rpcTaken, error: rpcErr } = await (supabase as any).rpc("check_exam_code_taken", {
-      p_code: normalized,
-    });
-    if (!rpcErr && typeof rpcTaken === "boolean") {
-      return rpcTaken;
+  if (!isCapabilityUnavailable("rpc:check_exam_code_taken")) {
+    try {
+      const { data: rpcTaken, error: rpcErr } = await withRequestTimeout<any>(
+        (supabase as any).rpc("check_exam_code_taken", {
+          p_code: normalized,
+        }),
+        6000,
+        "examAssignments.isExamCodeTaken.rpc"
+      );
+      if (!rpcErr && typeof rpcTaken === "boolean") {
+        markCapabilityAvailable("rpc:check_exam_code_taken");
+        return rpcTaken;
+      }
+      if (rpcErr && isRpcNotFoundError(rpcErr)) {
+        markCapabilityUnavailable("rpc:check_exam_code_taken");
+      }
+    } catch {}
+  }
+
+  // 4-6. Parallel fallback checks: schools registry, exam_short_links, exams.team_config
+  const keysToCheck = Array.from(
+    new Set([
+      `assign_code:${normalized}`,
+      `assign_code:${clean}`,
+      `short_code:${clean}`,
+      `short_code:${normalized}`,
+      ...(rawNum ? [`assign_code:${rawNum}`] : []),
+    ])
+  );
+
+  const checkSchools = async (): Promise<boolean> => {
+    try {
+      const { data: rows } = await withRequestTimeout<any>(
+        supabase.from("schools").select("name_key").in("name_key", keysToCheck),
+        6000,
+        "examAssignments.isExamCodeTaken.schools"
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    } catch {
+      return false;
     }
-  } catch {}
+  };
 
-  // 4. Fallback: Check Supabase schools registry table (assign_code:* AND short_code:*)
-  try {
-    const keysToCheck = Array.from(
-      new Set([
-        `assign_code:${normalized}`,
-        `assign_code:${clean}`,
-        `short_code:${clean}`,
-        `short_code:${normalized}`,
-        ...(rawNum ? [`assign_code:${rawNum}`] : []),
-      ])
-    );
-    const { data: rows } = await supabase
-      .from("schools")
-      .select("name_key")
-      .in("name_key", keysToCheck);
-    if (rows && rows.length > 0) return true;
-  } catch {}
+  const checkShortLinks = async (): Promise<boolean> => {
+    if (isCapabilityUnavailable("table:exam_short_links")) return false;
+    try {
+      const { data: slRow, error: slErr } = await withRequestTimeout<any>(
+        (supabase as any).from("exam_short_links").select("id").eq("short_code", clean).maybeSingle(),
+        6000,
+        "examAssignments.isExamCodeTaken.shortLinks"
+      );
+      if (slErr && isMissingTableOrRpcError(slErr, "exam_short_links")) {
+        markCapabilityUnavailable("table:exam_short_links");
+        return false;
+      }
+      if (!slErr) {
+        markCapabilityAvailable("table:exam_short_links");
+      }
+      return !slErr && Boolean(slRow);
+    } catch {
+      return false;
+    }
+  };
 
-  // 5. Fallback: Check exam_short_links
-  try {
-    const { data: slRow, error: slErr } = await (supabase as any)
-      .from("exam_short_links")
-      .select("id")
-      .eq("short_code", clean)
-      .maybeSingle();
-    if (!slErr && slRow) return true;
-  } catch {}
+  const checkExams = async (): Promise<boolean> => {
+    try {
+      const { data: exRow } = await withRequestTimeout<any>(
+        supabase
+          .from("exams")
+          .select("id")
+          .filter("team_config->>primary_code", "eq", normalized)
+          .maybeSingle(),
+        6000,
+        "examAssignments.isExamCodeTaken.exams"
+      );
+      return Boolean(exRow);
+    } catch {
+      return false;
+    }
+  };
 
-  // 6. Fallback: Check Supabase exams table where team_config->>'primary_code' = code
-  try {
-    const { data: exRow } = await supabase
-      .from("exams")
-      .select("id")
-      .filter("team_config->>primary_code", "eq", normalized)
-      .maybeSingle();
-    if (exRow) return true;
-  } catch {}
+  const [takenInSchools, takenInShortLinks, takenInExams] = await Promise.all([
+    checkSchools(),
+    checkShortLinks(),
+    checkExams(),
+  ]);
 
-  return false;
+  return takenInSchools || takenInShortLinks || takenInExams;
 }
 
 /**
@@ -165,7 +212,7 @@ export async function isExamCodeTaken(code: string): Promise<boolean> {
  * Checks database and local storage to guarantee no collisions.
  */
 export async function generateUniqueNumericExamCode(): Promise<string> {
-  for (let attempt = 0; attempt < 30; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
     const code = generateNumericExamCode();
     const taken = await isExamCodeTaken(code);
     if (!taken) {
@@ -325,6 +372,7 @@ export function getExamPrimaryShortCode(exam: any): string {
 
 let memoryAssignmentsCache: ExamAssignment[] | null = null;
 let hasAssignmentsQuotaFallback = false;
+const syncedPrimaryExamIds = new Set<string>();
 
 if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.prototype.clear === "function") {
   try {
@@ -332,6 +380,7 @@ if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.protot
     Storage.prototype.clear = function () {
       memoryAssignmentsCache = null;
       hasAssignmentsQuotaFallback = false;
+      syncedPrimaryExamIds.clear();
       return origClear.apply(this);
     };
   } catch {}
@@ -542,43 +591,52 @@ export async function syncSchoolsRegistryEntries(params: {
   }
 
   // 1. Prefer atomic SECURITY DEFINER RPC when available on remote DB
-  if (isUuid(examId)) {
+  if (isUuid(examId) && !isCapabilityUnavailable("rpc:sync_exam_codes_and_links")) {
     try {
-      const { data: rpcData, error: rpcErr } = await withSupabaseAuthRetry(async () => {
-        return await (supabase as any).rpc("sync_exam_codes_and_links", {
-          p_exam_id: examId,
-          p_entries: uniqueEntries,
-          p_primary_code: primaryCode || null,
-          p_short_code: shortCode || null,
-        });
-      });
+      const { data: rpcData, error: rpcErr } = await withSupabaseAuthRetry(
+        async () => {
+          return await (supabase as any).rpc("sync_exam_codes_and_links", {
+            p_exam_id: examId,
+            p_entries: uniqueEntries,
+            p_primary_code: primaryCode || null,
+            p_short_code: shortCode || null,
+          });
+        },
+        undefined,
+        { timeoutMs: 8000, stepName: "examAssignments.syncSchoolsRegistryEntries.rpc" }
+      );
 
       if (!rpcErr && rpcData && (rpcData as any).success === true) {
+        markCapabilityAvailable("rpc:sync_exam_codes_and_links");
         return {
           success: true,
           verifiedKeys: uniqueEntries.map((e) => e.name_key),
         };
       }
 
-      if (rpcErr && !isRpcNotFoundError(rpcErr)) {
-        const msg = String(rpcErr.message || "");
-        if (msg.includes("code_conflict:")) {
-          const conflictKey = msg.split("code_conflict:")[1]?.trim() || "";
-          return {
-            success: false,
-            errorType: "validation",
-            conflictingKeys: conflictKey ? [conflictKey] : requiredKeys,
-            error: "Mã bài thi đã được sử dụng bởi một bài thi khác.",
-          };
-        }
-        const classified = classifySupabaseError(rpcErr);
-        // Only abort immediately on hard network/server/unauthorized errors from deployed RPC
-        if (classified.type === "network" || classified.type === "server" || classified.type === "unauthorized") {
-          return {
-            success: false,
-            error: rpcErr.message || classified.message,
-            errorType: classified.type,
-          };
+      if (rpcErr) {
+        if (isRpcNotFoundError(rpcErr)) {
+          markCapabilityUnavailable("rpc:sync_exam_codes_and_links");
+        } else {
+          const msg = String(rpcErr.message || "");
+          if (msg.includes("code_conflict:")) {
+            const conflictKey = msg.split("code_conflict:")[1]?.trim() || "";
+            return {
+              success: false,
+              errorType: "validation",
+              conflictingKeys: conflictKey ? [conflictKey] : requiredKeys,
+              error: "Mã bài thi đã được sử dụng bởi một bài thi khác.",
+            };
+          }
+          const classified = classifySupabaseError(rpcErr);
+          // Only abort immediately on hard network/server/unauthorized errors from deployed RPC
+          if (classified.type === "network" || classified.type === "server" || classified.type === "unauthorized") {
+            return {
+              success: false,
+              error: rpcErr.message || classified.message,
+              errorType: classified.type,
+            };
+          }
         }
       }
     } catch {
@@ -588,10 +646,19 @@ export async function syncSchoolsRegistryEntries(params: {
 
   // 2. Pre-check existing keys in `schools` so we never run ON CONFLICT DO UPDATE blindly
   const allKeys = uniqueEntries.map((e) => e.name_key);
-  const { data: existingRows, error: selErr } = await supabase
-    .from("schools")
-    .select("name_key, name")
-    .in("name_key", allKeys);
+  let existingRows: any = null;
+  let selErr: any = null;
+  try {
+    const selRes = await withRequestTimeout<any>(
+      supabase.from("schools").select("name_key, name").in("name_key", allKeys),
+      8000,
+      "examAssignments.syncSchoolsRegistryEntries.selectExisting"
+    );
+    existingRows = selRes?.data;
+    selErr = selRes?.error;
+  } catch (err) {
+    selErr = err;
+  }
 
   if (selErr) {
     const classified = classifySupabaseError(selErr);
@@ -683,11 +750,19 @@ export async function syncSchoolsRegistryEntries(params: {
             verifiedMappedKeys.add(row.name_key);
             continue;
           }
-          const { data: checkRow, error: checkErr } = await supabase
-            .from("schools")
-            .select("name_key, name")
-            .eq("name_key", row.name_key)
-            .maybeSingle();
+          let checkRow: any = null;
+          let checkErr: any = null;
+          try {
+            const checkRes = await withRequestTimeout<any>(
+              supabase.from("schools").select("name_key, name").eq("name_key", row.name_key).maybeSingle(),
+              8000,
+              "examAssignments.syncSchoolsRegistryEntries.checkRace"
+            );
+            checkRow = checkRes?.data;
+            checkErr = checkRes?.error;
+          } catch (err) {
+            checkErr = err;
+          }
 
           if (checkErr) {
             const classified = classifySupabaseError(checkErr);
@@ -762,10 +837,19 @@ export async function syncSchoolsRegistryEntries(params: {
   if (requiredKeys.length > 0) {
     const unverifiedRequired = requiredKeys.filter((k) => !verifiedMappedKeys.has(k));
     if (unverifiedRequired.length > 0) {
-      const { data: verifyRows, error: verifyErr } = await supabase
-        .from("schools")
-        .select("name_key, name")
-        .in("name_key", unverifiedRequired);
+      let verifyRows: any = null;
+      let verifyErr: any = null;
+      try {
+        const vRes = await withRequestTimeout<any>(
+          supabase.from("schools").select("name_key, name").in("name_key", unverifiedRequired),
+          8000,
+          "examAssignments.syncSchoolsRegistryEntries.verify"
+        );
+        verifyRows = vRes?.data;
+        verifyErr = vRes?.error;
+      } catch (err) {
+        verifyErr = err;
+      }
 
       if (verifyErr) {
         const classified = classifySupabaseError(verifyErr);
@@ -970,6 +1054,7 @@ export async function syncExamAssignmentCodes(exam: any): Promise<{
       }
     }
 
+    syncedPrimaryExamIds.add(exam.id);
     return { success: true, primaryCode };
   } catch (err: any) {
     const classified = classifySupabaseError(err);
@@ -1076,7 +1161,11 @@ export async function createAssignment(params: {
 
   // 2. Persist to Supabase in exams.team_config.assignments
   try {
-    const { data: latestExam } = await supabase.from("exams").select("team_config").eq("id", exam.id).maybeSingle();
+    const { data: latestExam } = await withRequestTimeout<any>(
+      supabase.from("exams").select("team_config").eq("id", exam.id).maybeSingle(),
+      8000,
+      "examAssignments.createAssignment.selectExam"
+    );
     const existingTeamCfg = (latestExam?.team_config as any) || exam.team_config || {};
     const existingAssignments = Array.isArray(existingTeamCfg.assignments) ? existingTeamCfg.assignments : [];
 
@@ -1087,12 +1176,16 @@ export async function createAssignment(params: {
     };
     updatedTeamConfigForExam = updatedTeamConfig;
 
-    const { error: exUpdErr } = await withSupabaseAuthRetry(async () => {
-      return await supabase
-        .from("exams")
-        .update({ team_config: updatedTeamConfig as any } as any)
-        .eq("id", exam.id);
-    });
+    const { error: exUpdErr } = await withSupabaseAuthRetry(
+      async () => {
+        return await supabase
+          .from("exams")
+          .update({ team_config: updatedTeamConfig as any } as any)
+          .eq("id", exam.id);
+      },
+      undefined,
+      { timeoutMs: 10000, stepName: "examAssignments.createAssignment.updateExam" }
+    );
 
     if (exUpdErr) {
       lastDbError = exUpdErr;
@@ -1123,8 +1216,13 @@ export async function createAssignment(params: {
   const currentLocal = getLocalAssignments();
   saveLocalAssignments([newAssignment, ...currentLocal.filter((a) => a.id !== newAssignment.id)]);
 
-  // 4. Sync primary code + updated assignments safely
-  await syncExamAssignmentCodes({ ...exam, team_config: updatedTeamConfigForExam });
+  // 4. Ensure primary code is synced once without re-syncing every historical assignment
+  if (!syncedPrimaryExamIds.has(exam.id) || !updatedTeamConfigForExam.primary_code) {
+    await syncExamAssignmentCodes({
+      ...exam,
+      team_config: { ...updatedTeamConfigForExam, assignments: [] },
+    }).catch(() => {});
+  }
 
   const { ensureExamShortLink } = await import("./shortLinks");
   const shortRes = await ensureExamShortLink({
@@ -1427,79 +1525,94 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<Exam
 
   // 3. Authoritative server RPC lookup `resolve_exam_access_code`
   // Covers exam_short_links, schools, AND exams.team_config (even for older/unsynced exams)
-  try {
-    const { data: rpcRes, error: rpcErr } = await (supabase as any).rpc("resolve_exam_access_code", {
-      p_code: lookupCode,
-    });
-    if (rpcErr) {
-      recordRemoteErr(rpcErr);
-    } else if (rpcRes && (rpcRes as any).found && isUuid((rpcRes as any).exam_id)) {
-      const r = rpcRes as any;
-      const { data: exData, error: exErr } = await supabase.rpc("get_exam_for_student", {
-        p_exam_id: r.exam_id,
-      });
-
-      if (!exErr && exData) {
-        const assignmentObj: ExamAssignment = {
-          id: r.assignment_id || `assign_${r.exam_id}`,
-          examId: r.exam_id,
-          code: r.assignment_code ? normalizeExamCode(r.assignment_code) : normalizedNumCode || lookupCode,
-          shortCode: r.short_code ? String(r.short_code).toUpperCase() : undefined,
-          className: targetClass || r.class_name || "Chung",
-          title: (exData as any).title,
-          teacherName: (exData as any).teacher_name,
-          schoolName: (exData as any).school_name,
-          subjectName: (exData as any).subject_name,
-          durationMinutes: (exData as any).duration_minutes,
-          openAt: (exData as any).open_at,
-          closeAt: (exData as any).close_at,
-          createdAt: new Date().toISOString(),
-        };
-
-        const localList = getLocalAssignments();
-        saveLocalAssignments([assignmentObj, ...localList.filter((a) => a.id !== assignmentObj.id)]);
-
-        const statusErr = buildExamStatusError(exData);
-        if (statusErr.errorType) {
-          logExamAccessEvent({
-            examId: r.exam_id,
-            rawCode: lookupCode,
-            accessType: "code",
-            outcome: statusErr.errorType as any,
-            errorCategory: statusErr.errorType,
-            errorDetail: `rpc_status_${statusErr.errorType}`,
-          });
+  if (!isCapabilityUnavailable("rpc:resolve_exam_access_code")) {
+    try {
+      const { data: rpcRes, error: rpcErr } = await withRequestTimeout<any>(
+        (supabase as any).rpc("resolve_exam_access_code", {
+          p_code: lookupCode,
+        }),
+        8000,
+        "examAssignments.findAssignmentOrExamByCode.resolveRpc"
+      );
+      if (rpcErr) {
+        if (isRpcNotFoundError(rpcErr)) {
+          markCapabilityUnavailable("rpc:resolve_exam_access_code");
+        } else {
+          recordRemoteErr(rpcErr);
         }
+      } else if (rpcRes && (rpcRes as any).found && isUuid((rpcRes as any).exam_id)) {
+        markCapabilityAvailable("rpc:resolve_exam_access_code");
+        const r = rpcRes as any;
+        const { data: exData, error: exErr } = await withRequestTimeout<any>(
+          supabase.rpc("get_exam_for_student", {
+            p_exam_id: r.exam_id,
+          }),
+          8000,
+          "examAssignments.findAssignmentOrExamByCode.getExam"
+        );
 
-        return {
-          success: true,
-          exam: exData,
-          assignment: assignmentObj,
-        };
-      }
-
-      if (exErr) {
-        const c = classifySupabaseError(exErr);
-        recordRemoteErr(exErr);
-        if (c.type === "network" || c.type === "server" || c.type === "unauthorized") {
-          logExamAccessEvent({
+        if (!exErr && exData) {
+          const assignmentObj: ExamAssignment = {
+            id: r.assignment_id || `assign_${r.exam_id}`,
             examId: r.exam_id,
-            rawCode: lookupCode,
-            accessType: "code",
-            outcome: c.type === "network" ? "network_error" : c.type === "unauthorized" ? "unauthorized" : "server_error",
-            errorCategory: c.type,
-            errorDetail: c.technicalDetail,
-          });
+            code: r.assignment_code ? normalizeExamCode(r.assignment_code) : normalizedNumCode || lookupCode,
+            shortCode: r.short_code ? String(r.short_code).toUpperCase() : undefined,
+            className: targetClass || r.class_name || "Chung",
+            title: (exData as any).title,
+            teacherName: (exData as any).teacher_name,
+            schoolName: (exData as any).school_name,
+            subjectName: (exData as any).subject_name,
+            durationMinutes: (exData as any).duration_minutes,
+            openAt: (exData as any).open_at,
+            closeAt: (exData as any).close_at,
+            createdAt: new Date().toISOString(),
+          };
+
+          const localList = getLocalAssignments();
+          saveLocalAssignments([assignmentObj, ...localList.filter((a) => a.id !== assignmentObj.id)]);
+
+          const statusErr = buildExamStatusError(exData);
+          if (statusErr.errorType) {
+            logExamAccessEvent({
+              examId: r.exam_id,
+              rawCode: lookupCode,
+              accessType: "code",
+              outcome: statusErr.errorType as any,
+              errorCategory: statusErr.errorType,
+              errorDetail: `rpc_status_${statusErr.errorType}`,
+            });
+          }
+
           return {
-            success: false,
-            errorType: c.type,
-            error: c.message,
+            success: true,
+            exam: exData,
+            assignment: assignmentObj,
           };
         }
+
+        if (exErr) {
+          const c = classifySupabaseError(exErr);
+          recordRemoteErr(exErr);
+          if (c.type === "network" || c.type === "server" || c.type === "unauthorized") {
+            logExamAccessEvent({
+              examId: r.exam_id,
+              rawCode: lookupCode,
+              accessType: "code",
+              outcome: c.type === "network" ? "network_error" : c.type === "unauthorized" ? "unauthorized" : "server_error",
+              errorCategory: c.type,
+              errorDetail: c.technicalDetail,
+            });
+            return {
+              success: false,
+              errorType: c.type,
+              error: c.message,
+            };
+          }
+        }
       }
+    } catch (e) {
+      recordRemoteErr(e);
     }
-  } catch (e) {
-    recordRemoteErr(e);
   }
 
   // 4. Cross-device lookup via public `schools` registry table

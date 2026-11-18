@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { isUuid } from "@/lib/teacherStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 type Exam = {
   id: string; title: string; created_at: string; duration_minutes: number;
@@ -18,7 +19,7 @@ type Exam = {
 };
 
 export default function Library() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [exams, setExams] = useState<Exam[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -26,22 +27,47 @@ export default function Library() {
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    if (authLoading) return;
+    let active = true;
     (async () => {
-      let q = supabase.from("exams")
-        .select("id,title,created_at,duration_minutes,subject_name,school_name,teacher_name,created_by,original_file_path,original_file_url")
-        .order("created_at", { ascending: false });
-      if (!isAdmin && user) {
-        if (isUuid(user.id)) q = q.eq("created_by", user.id);
+      setLoading(true);
+      try {
+        let q = supabase.from("exams")
+          .select("id,title,created_at,duration_minutes,subject_name,school_name,teacher_name,created_by,original_file_path,original_file_url")
+          .order("created_at", { ascending: false });
+        if (!isAdmin && user) {
+          if (isUuid(user.id)) q = q.eq("created_by", user.id);
+        }
+        const { data } = await withRequestTimeout<any>(q, 10000, "library.loadExams");
+        if (!active) return;
+        const loadedExams: Exam[] = (data as any) || [];
+        setExams(loadedExams);
+
+        const examIds = loadedExams.map((e) => e.id);
+        let subQ = supabase.from("submissions").select("exam_id");
+        if (!isAdmin && user) {
+          if (examIds.length > 0) {
+            subQ = subQ.in("exam_id", examIds);
+          } else {
+            setCounts({});
+            return;
+          }
+        }
+        const { data: subs } = await withRequestTimeout<any>(subQ, 10000, "library.loadSubmissions");
+        if (!active) return;
+        const c: Record<string, number> = {};
+        (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
+        setCounts(c);
+      } catch (err) {
+        console.warn("Library load error:", err);
+      } finally {
+        if (active) setLoading(false);
       }
-      const { data } = await q;
-      setExams((data as any) || []);
-      const { data: subs } = await supabase.from("submissions").select("exam_id");
-      const c: Record<string, number> = {};
-      (subs || []).forEach((s: any) => { c[s.exam_id] = (c[s.exam_id] || 0) + 1; });
-      setCounts(c);
-      setLoading(false);
     })();
-  }, [isAdmin, user]);
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAdmin, user]);
 
   // build tree: subject -> school -> teacher -> exams
   const tree = useMemo(() => {
@@ -75,23 +101,35 @@ export default function Library() {
   const subjects = Object.keys(tree).sort();
 
   const downloadExam = async (e: Exam) => {
-    if (e.original_file_path) {
-      const { data, error } = await supabase.storage.from("exam-files").createSignedUrl(e.original_file_path, 300);
-      if (error || !data) return toast.error("Không tạo được link tải");
-      window.open(data.signedUrl, "_blank");
-      return;
+    try {
+      if (e.original_file_path) {
+        const { data, error } = await withRequestTimeout<any>(
+          supabase.storage.from("exam-files").createSignedUrl(e.original_file_path, 300),
+          10000,
+          "library.signedUrl"
+        );
+        if (error || !data) return toast.error("Không tạo được link tải");
+        window.open(data.signedUrl, "_blank");
+        return;
+      }
+      if (e.original_file_url) { window.open(e.original_file_url, "_blank"); return; }
+      // Fallback: export JSON of the full exam (metadata + questions + answers + explanations)
+      const { data: full, error } = await withRequestTimeout<any>(
+        supabase.from("exams").select("*").eq("id", e.id).maybeSingle(),
+        10000,
+        "library.downloadJson"
+      );
+      if (error || !full) return toast.error("Không tải được đề");
+      const blob = new Blob([JSON.stringify(full, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${(full.title || "de-thi").replace(/[\\/:*?"<>|]+/g, "_")}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Đã tải đề (JSON)");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải đề");
     }
-    if (e.original_file_url) { window.open(e.original_file_url, "_blank"); return; }
-    // Fallback: export JSON of the full exam (metadata + questions + answers + explanations)
-    const { data: full, error } = await supabase.from("exams").select("*").eq("id", e.id).maybeSingle();
-    if (error || !full) return toast.error("Không tải được đề");
-    const blob = new Blob([JSON.stringify(full, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `${(full.title || "de-thi").replace(/[\\/:*?"<>|]+/g, "_")}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-    toast.success("Đã tải đề (JSON)");
   };
 
 

@@ -1,6 +1,13 @@
 import { supabase } from "@/integrations/supabase/client";
 import { findSampleExam, getSampleExamById } from "@/lib/sampleExams";
 import { withSupabaseAuthRetry } from "@/lib/supabaseAuthSync";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingTableOrRpcError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import {
   ExamAssignment,
   getExamPrimaryCode,
@@ -50,6 +57,7 @@ export interface ShortLinkResolveResult {
 let memoryShortLinksCache: ExamShortLink[] | null = null;
 let hasShortLinksQuotaFallback = false;
 const inFlightEnsureMap = new Map<string, Promise<ExamShortLink>>();
+const syncedShortLinkKeys = new Set<string>();
 
 if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.prototype.clear === "function") {
   try {
@@ -57,6 +65,7 @@ if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.protot
     Storage.prototype.clear = function () {
       memoryShortLinksCache = null;
       hasShortLinksQuotaFallback = false;
+      syncedShortLinkKeys.clear();
       return origClear.apply(this);
     };
   } catch {}
@@ -252,37 +261,72 @@ export async function isShortCodeTaken(candidateCode: string): Promise<boolean> 
     return true;
   }
 
-  try {
-    const { data: rpcTaken, error: rpcErr } = await (supabase as any).rpc("check_exam_code_taken", {
-      p_code: norm,
-    });
-    if (!rpcErr && typeof rpcTaken === "boolean") {
-      return rpcTaken;
+  if (!isCapabilityUnavailable("rpc:check_exam_code_taken")) {
+    try {
+      const { data: rpcTaken, error: rpcErr } = await withRequestTimeout<any>(
+        (supabase as any).rpc("check_exam_code_taken", {
+          p_code: norm,
+        }),
+        6000,
+        "shortLinks.isShortCodeTaken.rpc"
+      );
+      if (!rpcErr && typeof rpcTaken === "boolean") {
+        markCapabilityAvailable("rpc:check_exam_code_taken");
+        return rpcTaken;
+      }
+      if (rpcErr && isRpcNotFoundError(rpcErr)) {
+        markCapabilityUnavailable("rpc:check_exam_code_taken");
+      }
+    } catch {}
+  }
+
+  const checkShortLinksTable = async (): Promise<boolean> => {
+    if (isCapabilityUnavailable("table:exam_short_links")) return false;
+    try {
+      const { data: slRow, error: slErr } = await withRequestTimeout<any>(
+        (supabase as any).from("exam_short_links").select("id").eq("short_code", norm).maybeSingle(),
+        6000,
+        "shortLinks.isShortCodeTaken.shortLinksTable"
+      );
+      if (slErr && isMissingTableOrRpcError(slErr, "exam_short_links")) {
+        markCapabilityUnavailable("table:exam_short_links");
+        return false;
+      }
+      if (!slErr) {
+        markCapabilityAvailable("table:exam_short_links");
+      }
+      return !slErr && Boolean(slRow);
+    } catch {
+      return false;
     }
-  } catch {}
+  };
 
-  try {
-    const { data: slRow, error: slErr } = await (supabase as any)
-      .from("exam_short_links")
-      .select("id")
-      .eq("short_code", norm)
-      .maybeSingle();
-    if (!slErr && slRow) return true;
-  } catch {}
+  const checkSchoolsRegistry = async (): Promise<boolean> => {
+    try {
+      const { data: schRows } = await withRequestTimeout<any>(
+        supabase
+          .from("schools")
+          .select("name_key")
+          .in("name_key", [`short_code:${norm}`, `assign_code:${norm}`]),
+        6000,
+        "shortLinks.isShortCodeTaken.schools"
+      );
+      return Array.isArray(schRows) && schRows.length > 0;
+    } catch {
+      return false;
+    }
+  };
 
-  try {
-    const { data: schRows } = await supabase
-      .from("schools")
-      .select("name_key")
-      .in("name_key", [`short_code:${norm}`, `assign_code:${norm}`]);
-    if (schRows && schRows.length > 0) return true;
-  } catch {}
+  const [takenInShortLinks, takenInSchools] = await Promise.all([
+    checkShortLinksTable(),
+    checkSchoolsRegistry(),
+  ]);
 
-  return false;
+  return takenInShortLinks || takenInSchools;
 }
 
 export async function generateUniqueShortCode(length = DEFAULT_SHORT_CODE_LENGTH): Promise<string> {
-  for (let attempt = 0; attempt < 30; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
     const candidate = generateShortCode(length);
     const taken = await isShortCodeTaken(candidate);
     if (!taken) return candidate;
@@ -301,7 +345,7 @@ async function fetchExistingActiveShortLink(
   examId: string,
   assignment?: ExamAssignment | null
 ): Promise<ExamShortLink | null> {
-  if (!isUuid(examId)) return null;
+  if (!isUuid(examId) || isCapabilityUnavailable("table:exam_short_links")) return null;
   try {
     let query = (supabase as any)
       .from("exam_short_links")
@@ -315,8 +359,17 @@ async function fetchExistingActiveShortLink(
       query = query.eq("is_primary", true);
     }
 
-    const { data: dbRow, error: dbErr } = await query.maybeSingle();
+    const { data: dbRow, error: dbErr } = await withRequestTimeout<any>(
+      query.maybeSingle(),
+      6000,
+      "shortLinks.fetchExistingActiveShortLink"
+    );
+    if (dbErr && isMissingTableOrRpcError(dbErr, "exam_short_links")) {
+      markCapabilityUnavailable("table:exam_short_links");
+      return null;
+    }
     if (!dbErr && dbRow?.short_code) {
+      markCapabilityAvailable("table:exam_short_links");
       return {
         shortCode: normalizeShortCode(dbRow.short_code),
         examId,
@@ -367,24 +420,31 @@ async function persistShortLinkRecord(
   }
 
   // 2. Persist to dedicated `exam_short_links` table
-  if (isUuid(record.examId)) {
+  if (isUuid(record.examId) && !isCapabilityUnavailable("table:exam_short_links")) {
     try {
-      const { error: slErr } = await withSupabaseAuthRetry(async () => {
-        return await (supabase as any).from("exam_short_links").insert({
-          short_code: record.shortCode,
-          exam_id: record.examId,
-          assignment_id: record.assignmentId || null,
-          assignment_code: record.assignmentCode || null,
-          class_name: record.className || null,
-          target_path: record.targetPath,
-          is_primary: record.isPrimary,
-          is_active: true,
-          created_by: exam?.created_by || null,
-        });
-      });
+      const { error: slErr } = await withSupabaseAuthRetry(
+        async () => {
+          return await (supabase as any).from("exam_short_links").insert({
+            short_code: record.shortCode,
+            exam_id: record.examId,
+            assignment_id: record.assignmentId || null,
+            assignment_code: record.assignmentCode || null,
+            class_name: record.className || null,
+            target_path: record.targetPath,
+            is_primary: record.isPrimary,
+            is_active: true,
+            created_by: exam?.created_by || null,
+          });
+        },
+        undefined,
+        { timeoutMs: 8000, stepName: "shortLinks.persistShortLinkRecord.insert" }
+      );
 
       if (!slErr) {
+        markCapabilityAvailable("table:exam_short_links");
         persistedRemote = true;
+      } else if (isMissingTableOrRpcError(slErr, "exam_short_links")) {
+        markCapabilityUnavailable("table:exam_short_links");
       } else if (String(slErr.code) === "23505") {
         // Check if another concurrent tab already created an active short link for the same exam/assignment
         const concurrent = await fetchExistingActiveShortLink(record.examId, assignment);
@@ -404,11 +464,11 @@ async function persistShortLinkRecord(
   // 3. Persist on `exams.team_config` so future loads read it directly from exam row
   if (isUuid(record.examId)) {
     try {
-      const { data: latestExam } = await supabase
-        .from("exams")
-        .select("team_config")
-        .eq("id", record.examId)
-        .maybeSingle();
+      const { data: latestExam } = await withRequestTimeout<any>(
+        supabase.from("exams").select("team_config").eq("id", record.examId).maybeSingle(),
+        8000,
+        "shortLinks.persistShortLinkRecord.selectExam"
+      );
 
       const currentCfg = ((latestExam?.team_config as any) || exam?.team_config || {}) as Record<string, any>;
       let nextCfg: Record<string, any> | null = null;
@@ -431,12 +491,16 @@ async function persistShortLinkRecord(
       }
 
       if (nextCfg) {
-        const { error: exUpdErr } = await withSupabaseAuthRetry(async () => {
-          return await supabase
-            .from("exams")
-            .update({ team_config: nextCfg as any } as any)
-            .eq("id", record.examId);
-        });
+        const { error: exUpdErr } = await withSupabaseAuthRetry(
+          async () => {
+            return await supabase
+              .from("exams")
+              .update({ team_config: nextCfg as any } as any)
+              .eq("id", record.examId);
+          },
+          undefined,
+          { timeoutMs: 8000, stepName: "shortLinks.persistShortLinkRecord.updateExam" }
+        );
         if (!exUpdErr) {
           persistedRemote = true;
         } else {
@@ -535,21 +599,27 @@ export async function ensureExamShortLink(params: {
           createdAt: new Date().toISOString(),
         };
         upsertLocalShortLink(record);
-        // Ensure cross-device schools lookup is populated safely without mutating short code or tripping UPDATE RLS
-        try {
-          const reverseKey = record.isPrimary
-            ? `short_exam:${record.examId}`
-            : `short_assign:${record.examId}:${normalizeExamCode(effectiveCode)}`;
-          await syncSchoolsRegistryEntries({
-            examId: record.examId,
-            entries: [
-              { name_key: `short_code:${record.shortCode}`, name: JSON.stringify(record) },
-              { name_key: reverseKey, name: JSON.stringify(record) },
-            ],
-            requiredKeys: [`short_code:${record.shortCode}`],
-            shortCode: record.shortCode,
-          });
-        } catch {}
+        const sessionSyncKey = `${record.examId}:${record.shortCode}:${record.isPrimary ? "p" : effectiveCode}`;
+        // Ensure cross-device schools lookup is populated once per session without tripping UPDATE RLS
+        if (!syncedShortLinkKeys.has(sessionSyncKey)) {
+          try {
+            const reverseKey = record.isPrimary
+              ? `short_exam:${record.examId}`
+              : `short_assign:${record.examId}:${normalizeExamCode(effectiveCode)}`;
+            const syncRes = await syncSchoolsRegistryEntries({
+              examId: record.examId,
+              entries: [
+                { name_key: `short_code:${record.shortCode}`, name: JSON.stringify(record) },
+                { name_key: reverseKey, name: JSON.stringify(record) },
+              ],
+              requiredKeys: [`short_code:${record.shortCode}`],
+              shortCode: record.shortCode,
+            });
+            if (syncRes.success) {
+              syncedShortLinkKeys.add(sessionSyncKey);
+            }
+          } catch {}
+        }
         return record;
       }
 
@@ -571,11 +641,11 @@ export async function ensureExamShortLink(params: {
         const reverseKey = assignment
           ? `short_assign:${exam.id}:${normalizeExamCode(effectiveCode)}`
           : `short_exam:${exam.id}`;
-        const { data: revRow } = await supabase
-          .from("schools")
-          .select("name")
-          .eq("name_key", reverseKey)
-          .maybeSingle();
+        const { data: revRow } = await withRequestTimeout<any>(
+          supabase.from("schools").select("name").eq("name_key", reverseKey).maybeSingle(),
+          6000,
+          "shortLinks.ensureExamShortLink.reverseIndex"
+        );
 
         if (revRow?.name) {
           const parsed = JSON.parse(revRow.name);
@@ -659,15 +729,22 @@ export async function deactivateAssignmentShortLink(
     } catch {}
   }
 
-  if (isUuid(examId)) {
+  if (isUuid(examId) && !isCapabilityUnavailable("table:exam_short_links")) {
     try {
-      await withSupabaseAuthRetry(async () => {
-        return await (supabase as any)
-          .from("exam_short_links")
-          .update({ is_active: false })
-          .eq("exam_id", examId)
-          .eq("assignment_id", assignmentId);
-      });
+      const { error: deactErr } = await withSupabaseAuthRetry(
+        async () => {
+          return await (supabase as any)
+            .from("exam_short_links")
+            .update({ is_active: false })
+            .eq("exam_id", examId)
+            .eq("assignment_id", assignmentId);
+        },
+        undefined,
+        { timeoutMs: 8000, stepName: "shortLinks.deactivateAssignmentShortLink" }
+      );
+      if (deactErr && isMissingTableOrRpcError(deactErr, "exam_short_links")) {
+        markCapabilityUnavailable("table:exam_short_links");
+      }
     } catch {}
   }
 }
@@ -705,47 +782,67 @@ export async function resolveShortLink(rawInput: string): Promise<ShortLinkResol
   };
 
   // 1. Try Security Definer RPC `resolve_exam_short_link`
-  try {
-    const { data: rpcRes, error: rpcErr } = await (supabase as any).rpc("resolve_exam_short_link", {
-      p_short_code: shortCode,
-    });
-    if (rpcErr) {
-      recordRemoteErr(rpcErr);
-    } else if (rpcRes && (rpcRes as any).found) {
-      const r = rpcRes as any;
-      rpcDisplayMode = r.display_mode;
-      mapped = {
-        shortCode: normalizeShortCode(r.short_code || shortCode),
-        examId: r.exam_id,
-        targetPath:
-          r.target_path ||
-          buildExamTargetPath({
-            examId: r.exam_id,
-            code: r.assignment_code,
-            className: r.class_name,
-            displayMode: r.display_mode,
-          }),
-        assignmentId: r.assignment_id || undefined,
-        assignmentCode: r.assignment_code || undefined,
-        className: r.class_name || undefined,
-        isPrimary: r.is_primary !== false,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-      };
+  if (!isCapabilityUnavailable("rpc:resolve_exam_short_link")) {
+    try {
+      const { data: rpcRes, error: rpcErr } = await withRequestTimeout<any>(
+        (supabase as any).rpc("resolve_exam_short_link", {
+          p_short_code: shortCode,
+        }),
+        8000,
+        "shortLinks.resolveShortLink.rpcShort"
+      );
+      if (rpcErr) {
+        if (isRpcNotFoundError(rpcErr)) {
+          markCapabilityUnavailable("rpc:resolve_exam_short_link");
+        } else {
+          recordRemoteErr(rpcErr);
+        }
+      } else if (rpcRes && (rpcRes as any).found) {
+        markCapabilityAvailable("rpc:resolve_exam_short_link");
+        const r = rpcRes as any;
+        rpcDisplayMode = r.display_mode;
+        mapped = {
+          shortCode: normalizeShortCode(r.short_code || shortCode),
+          examId: r.exam_id,
+          targetPath:
+            r.target_path ||
+            buildExamTargetPath({
+              examId: r.exam_id,
+              code: r.assignment_code,
+              className: r.class_name,
+              displayMode: r.display_mode,
+            }),
+          assignmentId: r.assignment_id || undefined,
+          assignmentCode: r.assignment_code || undefined,
+          className: r.class_name || undefined,
+          isPrimary: r.is_primary !== false,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+        };
+      }
+    } catch (e) {
+      recordRemoteErr(e);
     }
-  } catch (e) {
-    recordRemoteErr(e);
   }
 
   // 1.5. Fallback to unified `resolve_exam_access_code` RPC if available
-  if (!mapped) {
+  if (!mapped && !isCapabilityUnavailable("rpc:resolve_exam_access_code")) {
     try {
-      const { data: accessRes, error: accessErr } = await (supabase as any).rpc("resolve_exam_access_code", {
-        p_code: shortCode,
-      });
+      const { data: accessRes, error: accessErr } = await withRequestTimeout<any>(
+        (supabase as any).rpc("resolve_exam_access_code", {
+          p_code: shortCode,
+        }),
+        8000,
+        "shortLinks.resolveShortLink.rpcAccess"
+      );
       if (accessErr) {
-        recordRemoteErr(accessErr);
+        if (isRpcNotFoundError(accessErr)) {
+          markCapabilityUnavailable("rpc:resolve_exam_access_code");
+        } else {
+          recordRemoteErr(accessErr);
+        }
       } else if (accessRes && (accessRes as any).found && isUuid((accessRes as any).exam_id)) {
+        markCapabilityAvailable("rpc:resolve_exam_access_code");
         const r = accessRes as any;
         rpcDisplayMode = r.display_mode;
         mapped = {
@@ -775,11 +872,11 @@ export async function resolveShortLink(rawInput: string): Promise<ShortLinkResol
   // 2. Try cross-device `schools` registry (`short_code:<CODE>`)
   if (!mapped) {
     try {
-      const { data: row, error: schErr } = await supabase
-        .from("schools")
-        .select("name")
-        .eq("name_key", `short_code:${shortCode}`)
-        .maybeSingle();
+      const { data: row, error: schErr } = await withRequestTimeout<any>(
+        supabase.from("schools").select("name").eq("name_key", `short_code:${shortCode}`).maybeSingle(),
+        8000,
+        "shortLinks.resolveShortLink.schools"
+      );
 
       if (schErr) {
         recordRemoteErr(schErr);
@@ -886,9 +983,13 @@ export async function resolveShortLink(rawInput: string): Promise<ShortLinkResol
 
   if (!examObj && isUuid(mapped.examId)) {
     try {
-      const { data: exData, error: exErr } = await supabase.rpc("get_exam_for_student", {
-        p_exam_id: mapped.examId,
-      });
+      const { data: exData, error: exErr } = await withRequestTimeout<any>(
+        supabase.rpc("get_exam_for_student", {
+          p_exam_id: mapped.examId,
+        }),
+        8000,
+        "shortLinks.resolveShortLink.getExam"
+      );
       if (!exErr && exData) {
         examObj = exData;
       } else if (exErr) {

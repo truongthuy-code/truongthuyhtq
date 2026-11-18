@@ -14,10 +14,18 @@ import {
 } from "@/lib/teacherStorage";
 import {
   fetchAllExamsForAdmin,
+  mergeLocalExamsForAdmin,
   saveUnifiedExam,
   deleteUnifiedExamFromLocal,
   SystemExam,
 } from "@/lib/allExamsStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingTableOrRpcError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import {
   ExamFolder,
   getFolders,
@@ -156,7 +164,7 @@ async function getAccessToken(): Promise<string | null> {
   try {
     const {
       data: { session },
-    } = await supabase.auth.getSession();
+    } = await withRequestTimeout<any>(supabase.auth.getSession(), 4500, "adminService.getAccessToken");
     return session?.access_token || null;
   } catch {
     return null;
@@ -167,6 +175,9 @@ async function callAdminApi<T = any>(action: string, payload: Record<string, any
   const token = await getAccessToken();
   if (!token) return null;
 
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => controller?.abort(), 12000);
+
   try {
     const resp = await fetch("/api/admin", {
       method: "POST",
@@ -175,6 +186,7 @@ async function callAdminApi<T = any>(action: string, payload: Record<string, any
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ action, ...payload }),
+      ...(controller ? { signal: controller.signal } : {}),
     });
     const data = await resp.json().catch(() => null);
     if (!resp.ok) {
@@ -185,12 +197,35 @@ async function callAdminApi<T = any>(action: string, payload: Record<string, any
     }
     return data as T;
   } catch (err: any) {
-    // Re-throw explicit API permission/validation errors; swallow network errors for RPC/local fallback
-    if (err?.message && !err.message.includes("Failed to fetch") && !err.message.includes("NetworkError")) {
+    // Re-throw explicit API permission/validation errors; swallow network/abort errors for RPC/local fallback
+    if (
+      err?.name !== "AbortError" &&
+      err?.message &&
+      !err.message.includes("Failed to fetch") &&
+      !err.message.includes("NetworkError")
+    ) {
       throw err;
     }
     return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+const isVitestEnv = typeof process !== "undefined" && Boolean((process as any).env?.VITEST);
+const ADMIN_COALESCE_TTL_MS = 2500;
+
+let inFlightTeachers = new Map<string, Promise<AdminTeacherRecord[]>>();
+let cachedTeachers = new Map<string, { data: AdminTeacherRecord[]; ts: number }>();
+
+let inFlightExams: Promise<{ exams: SystemExam[]; submissionCounts: Record<string, number> }> | null = null;
+let cachedExams: { data: { exams: SystemExam[]; submissionCounts: Record<string, number> }; ts: number } | null = null;
+
+let inFlightRegistrations: Promise<AdminRegistrationRecord[]> | null = null;
+
+export function invalidateAdminServiceCache(): void {
+  cachedTeachers.clear();
+  cachedExams = null;
 }
 
 function toApprovalStatus(rawApproval?: string | null, rawStatus?: string | null): ApprovalStatus {
@@ -211,7 +246,18 @@ function mapTeacherStatus(approval: ApprovalStatus): AdminTeacherRecord["status"
 }
 
 export async function fetchAdminTeachers(includeDeleted = false): Promise<AdminTeacherRecord[]> {
-  const map = new Map<string, AdminTeacherRecord>();
+  const cacheKey = includeDeleted ? "all" : "active";
+  if (!isVitestEnv) {
+    const cached = cachedTeachers.get(cacheKey);
+    if (cached && Date.now() - cached.ts < ADMIN_COALESCE_TTL_MS) {
+      return cached.data;
+    }
+    const existing = inFlightTeachers.get(cacheKey);
+    if (existing) return existing;
+  }
+
+  const run = async (): Promise<AdminTeacherRecord[]> => {
+    const map = new Map<string, AdminTeacherRecord>();
 
   // 1. Server API / Supabase profiles
   try {
@@ -351,13 +397,33 @@ export async function fetchAdminTeachers(includeDeleted = false): Promise<AdminT
     }
   }
 
-  return Array.from(map.values()).sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
+    const result = Array.from(map.values()).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    if (!isVitestEnv) {
+      cachedTeachers.set(cacheKey, { data: result, ts: Date.now() });
+    }
+    return result;
+  };
+
+  if (isVitestEnv) {
+    return run();
+  }
+
+  const p = run().finally(() => {
+    inFlightTeachers.delete(cacheKey);
+  });
+  inFlightTeachers.set(cacheKey, p);
+  return p;
 }
 
 export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord[]> {
-  const regMap = new Map<string, AdminRegistrationRecord>();
+  if (!isVitestEnv && inFlightRegistrations) {
+    return inFlightRegistrations;
+  }
+
+  const run = async (): Promise<AdminRegistrationRecord[]> => {
+    const regMap = new Map<string, AdminRegistrationRecord>();
 
   try {
     const apiRes = await callAdminApi<{ ok: boolean; registrations: any[] }>("list_registrations");
@@ -386,29 +452,38 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
     }
   } catch {}
 
-  if (regMap.size === 0) {
+  if (regMap.size === 0 && !isCapabilityUnavailable("table:teacher_registrations")) {
     try {
-      const { data: regs } = await (supabase as any)
-        .from("teacher_registrations")
-        .select("*")
-        .order("created_at", { ascending: false });
-      for (const r of regs || []) {
-        if (isSuperAdminEmail(r.email)) continue;
-        const uid = r.user_id || r.teacher_id || r.id;
-        regMap.set(uid, {
-          id: r.id,
-          teacher_id: uid,
-          email: r.email || "",
-          username: r.username || "",
-          full_name: r.full_name || "Giáo viên",
-          phone: r.phone || "",
-          school_name: r.school_name || "",
-          subject_name: r.subject_name || "",
-          status: (r.status || "PENDING") as any,
-          rejection_reason: r.rejection_reason || null,
-          reviewed_at: r.reviewed_at || null,
-          created_at: r.created_at || new Date().toISOString(),
-        });
+      const { data: regs, error: regErr } = await withRequestTimeout<any>(
+        (supabase as any)
+          .from("teacher_registrations")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        8000,
+        "adminService.fetchAdminRegistrations.table"
+      );
+      if (regErr && isMissingTableOrRpcError(regErr, "teacher_registrations")) {
+        markCapabilityUnavailable("table:teacher_registrations");
+      } else if (!regErr) {
+        markCapabilityAvailable("table:teacher_registrations");
+        for (const r of regs || []) {
+          if (isSuperAdminEmail(r.email)) continue;
+          const uid = r.user_id || r.teacher_id || r.id;
+          regMap.set(uid, {
+            id: r.id,
+            teacher_id: uid,
+            email: r.email || "",
+            username: r.username || "",
+            full_name: r.full_name || "Giáo viên",
+            phone: r.phone || "",
+            school_name: r.school_name || "",
+            subject_name: r.subject_name || "",
+            status: (r.status || "PENDING") as any,
+            rejection_reason: r.rejection_reason || null,
+            reviewed_at: r.reviewed_at || null,
+            created_at: r.created_at || new Date().toISOString(),
+          });
+        }
       }
     } catch {}
   }
@@ -444,14 +519,29 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
   return Array.from(regMap.values()).sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
+  };
+
+  if (isVitestEnv) {
+    return run();
+  }
+
+  inFlightRegistrations = run().finally(() => {
+    inFlightRegistrations = null;
+  });
+  return inFlightRegistrations;
 }
 
-export async function fetchAdminOverview(): Promise<AdminOverviewMetrics> {
-  const [teachers, exams, folders] = await Promise.all([
-    fetchAdminTeachers(),
-    fetchSystemExamsForAdmin(),
-    getFolders(undefined, true),
+export async function fetchAdminOverview(preloaded?: {
+  teachers?: AdminTeacherRecord[];
+  exams?: SystemExam[];
+  folders?: ExamFolder[];
+}): Promise<AdminOverviewMetrics> {
+  const [teachers, examsRes, folders] = await Promise.all([
+    preloaded?.teachers ? Promise.resolve(preloaded.teachers) : fetchAdminTeachers(),
+    preloaded?.exams ? Promise.resolve({ exams: preloaded.exams, submissionCounts: {} }) : fetchSystemExamsForAdmin(),
+    preloaded?.folders ? Promise.resolve(preloaded.folders) : getFolders(undefined, true),
   ]);
+  const exams = examsRes.exams;
 
   let totalSubmissions = 0;
   try {
@@ -467,7 +557,11 @@ export async function fetchAdminOverview(): Promise<AdminOverviewMetrics> {
   } catch {}
 
   try {
-    const { count } = await supabase.from("submissions").select("id", { count: "exact", head: true });
+    const { count } = await withRequestTimeout<any>(
+      supabase.from("submissions").select("id", { count: "exact", head: true }),
+      8000,
+      "adminService.fetchAdminOverview.submissionsCount"
+    );
     totalSubmissions = count || 0;
   } catch {}
 
@@ -678,41 +772,69 @@ export async function fetchSystemExamsForAdmin(): Promise<{
   exams: SystemExam[];
   submissionCounts: Record<string, number>;
 }> {
-  const counts: Record<string, number> = {};
-  let merged: SystemExam[] = [];
-
-  try {
-    const apiRes = await callAdminApi<{
-      ok: boolean;
-      exams: SystemExam[];
-      submissionCounts: Record<string, number>;
-    }>("list_exams_system");
-    if (apiRes?.ok && Array.isArray(apiRes.exams)) {
-      merged = apiRes.exams;
-      Object.assign(counts, apiRes.submissionCounts || {});
+  if (!isVitestEnv) {
+    if (cachedExams && Date.now() - cachedExams.ts < ADMIN_COALESCE_TTL_MS) {
+      return cachedExams.data;
     }
-  } catch {}
-
-  if (merged.length === 0) {
-    merged = await fetchAllExamsForAdmin();
-    try {
-      const { data: subs } = await supabase.from("submissions").select("exam_id");
-      for (const s of subs || []) {
-        counts[s.exam_id] = (counts[s.exam_id] || 0) + 1;
-      }
-    } catch {}
-  } else {
-    const localExams = await fetchAllExamsForAdmin();
-    const seen = new Set(merged.map((e) => e.id));
-    for (const le of localExams) {
-      if (!seen.has(le.id)) merged.push(le);
-    }
+    if (inFlightExams) return inFlightExams;
   }
 
-  return {
-    exams: merged.filter((e: any) => !e.is_deleted),
-    submissionCounts: counts,
+  const run = async (): Promise<{
+    exams: SystemExam[];
+    submissionCounts: Record<string, number>;
+  }> => {
+    const counts: Record<string, number> = {};
+    let merged: SystemExam[] = [];
+    let apiSucceeded = false;
+
+    try {
+      const apiRes = await callAdminApi<{
+        ok: boolean;
+        exams: SystemExam[];
+        submissionCounts: Record<string, number>;
+      }>("list_exams_system");
+      if (apiRes?.ok && Array.isArray(apiRes.exams)) {
+        apiSucceeded = true;
+        merged = apiRes.exams;
+        Object.assign(counts, apiRes.submissionCounts || {});
+      }
+    } catch {}
+
+    if (!apiSucceeded || merged.length === 0) {
+      merged = await fetchAllExamsForAdmin();
+      try {
+        const { data: subs } = await withRequestTimeout<any>(
+          supabase.from("submissions").select("exam_id"),
+          8000,
+          "adminService.fetchSystemExamsForAdmin.submissions"
+        );
+        for (const s of subs || []) {
+          counts[s.exam_id] = (counts[s.exam_id] || 0) + 1;
+        }
+      } catch {}
+    } else {
+      // API already returned authoritative Supabase exams; merge only local/sample exams synchronously!
+      merged = mergeLocalExamsForAdmin(merged);
+    }
+
+    const result = {
+      exams: merged.filter((e: any) => !e.is_deleted),
+      submissionCounts: counts,
+    };
+    if (!isVitestEnv) {
+      cachedExams = { data: result, ts: Date.now() };
+    }
+    return result;
   };
+
+  if (isVitestEnv) {
+    return run();
+  }
+
+  inFlightExams = run().finally(() => {
+    inFlightExams = null;
+  });
+  return inFlightExams;
 }
 
 export async function fetchTeacherDataBundle(teacherId: string): Promise<TeacherDataBundle> {

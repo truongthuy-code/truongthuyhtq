@@ -40,6 +40,7 @@ import {
   getExamPublicOrigin,
 } from "@/lib/examAssignments";
 import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
+import { withRequestTimeout } from "@/lib/requestTimeout";
 
 export default function Share() {
   const { id } = useParams();
@@ -69,67 +70,92 @@ export default function Share() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const creatingAssignRef = useRef(false);
 
   const syncExamResources = async (data: any) => {
     setSyncingCodes(true);
     setSyncError(null);
     const syncErrors: string[] = [];
 
-    const syncRes = await syncExamAssignmentCodes(data);
-    if (!syncRes.success) {
-      syncErrors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
-    }
-
-    const effectiveExam = syncRes.primaryCode
-      ? {
-          ...data,
-          team_config: {
-            ...((data.team_config as any) || {}),
-            primary_code: syncRes.primaryCode,
-          },
-        }
-      : data;
-
-    if (syncRes.primaryCode) {
-      setPrimaryCode(syncRes.primaryCode);
-      setExam((prev: any) => (prev ? { ...prev, team_config: effectiveExam.team_config } : prev));
-    }
-
     try {
-      const sl = await ensureExamShortLink({ exam: effectiveExam });
-      if (sl?.shortCode) setShortCode(sl.shortCode);
-    } catch (err: any) {
-      syncErrors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
-    }
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes(data),
+        12000,
+        "share.syncExamAssignmentCodes"
+      );
+      if (!syncRes.success) {
+        syncErrors.push(syncRes.error || "Không thể đồng bộ mã bài thi lên máy chủ.");
+      }
 
-    const list = await getAssignmentsForExam(data.id, effectiveExam);
-    const enrichedList = await Promise.all(
-      list.map(async (item) => {
-        if (item.shortCode) return item;
-        try {
-          const sl = await ensureExamShortLink({ exam: effectiveExam, assignment: item });
-          return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
-        } catch {
-          return item;
-        }
-      })
-    );
-    setAssignments(enrichedList);
-    if (syncErrors.length > 0) {
-      setSyncError(syncErrors[0]);
+      const effectiveExam = syncRes.primaryCode
+        ? {
+            ...data,
+            team_config: {
+              ...((data.team_config as any) || {}),
+              primary_code: syncRes.primaryCode,
+            },
+          }
+        : data;
+
+      if (syncRes.primaryCode) {
+        setPrimaryCode(syncRes.primaryCode);
+        setExam((prev: any) => (prev ? { ...prev, team_config: effectiveExam.team_config } : prev));
+      }
+
+      try {
+        const sl = await withRequestTimeout(
+          ensureExamShortLink({ exam: effectiveExam }),
+          10000,
+          "share.ensureExamShortLink"
+        );
+        if (sl?.shortCode) setShortCode(sl.shortCode);
+      } catch (err: any) {
+        syncErrors.push(err?.message || "Không thể tạo hoặc lưu link ngắn bài thi.");
+      }
+
+      const list = await withRequestTimeout(
+        getAssignmentsForExam(data.id, effectiveExam),
+        10000,
+        "share.getAssignmentsForExam"
+      );
+      const enrichedList = await Promise.all(
+        list.map(async (item) => {
+          if (item.shortCode) return item;
+          try {
+            const sl = await withRequestTimeout(
+              ensureExamShortLink({ exam: effectiveExam, assignment: item }),
+              8000,
+              "share.ensureAssignmentShortLink"
+            );
+            return sl?.shortCode ? { ...item, shortCode: sl.shortCode } : item;
+          } catch {
+            return item;
+          }
+        })
+      );
+      setAssignments(enrichedList);
+      if (syncErrors.length > 0) {
+        setSyncError(syncErrors[0]);
+      }
+    } catch (err: any) {
+      setSyncError(err?.message || "Quá thời gian đồng bộ mã bài thi và link ngắn.");
+    } finally {
+      setSyncingCodes(false);
     }
-    setSyncingCodes(false);
   };
 
   useEffect(() => {
     if (!id) return;
+    let active = true;
     setLoadError(null);
-    supabase
-      .from("exams")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle()
-      .then(async ({ data, error }) => {
+    (async () => {
+      try {
+        const { data, error } = await withRequestTimeout<any>(
+          supabase.from("exams").select("*").eq("id", id).maybeSingle(),
+          10000,
+          "share.loadExam"
+        );
+        if (!active) return;
         if (error) {
           setLoadError("Không thể tải thông tin đề thi từ máy chủ: " + error.message);
           setSyncingCodes(false);
@@ -146,7 +172,15 @@ export default function Share() {
         const existingShort = getExamPrimaryShortCode(data);
         if (existingShort) setShortCode(existingShort);
         await syncExamResources(data);
-      });
+      } catch (err: any) {
+        if (!active) return;
+        setLoadError(err?.message || "Không thể tải thông tin đề thi từ máy chủ.");
+        setSyncingCodes(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   if (loadError) {
@@ -273,45 +307,64 @@ export default function Share() {
 
   const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (creatingAssignRef.current) return;
     if (!newClass.trim()) {
       toast.error("Vui lòng nhập tên lớp hoặc đợt thi (ví dụ: 12A1)");
       return;
     }
+    creatingAssignRef.current = true;
     setCreatingAssign(true);
     try {
-      const created = await createAssignment({
-        exam,
-        className: newClass.trim(),
-        customCode: newCustomCode.trim() || undefined,
-      });
+      const created = await withRequestTimeout(
+        createAssignment({
+          exam,
+          className: newClass.trim(),
+          customCode: newCustomCode.trim() || undefined,
+        }),
+        12000,
+        "share.createAssignment"
+      );
       setAssignments((prev) => [created, ...prev]);
       setNewClass("");
       setNewCustomCode("");
       toast.success(`Đã tạo mã giao bài [${created.code}] cho lớp ${created.className}!`);
     } catch (err: any) {
-      toast.error("Lỗi tạo lượt giao bài: " + err.message);
+      toast.error("Lỗi tạo lượt giao bài: " + (err?.message || "Không thể tạo lượt giao bài"));
     } finally {
+      creatingAssignRef.current = false;
       setCreatingAssign(false);
     }
   };
 
   const handleDeleteAssignment = async (assignId: string, assignCode: string) => {
     if (!confirm(`Bạn có chắc muốn xóa mã giao bài ${assignCode}?`)) return;
-    const ok = await deleteAssignment(exam.id, assignId);
-    if (ok) {
-      setAssignments((prev) => prev.filter((a) => a.id !== assignId));
-      toast.success("Đã xóa lượt giao bài");
+    try {
+      const ok = await withRequestTimeout(deleteAssignment(exam.id, assignId), 10000, "share.deleteAssignment");
+      if (ok) {
+        setAssignments((prev) => prev.filter((a) => a.id !== assignId));
+        toast.success("Đã xóa lượt giao bài");
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể xóa lượt giao bài");
     }
   };
 
   const endActivity = async () => {
-    const { error } = await supabase.from("exams").update({ team_activity_ended: true } as any).eq("id", id!);
-    if (error) {
-      toast.error("Lỗi: " + error.message);
-      return;
+    try {
+      const { error } = await withRequestTimeout<any>(
+        supabase.from("exams").update({ team_activity_ended: true } as any).eq("id", id!),
+        10000,
+        "share.endActivity"
+      );
+      if (error) {
+        toast.error("Lỗi: " + error.message);
+        return;
+      }
+      setExam({ ...exam, team_activity_ended: true });
+      toast.success("Đã kết thúc hoạt động");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể kết thúc hoạt động");
     }
-    setExam({ ...exam, team_activity_ended: true });
-    toast.success("Đã kết thúc hoạt động");
   };
 
   return (

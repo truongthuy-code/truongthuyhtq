@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,6 +26,13 @@ import TeamLeaderboard from "./TeamLeaderboard";
 import { syncExamAssignmentCodes, getExamPrimaryCode } from "@/lib/examAssignments";
 import { ensureExamShortLink, getShortExamUrl } from "@/lib/shortLinks";
 import { isUuid } from "@/lib/teacherStorage";
+import { withRequestTimeout } from "@/lib/requestTimeout";
+import {
+  isCapabilityUnavailable,
+  isMissingColumnError,
+  markCapabilityAvailable,
+  markCapabilityUnavailable,
+} from "@/lib/supabaseCapabilities";
 import { normalizeSubmissionToScale10, roundFinalScore } from "@/lib/grading";
 import {
   ExamFolder,
@@ -58,9 +65,10 @@ type Stats = {
 };
 
 export default function Index() {
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, loading: authLoading } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeFolderId = searchParams.get("folder");
+  const copyingIdRef = useRef<string | null>(null);
 
   const [exams, setExams] = useState<any[]>([]);
   const [folders, setFolders] = useState<ExamFolder[]>([]);
@@ -108,82 +116,102 @@ export default function Index() {
   };
 
   useEffect(() => {
+    if (authLoading) return;
     reloadFolders();
-  }, [user, isAdmin]);
+  }, [authLoading, user, isAdmin]);
 
   // Load Exams & Stats
   const loadExams = async () => {
-    let q = supabase.from("exams")
-      .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config,folder_id")
-      .order("created_at", { ascending: false }).limit(200);
+    setLoading(true);
+    try {
+      const includeFolderId = !isCapabilityUnavailable("col:exams.folder_id");
+      const baseCols =
+        "id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config";
+      const selectCols = includeFolderId ? `${baseCols},folder_id` : baseCols;
 
-    // Teacher data isolation: If not admin and user exists, isolate exams to teacher
-    if (!isAdmin && user) {
-      if (isUuid(user.id)) {
+      let q = supabase
+        .from("exams")
+        .select(selectCols)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      // Teacher data isolation: If not admin and user exists, isolate exams to teacher
+      if (!isAdmin && user && isUuid(user.id)) {
         q = q.eq("created_by", user.id);
       }
-    }
 
-    let loadedExams: any[] = [];
-    const { data: ex, error: exErr } = await q;
+      let loadedExams: any[] = [];
+      const { data: ex, error: exErr } = await withRequestTimeout<any>(q, 10000, "index.loadExams.exams");
 
-    if (
-      exErr &&
-      (exErr.code === "42703" || exErr.code === "PGRST204" || exErr.message?.includes("folder_id"))
-    ) {
-      // Fallback if folder_id column not yet migrated in remote Supabase
-      const { data: fallbackEx } = await supabase.from("exams")
-        .select("id,title,duration_minutes,created_at,questions,original_file_url,original_file_name,original_file_path,created_by,open_at,close_at,manual_closed,auto_submit_on_close,display_mode,team_config")
-        .order("created_at", { ascending: false }).limit(200);
-      loadedExams = fallbackEx || [];
-    } else {
-      loadedExams = ex || [];
-    }
-
-    setExams(loadedExams);
-    loadedExams.forEach((e: any) => syncExamAssignmentCodes(e).catch(() => {}));
-
-    const examIds = loadedExams.map((e: any) => e.id);
-
-    let subQ = supabase.from("submissions").select("exam_id,student_name,student_class,score,max_score,violation_count");
-    if (!isAdmin && user) {
-      if (examIds.length > 0) {
-        subQ = subQ.in("exam_id", examIds);
+      if (includeFolderId && exErr && isMissingColumnError(exErr, "folder_id")) {
+        markCapabilityUnavailable("col:exams.folder_id");
+        // Fallback if folder_id column not yet migrated in remote Supabase
+        let fq = supabase
+          .from("exams")
+          .select(baseCols)
+          .order("created_at", { ascending: false })
+          .limit(200);
+        if (!isAdmin && user && isUuid(user.id)) {
+          fq = fq.eq("created_by", user.id);
+        }
+        const { data: fallbackEx } = await withRequestTimeout<any>(fq, 10000, "index.loadExams.examsFallback");
+        loadedExams = fallbackEx || [];
       } else {
-        setStats({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
-        setLoading(false);
-        return;
+        if (includeFolderId && !exErr) {
+          markCapabilityAvailable("col:exams.folder_id");
+        }
+        loadedExams = ex || [];
       }
+
+      setExams(loadedExams);
+
+      const examIds = loadedExams.map((e: any) => e.id);
+
+      let subQ = supabase
+        .from("submissions")
+        .select("exam_id,student_name,student_class,score,max_score,violation_count");
+      if (!isAdmin && user) {
+        if (examIds.length > 0) {
+          subQ = subQ.in("exam_id", examIds);
+        } else {
+          setStats({ exams: 0, students: 0, attempts: 0, avgScore: 0, violations: 0, openExams: 0 });
+          return;
+        }
+      }
+
+      const { data: subs } = await withRequestTimeout<any>(subQ, 10000, "index.loadExams.submissions");
+      const examMap = new Map(loadedExams.map((e: any) => [e.id, e]));
+      const s = (subs || []).map((row: any) => normalizeSubmissionToScale10(row, examMap.get(row.exam_id)));
+      const uniqStudents = new Set(s.map((x: any) => `${x.student_name}__${x.student_class}`)).size;
+      const avg = s.length ? s.reduce((a: number, b: any) => a + Number(b.score || 0), 0) / s.length : 0;
+      const violations = s.reduce((a: number, b: any) => a + (b.violation_count || 0), 0);
+      const now = Date.now();
+      const openCount = loadedExams.filter((e: any) => {
+        if (e.manual_closed) return false;
+        if (e.open_at && new Date(e.open_at).getTime() > now) return false;
+        if (e.close_at && new Date(e.close_at).getTime() < now) return false;
+        return true;
+      }).length;
+
+      setStats({
+        exams: loadedExams.length,
+        students: uniqStudents,
+        attempts: s.length,
+        avgScore: roundFinalScore(avg),
+        violations,
+        openExams: openCount,
+      });
+    } catch (err) {
+      console.warn("Error loading exams:", err);
+    } finally {
+      setLoading(false);
     }
-
-    const { data: subs } = await subQ;
-    const examMap = new Map(loadedExams.map((e: any) => [e.id, e]));
-    const s = (subs || []).map((row: any) => normalizeSubmissionToScale10(row, examMap.get(row.exam_id)));
-    const uniqStudents = new Set(s.map((x: any) => `${x.student_name}__${x.student_class}`)).size;
-    const avg = s.length ? s.reduce((a: number, b: any) => a + Number(b.score || 0), 0) / s.length : 0;
-    const violations = s.reduce((a: number, b: any) => a + (b.violation_count || 0), 0);
-    const now = Date.now();
-    const openCount = loadedExams.filter((e: any) => {
-      if (e.manual_closed) return false;
-      if (e.open_at && new Date(e.open_at).getTime() > now) return false;
-      if (e.close_at && new Date(e.close_at).getTime() < now) return false;
-      return true;
-    }).length;
-
-    setStats({
-      exams: loadedExams.length,
-      students: uniqStudents,
-      attempts: s.length,
-      avgScore: roundFinalScore(avg),
-      violations,
-      openExams: openCount,
-    });
-    setLoading(false);
   };
 
   useEffect(() => {
+    if (authLoading) return;
     loadExams();
-  }, [isAdmin, user]);
+  }, [authLoading, isAdmin, user]);
 
   // Derived Active Folder & Multi-level Ancestor Path
   const activeFolder = useMemo(() => {
@@ -297,8 +325,14 @@ export default function Index() {
 
   // Exam actions
   const copyLink = async (examObj: any) => {
+    if (copyingIdRef.current === examObj.id) return;
+    copyingIdRef.current = examObj.id;
     try {
-      const syncRes = await syncExamAssignmentCodes(examObj);
+      const syncRes = await withRequestTimeout(
+        syncExamAssignmentCodes(examObj),
+        12000,
+        "index.copyLink.sync"
+      );
       if (!syncRes.success) {
         toast.error(syncRes.error || "Chưa thể đồng bộ mã bài thi lên máy chủ.");
         return;
@@ -307,48 +341,84 @@ export default function Index() {
       if (/^\d{6}$/.test(primaryCode)) {
         await navigator.clipboard.writeText(getShortExamUrl(primaryCode));
       } else {
-        const sl = await ensureExamShortLink({ exam: examObj });
+        const sl = await withRequestTimeout(
+          ensureExamShortLink({ exam: examObj }),
+          12000,
+          "index.copyLink.shortLink"
+        );
         await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
       }
       toast.success("Đã sao chép link ngắn bài thi");
     } catch (err: any) {
       toast.error(err?.message || "Không thể tạo link ngắn bài thi");
+    } finally {
+      if (copyingIdRef.current === examObj.id) {
+        copyingIdRef.current = null;
+      }
     }
   };
 
   const exportXlsx = async (exam: any) => {
-    const { data: subs, error } = await supabase.from("submissions").select("*").eq("exam_id", exam.id).order("submitted_at", { ascending: false });
-    if (error) { toast.error(error.message); return; }
-    if (!subs || subs.length === 0) { toast.info("Chưa có bài nộp nào"); return; }
-    const rows = subs.map((s, i) => ({
-      STT: i + 1, "Họ tên": s.student_name, "Lớp": s.student_class,
-      "Số câu đúng": s.correct_count, "Số câu sai": s.wrong_count, "Điểm": s.score,
-      "Thời gian nộp": new Date(s.submitted_at).toLocaleString("vi-VN"),
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Kết quả");
-    XLSX.writeFile(wb, `${exam.title || "ket-qua"}.xlsx`);
-    toast.success(`Đã xuất ${subs.length} bài nộp`);
+    try {
+      const { data: subs, error } = await withRequestTimeout<any>(
+        supabase.from("submissions").select("*").eq("exam_id", exam.id).order("submitted_at", { ascending: false }),
+        10000,
+        "index.exportXlsx"
+      );
+      if (error) { toast.error(error.message); return; }
+      if (!subs || subs.length === 0) { toast.info("Chưa có bài nộp nào"); return; }
+      const rows = subs.map((s: any, i: number) => ({
+        STT: i + 1, "Họ tên": s.student_name, "Lớp": s.student_class,
+        "Số câu đúng": s.correct_count, "Số câu sai": s.wrong_count, "Điểm": s.score,
+        "Thời gian nộp": new Date(s.submitted_at).toLocaleString("vi-VN"),
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Kết quả");
+      XLSX.writeFile(wb, `${exam.title || "ket-qua"}.xlsx`);
+      toast.success(`Đã xuất ${subs.length} bài nộp`);
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể xuất file Excel");
+    }
   };
 
   const deleteExam = async (exam: any) => {
     if (!confirm(`Xóa đề "${exam.title}"? Tất cả bài nộp của đề này cũng sẽ bị xóa.`)) return;
-    await supabase.from("submissions").delete().eq("exam_id", exam.id);
-    const { error } = await supabase.from("exams").delete().eq("id", exam.id);
-    if (error) { toast.error(error.message); return; }
-    setExams((prev) => prev.filter((e) => e.id !== exam.id));
-    setSelectedExamIds((prev) => prev.filter((id) => id !== exam.id));
-    toast.success("Đã xóa đề");
+    try {
+      await withRequestTimeout<any>(
+        supabase.from("submissions").delete().eq("exam_id", exam.id),
+        10000,
+        "index.deleteExam.subs"
+      );
+      const { error } = await withRequestTimeout<any>(
+        supabase.from("exams").delete().eq("id", exam.id),
+        10000,
+        "index.deleteExam"
+      );
+      if (error) { toast.error(error.message); return; }
+      setExams((prev) => prev.filter((e) => e.id !== exam.id));
+      setSelectedExamIds((prev) => prev.filter((id) => id !== exam.id));
+      toast.success("Đã xóa đề");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể xóa đề thi");
+    }
   };
 
   const downloadOriginal = async (exam: any) => {
-    if (exam.original_file_path) {
-      const { data, error } = await supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300);
-      if (error || !data) { toast.error("Không tạo được link tải"); return; }
-      window.open(data.signedUrl, "_blank");
-    } else if (exam.original_file_url) {
-      window.open(exam.original_file_url, "_blank");
+    try {
+      if (exam.original_file_path) {
+        const { data, error } = await withRequestTimeout<any>(
+          supabase.storage.from("exam-files").createSignedUrl(exam.original_file_path, 300),
+          10000,
+          "index.downloadOriginal"
+        );
+        if (error || !data) { toast.error("Không tạo được link tải"); return; }
+        window.open(data.signedUrl, "_blank");
+      } else if (exam.original_file_url) {
+        window.open(exam.original_file_url, "_blank");
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể tải file gốc");
     }
   };
 
@@ -364,17 +434,25 @@ export default function Index() {
   const fmtDt = (s: string | null | undefined) => s ? new Date(s).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", year: "numeric" }) : "";
 
   const setClosed = async (exam: any, closed: boolean) => {
-    const updates: any = { manual_closed: closed };
-    if (closed) {
-      updates.allow_review = true;
+    try {
+      const updates: any = { manual_closed: closed };
+      if (closed) {
+        updates.allow_review = true;
+      }
+      const { error } = await withRequestTimeout<any>(
+        supabase.from("exams").update(updates).eq("id", exam.id),
+        10000,
+        "index.setClosed"
+      );
+      if (error) { toast.error(error.message); return; }
+      if (closed) {
+        publishExamClosed(exam.id, exam.questions, exam.title);
+      }
+      setExams((prev) => prev.map((x) => x.id === exam.id ? { ...x, manual_closed: closed, allow_review: closed ? true : x.allow_review } : x));
+      toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
+    } catch (err: any) {
+      toast.error(err?.message || "Không thể cập nhật trạng thái đề thi");
     }
-    const { error } = await supabase.from("exams").update(updates).eq("id", exam.id);
-    if (error) { toast.error(error.message); return; }
-    if (closed) {
-      publishExamClosed(exam.id, exam.questions, exam.title);
-    }
-    setExams((prev) => prev.map((x) => x.id === exam.id ? { ...x, manual_closed: closed, allow_review: closed ? true : x.allow_review } : x));
-    toast.success(closed ? "Đã đóng đề thi và tự động công bố đáp án chính thức cho học sinh" : "Đã mở lại đề thi");
   };
   const confirmClose = (exam: any) => {
     if (confirm(`Bạn có chắc chắn muốn đóng đề thi "${exam.title}"? Học sinh sẽ không thể làm bài mới, đồng thời hệ thống sẽ tự động công bố đáp án chính thức và lời giải cho học sinh.`)) {
