@@ -1,6 +1,47 @@
 import { supabase } from "@/integrations/supabase/client";
 import { AuthSessionUser, isUuid, setCurrentAuthUser } from "@/lib/teacherStorage";
 
+export class AuthTimeoutError extends Error {
+  step: string;
+  timeoutMs: number;
+  constructor(step: string, timeoutMs: number) {
+    super(`[AuthTimeout] Step "${step}" timed out after ${timeoutMs}ms`);
+    this.name = "AuthTimeoutError";
+    this.step = step;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+export function withAuthTimeout<T>(
+  promiseOrThenable: PromiseLike<T>,
+  timeoutMs: number,
+  stepName: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new AuthTimeoutError(stepName, timeoutMs));
+    }, timeoutMs);
+
+    Promise.resolve(promiseOrThenable).then(
+      (val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 /**
  * Inspects and refreshes the currently authenticated Supabase Auth session.
  * Never signs in with hardcoded fallback passwords or system bridge accounts.
@@ -9,7 +50,7 @@ export async function ensureSupabaseSession(user?: AuthSessionUser | null): Prom
   try {
     const {
       data: { session },
-    } = await supabase.auth.getSession();
+    } = await withAuthTimeout(supabase.auth.getSession(), 4500, "ensureSupabaseSession.getSession");
 
     if (session?.user?.id && isUuid(session.user.id)) {
       if (user?.email && session.user.email) {
@@ -17,20 +58,20 @@ export async function ensureSupabaseSession(user?: AuthSessionUser | null): Prom
         const userEmail = user.email.trim().toLowerCase();
         if (sessEmail !== userEmail) {
           // Do not impersonate or silently cross-wire a different user's session
-          await supabase.auth.signOut().catch(() => {});
+          await withAuthTimeout(supabase.auth.signOut(), 3000, "ensureSupabaseSession.signOut").catch(() => {});
           return user?.id || null;
         }
       }
 
       if (user && user.id !== session.user.id && !user.id?.startsWith("00000000")) {
-        setCurrentAuthUser({ ...user, id: session.user.id });
+        setCurrentAuthUser({ ...user, id: session.user.id }, { silent: true });
       }
       return session.user.id;
     }
 
     const {
       data: { user: curUser },
-    } = await supabase.auth.getUser();
+    } = await withAuthTimeout(supabase.auth.getUser(), 4500, "ensureSupabaseSession.getUser");
     if (curUser?.id && isUuid(curUser.id)) {
       return curUser.id;
     }

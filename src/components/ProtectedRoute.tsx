@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Clock, Ban, LogOut, ShieldAlert } from "lucide-react";
+import { Clock, Ban, LogOut, ShieldAlert, WifiOff, RefreshCw, Loader2 } from "lucide-react";
 import { SUPER_ADMIN_EMAIL } from "@/lib/teacherStorage";
 
 interface ProtectedRouteProps {
@@ -23,22 +23,54 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     rejectionReason,
     accountBlockReason,
     loading,
+    authError,
     mustChangePassword,
     refreshProfile,
+    retryAuth,
     signOut,
   } = useAuth();
   const loc = useLocation();
 
   useEffect(() => {
-    if (!loading && user && requireAdmin && !isSuperAdmin) {
+    if (!loading && !authError && user && requireAdmin && !isSuperAdmin) {
       toast.error("Bạn không có quyền truy cập khu vực Quản trị viên (Super Admin)!");
     }
-  }, [loading, user, requireAdmin, isSuperAdmin]);
+  }, [loading, authError, user, requireAdmin, isSuperAdmin]);
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-muted-foreground text-sm">
-        Đang kiểm tra quyền truy cập…
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-muted-foreground text-sm p-4">
+        <Loader2 className="size-6 animate-spin text-primary" />
+        <span>Đang kiểm tra quyền truy cập…</span>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-gradient-soft grid place-items-center p-4">
+        <Card className="max-w-md w-full p-6 sm:p-8 text-center space-y-4 border shadow-soft">
+          <div className="mx-auto size-14 rounded-2xl grid place-items-center bg-destructive/10 text-destructive">
+            <WifiOff className="size-7" />
+          </div>
+
+          <h2 className="text-xl font-bold">Không thể kiểm tra quyền truy cập</h2>
+
+          <p className="text-sm text-muted-foreground leading-relaxed">{authError}</p>
+
+          <div className="pt-2 flex flex-col gap-2">
+            <Button onClick={() => void retryAuth()} className="w-full bg-gradient-primary">
+              <RefreshCw className="size-4 mr-2" /> Thử lại
+            </Button>
+            <Button
+              onClick={() => void signOut({ redirectTo: "/auth" })}
+              className="w-full"
+              variant="outline"
+            >
+              <LogOut className="size-4 mr-2" /> Quay lại trang đăng nhập
+            </Button>
+          </div>
+        </Card>
       </div>
     );
   }

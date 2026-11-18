@@ -12,7 +12,7 @@ import { Loader2, GraduationCap } from "lucide-react";
 type Subject = { id: string; name: string };
 
 export default function ProfileCompletionGate({ children }: { children: React.ReactNode }) {
-  const { user, profile, loading, refreshProfile } = useAuth();
+  const { user, profile, loading, isSuperAdmin, refreshProfile } = useAuth();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -20,7 +20,7 @@ export default function ProfileCompletionGate({ children }: { children: React.Re
   const [schoolName, setSchoolName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const open = !!user && !loading && profile !== null && !profile.profile_completed;
+  const open = !!user && !isSuperAdmin && !loading && profile !== null && !profile.profile_completed;
 
   useEffect(() => {
     if (!open) return;

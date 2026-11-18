@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { withAuthTimeout } from "@/lib/supabaseAuthSync";
 import { toast } from "sonner";
 import {
   FileText,
@@ -105,13 +106,25 @@ export default function AuthPage() {
       if (!sbError && signData?.user) {
         let stateData: any = null;
         try {
-          const { data } = await (supabase as any).rpc("get_my_account_state");
+          const { data } = await withAuthTimeout(
+            (supabase as any).rpc("get_my_account_state"),
+            4500,
+            "auth.superAdmin.get_my_account_state"
+          );
           stateData = data;
         } catch {}
 
-        const { data: prof } = stateData
-          ? { data: null }
-          : await supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle();
+        let prof: any = null;
+        if (!stateData) {
+          try {
+            const { data } = await withAuthTimeout(
+              supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
+              4500,
+              "auth.superAdmin.profiles"
+            );
+            prof = data;
+          } catch {}
+        }
 
         const resolvedRole = stateData?.role || prof?.role;
         const isAllowedSuperAdmin =
@@ -223,23 +236,39 @@ export default function AuthPage() {
         if (!sbError && signData?.user) {
           let stateData: any = null;
           try {
-            const { data } = await (supabase as any).rpc("get_my_account_state");
+            const { data } = await withAuthTimeout(
+              (supabase as any).rpc("get_my_account_state"),
+              4500,
+              "auth.teacher.get_my_account_state"
+            );
             stateData = data;
           } catch {}
 
-          const { data: prof } = stateData
-            ? { data: null }
-            : await supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle();
+          let prof: any = null;
+          if (!stateData) {
+            try {
+              const { data } = await withAuthTimeout(
+                supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle(),
+                4500,
+                "auth.teacher.profiles"
+              );
+              prof = data;
+            } catch {}
+          }
 
           let eff = stateData || prof || {};
 
           if (eff.missing_profile || !stateData) {
             try {
-              const { data: regRow } = await (supabase as any)
-                .from("teacher_registrations")
-                .select("status, rejection_reason")
-                .eq("user_id", signData.user.id)
-                .maybeSingle();
+              const { data: regRow } = await withAuthTimeout(
+                (supabase as any)
+                  .from("teacher_registrations")
+                  .select("status, rejection_reason")
+                  .eq("user_id", signData.user.id)
+                  .maybeSingle(),
+                4500,
+                "auth.teacher.registrations"
+              );
               if (!regRow && eff.missing_profile) {
                 eff = { ...eff, status: "active", approval_status: "APPROVED" };
               } else if (regRow?.status === "APPROVED" && String(eff.approval_status || "").toUpperCase() === "PENDING") {

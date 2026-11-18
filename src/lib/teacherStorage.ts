@@ -360,9 +360,11 @@ export function getAllTeachers(): TeacherUser[] {
   return initial;
 }
 
-export function saveAllTeachers(teachers: TeacherUser[]) {
+export function saveAllTeachers(teachers: TeacherUser[], options?: { silent?: boolean }) {
   localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
-  window.dispatchEvent(new Event("teacher_registry_changed"));
+  if (!options?.silent) {
+    window.dispatchEvent(new Event("teacher_registry_changed"));
+  }
 }
 
 export function getTeacherById(id: string): TeacherUser | null {
@@ -450,7 +452,7 @@ export async function fetchTeacherByUsernameOrEmail(identifier: string): Promise
   }
 }
 
-export function upsertTeacher(t: TeacherUser) {
+export function upsertTeacher(t: TeacherUser, options?: { silent?: boolean }) {
   if (isSuperAdminEmail(t.email)) return;
   const teachers = getAllTeachers();
   const normUname = normalizeUsername(t.username);
@@ -474,7 +476,7 @@ export function upsertTeacher(t: TeacherUser) {
   } else {
     teachers.push(t);
   }
-  saveAllTeachers(teachers);
+  saveAllTeachers(teachers, options);
 }
 
 export function deleteTeacher(id: string) {
@@ -530,7 +532,8 @@ export function getCurrentAuthUser(): AuthSessionUser | null {
   }
 }
 
-export function setCurrentAuthUser(user: AuthSessionUser | null) {
+export function setCurrentAuthUser(user: AuthSessionUser | null, options?: { silent?: boolean }) {
+  const silent = Boolean(options?.silent);
   if (user) {
     if (!user.id) {
       if (user.role === "super_admin" || isSuperAdminEmail(user.email)) {
@@ -543,26 +546,44 @@ export function setCurrentAuthUser(user: AuthSessionUser | null) {
       }
     }
 
-    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+    const nextSerialized = JSON.stringify(user);
+    const prevSerialized = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    if (prevSerialized !== nextSerialized) {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, nextSerialized);
+    }
 
     if (user.role === "teacher") {
       const existing = getTeacherByUsernameOrEmail(user.username || user.email) || getTeacherById(user.id);
       if (existing) {
-        existing.id = user.id;
-        existing.name = user.name || existing.name;
-        existing.email = user.email || existing.email;
-        if (user.school) existing.school = user.school;
-        if (user.subject) existing.subject = user.subject;
-        if (user.phone) existing.phone = user.phone;
-        if (user.avatar) existing.avatar = user.avatar;
-        if (user.approvalStatus) existing.approvalStatus = user.approvalStatus;
-        upsertTeacher(existing);
+        const needsTeacherUpdate =
+          existing.id !== user.id ||
+          (user.name && existing.name !== user.name) ||
+          (user.email && existing.email !== user.email) ||
+          (user.school && existing.school !== user.school) ||
+          (user.subject && existing.subject !== user.subject) ||
+          (user.phone && existing.phone !== user.phone) ||
+          (user.avatar && existing.avatar !== user.avatar) ||
+          (user.approvalStatus && existing.approvalStatus !== user.approvalStatus);
+
+        if (needsTeacherUpdate || !silent) {
+          existing.id = user.id;
+          existing.name = user.name || existing.name;
+          existing.email = user.email || existing.email;
+          if (user.school) existing.school = user.school;
+          if (user.subject) existing.subject = user.subject;
+          if (user.phone) existing.phone = user.phone;
+          if (user.avatar) existing.avatar = user.avatar;
+          if (user.approvalStatus) existing.approvalStatus = user.approvalStatus;
+          upsertTeacher(existing, { silent });
+        }
       }
     }
   } else {
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
   }
-  window.dispatchEvent(new Event("app_auth_change"));
+  if (!silent) {
+    window.dispatchEvent(new Event("app_auth_change"));
+  }
 }
 
 export function logoutCurrentUser() {
