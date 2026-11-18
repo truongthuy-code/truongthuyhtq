@@ -267,7 +267,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               supabase.from("profiles").select("*").eq("id", sbUser.id).maybeSingle(),
             ]);
 
-        const effectiveProfile = statePayload || profRow;
+        let effectiveProfile = statePayload || profRow;
+
+        // If profile row is missing and statePayload didn't resolve via updated RPC, check teacher_registrations before blocking
+        if (!isSuperAdminEmail(sbEmail) && (!effectiveProfile || effectiveProfile.missing_profile)) {
+          try {
+            const { data: regRow } = await (supabase as any)
+              .from("teacher_registrations")
+              .select("status, rejection_reason")
+              .eq("user_id", sbUser.id)
+              .maybeSingle();
+            if (!regRow && effectiveProfile?.missing_profile) {
+              effectiveProfile = { ...effectiveProfile, status: "active", approval_status: "APPROVED" };
+            } else if (regRow?.status === "APPROVED") {
+              effectiveProfile = { ...(effectiveProfile || {}), status: "active", approval_status: "APPROVED" };
+            }
+          } catch {}
+        }
+
         const mappedRoles = (roleRows || []).map((x: any) => x.role as Role);
         const isSuper =
           isSuperAdminEmail(sbEmail) ||

@@ -31,7 +31,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Search, CheckCircle2, XCircle, Clock, Loader2 } from "lucide-react";
+import { Search, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle } from "lucide-react";
 import {
   AdminRegistrationRecord,
   approveTeacherAccount,
@@ -173,7 +173,18 @@ export function AdminRegistrationsTab({ registrations, onRefresh }: AdminRegistr
                   <TableRow key={r.id}>
                     <TableCell className="tabular-nums text-muted-foreground">{idx + 1}</TableCell>
                     <TableCell>
-                      <div className="font-bold text-sm">{r.full_name}</div>
+                      <div className="font-bold text-sm flex items-center gap-1.5">
+                        <span>{r.full_name}</span>
+                        {r.missing_profile && (
+                          <Badge
+                            variant="outline"
+                            className="border-orange-500/50 text-orange-700 text-[10px] px-1.5 py-0 gap-0.5"
+                            title={r.sync_warning || "Thiếu hồ sơ profiles"}
+                          >
+                            <AlertTriangle className="size-2.5" /> Thiếu profile
+                          </Badge>
+                        )}
+                      </div>
                       {r.phone && <div className="text-xs text-muted-foreground">{r.phone}</div>}
                     </TableCell>
                     <TableCell>

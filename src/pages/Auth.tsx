@@ -231,7 +231,23 @@ export default function AuthPage() {
             ? { data: null }
             : await supabase.from("profiles").select("*").eq("id", signData.user.id).maybeSingle();
 
-          const eff = stateData || prof || {};
+          let eff = stateData || prof || {};
+
+          if (eff.missing_profile || !stateData) {
+            try {
+              const { data: regRow } = await (supabase as any)
+                .from("teacher_registrations")
+                .select("status, rejection_reason")
+                .eq("user_id", signData.user.id)
+                .maybeSingle();
+              if (!regRow && eff.missing_profile) {
+                eff = { ...eff, status: "active", approval_status: "APPROVED" };
+              } else if (regRow?.status === "APPROVED" && String(eff.approval_status || "").toUpperCase() === "PENDING") {
+                eff = { ...eff, status: "active", approval_status: "APPROVED" };
+              }
+            } catch {}
+          }
+
           const rawApproval = String(eff.approval_status || "").toUpperCase();
           const rawStatus = String(eff.status || "").toLowerCase();
 

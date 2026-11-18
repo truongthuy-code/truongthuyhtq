@@ -52,6 +52,8 @@ export interface AdminRegistrationRecord {
   rejection_reason?: string | null;
   reviewed_at?: string | null;
   created_at: string;
+  missing_profile?: boolean;
+  sync_warning?: string | null;
 }
 
 export interface AdminTeacherRecord {
@@ -69,6 +71,61 @@ export interface AdminTeacherRecord {
   created_at: string;
   exam_count: number;
   folder_count: number;
+  missing_profile?: boolean;
+  missing_user_role?: boolean;
+  sync_group?: string;
+  sync_warning?: string | null;
+}
+
+export interface ReconcileStats {
+  total_auth_users: number;
+  total_teachers_before: number;
+  missing_profiles_created: number;
+  legacy_pending_restored: number;
+  status_mismatch_synced: number;
+  new_pending_preserved: number;
+  locked_rejected_preserved: number;
+  total_teachers_after: number;
+  total_students_skipped: number;
+}
+
+export interface ReconcileDiscrepancy {
+  user_id: string;
+  email: string;
+  full_name: string;
+  sync_group: string;
+  missing_profile: boolean;
+  missing_user_role: boolean;
+  exam_count: number;
+  folder_count: number;
+  approval_status: string;
+  sync_warning?: string | null;
+}
+
+export interface ReconcileErrorItem {
+  user_id: string;
+  email: string;
+  group: string;
+  reason: string;
+}
+
+export interface ReconcileReport {
+  ok: boolean;
+  applied: boolean;
+  batch_id?: string;
+  cutoff?: string | null;
+  source?: "rpc" | "node";
+  auth_users_accessible?: boolean;
+  rpc_missing?: boolean;
+  stats: ReconcileStats;
+  group_counts: Record<"A" | "B" | "C" | "D" | "E" | "F" | "G" | "UNRESOLVED", number>;
+  discrepancies?: ReconcileDiscrepancy[];
+  unresolved_errors: ReconcileErrorItem[];
+  verification?: {
+    remaining_missing_profiles: number;
+    remaining_unsynced_legacy: number;
+    idempotent_clean: boolean;
+  };
 }
 
 export interface AdminActivityLogRecord {
@@ -178,35 +235,93 @@ export async function fetchAdminTeachers(includeDeleted = false): Promise<AdminT
           created_at: p.created_at || new Date().toISOString(),
           exam_count: Number(p.exam_count || 0),
           folder_count: Number(p.folder_count || 0),
+          missing_profile: Boolean(p.missing_profile),
+          missing_user_role: Boolean(p.missing_user_role),
+          sync_group: p.sync_group,
+          sync_warning: p.sync_warning || null,
         });
       }
     }
   } catch {}
 
-  // 2. Direct Supabase query fallback if /api/admin returned empty
+  // 2. Direct Supabase RPC + paginated query fallback if /api/admin returned empty
   if (map.size === 0) {
     try {
-      const { data: profs } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
-      for (const p of profs || []) {
-        if (isSuperAdminEmail(p.email) || p.role === "super_admin") continue;
-        if (!includeDeleted && (p as any).is_deleted) continue;
-        const appStatus = toApprovalStatus((p as any).approval_status, p.status);
-        map.set(p.id, {
-          id: p.id,
-          email: p.email || "",
-          username: p.username || (p.email ? p.email.split("@")[0] : ""),
-          full_name: p.full_name || "Giáo viên",
-          phone: p.phone || "",
-          school_name: p.school_name || "",
-          subject_name: p.subject_name || "",
-          status: mapTeacherStatus(appStatus),
-          approval_status: appStatus,
-          rejection_reason: (p as any).rejection_reason || null,
-          is_deleted: !!(p as any).is_deleted,
-          created_at: p.created_at || new Date().toISOString(),
-          exam_count: 0,
-          folder_count: 0,
-        });
+      const rpcRows: any[] = [];
+      let rpcOff = 0;
+      let rpcOk = true;
+      while (true) {
+        const q = (supabase as any).rpc("admin_fetch_all_teacher_accounts", { p_include_deleted: includeDeleted });
+        const { data, error } = typeof q?.range === "function" ? await q.range(rpcOff, rpcOff + 999) : await q;
+        if (error || !Array.isArray(data)) {
+          rpcOk = false;
+          break;
+        }
+        rpcRows.push(...data);
+        if (data.length < 1000 || typeof q?.range !== "function") break;
+        rpcOff += 1000;
+      }
+
+      if (rpcOk && rpcRows.length > 0) {
+        for (const p of rpcRows) {
+          if (isSuperAdminEmail(p.email)) continue;
+          const appStatus = toApprovalStatus(p.approval_status, p.status);
+          map.set(p.id, {
+            id: p.id,
+            email: p.email || "",
+            username: p.username || (p.email ? p.email.split("@")[0] : ""),
+            full_name: p.full_name || "Giáo viên",
+            phone: p.phone || "",
+            school_name: p.school_name || "",
+            subject_name: p.subject_name || "",
+            status: mapTeacherStatus(appStatus),
+            approval_status: appStatus,
+            rejection_reason: p.rejection_reason || null,
+            is_deleted: !!p.is_deleted,
+            created_at: p.created_at || new Date().toISOString(),
+            exam_count: Number(p.exam_count || 0),
+            folder_count: Number(p.folder_count || 0),
+            missing_profile: Boolean(p.missing_profile),
+            missing_user_role: Boolean(p.missing_user_role),
+            sync_group: p.sync_group,
+            sync_warning: p.sync_warning || null,
+          });
+        }
+      } else {
+        const profs: any[] = [];
+        let off = 0;
+        while (true) {
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .range(off, off + 999);
+          if (error || !Array.isArray(data)) break;
+          profs.push(...data);
+          if (data.length < 1000) break;
+          off += 1000;
+        }
+        for (const p of profs) {
+          if (isSuperAdminEmail(p.email) || p.role === "super_admin") continue;
+          if (!includeDeleted && (p as any).is_deleted) continue;
+          const appStatus = toApprovalStatus((p as any).approval_status, p.status);
+          map.set(p.id, {
+            id: p.id,
+            email: p.email || "",
+            username: p.username || (p.email ? p.email.split("@")[0] : ""),
+            full_name: p.full_name || "Giáo viên",
+            phone: p.phone || "",
+            school_name: p.school_name || "",
+            subject_name: p.subject_name || "",
+            status: mapTeacherStatus(appStatus),
+            approval_status: appStatus,
+            rejection_reason: (p as any).rejection_reason || null,
+            is_deleted: !!(p as any).is_deleted,
+            created_at: p.created_at || new Date().toISOString(),
+            exam_count: 0,
+            folder_count: 0,
+          });
+        }
       }
     } catch {}
   }
@@ -264,6 +379,8 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
           rejection_reason: r.rejection_reason || null,
           reviewed_at: r.reviewed_at || null,
           created_at: r.created_at || new Date().toISOString(),
+          missing_profile: Boolean(r.missing_profile),
+          sync_warning: r.sync_warning || null,
         });
       }
     }
@@ -318,6 +435,8 @@ export async function fetchAdminRegistrations(): Promise<AdminRegistrationRecord
         status: st,
         rejection_reason: t.rejection_reason || null,
         created_at: t.created_at,
+        missing_profile: t.missing_profile,
+        sync_warning: t.sync_warning || null,
       });
     }
   }
@@ -909,3 +1028,51 @@ export function getExamCodeBadgeForAdmin(exam: SystemExam): string {
   const localAssign = getLocalAssignments().find((a) => a.examId === exam.id);
   return localAssign?.code || "Chưa gán mã";
 }
+
+export async function runTeacherReconciliationAudit(cutoff?: string): Promise<ReconcileReport> {
+  try {
+    const apiRes = await callAdminApi<ReconcileReport>("reconcile_audit", cutoff ? { cutoff } : {});
+    if (apiRes?.ok) return apiRes;
+  } catch (err: any) {
+    // Fallback to direct RPC if API unavailable
+    const { data, error } = await (supabase as any).rpc("admin_reconcile_legacy_teachers", {
+      p_apply: false,
+      p_cutoff: cutoff || null,
+    });
+    if (!error && data?.ok) return { ...data, source: "rpc", auth_users_accessible: true };
+    throw err;
+  }
+
+  const { data, error } = await (supabase as any).rpc("admin_reconcile_legacy_teachers", {
+    p_apply: false,
+    p_cutoff: cutoff || null,
+  });
+  if (error || !data?.ok) {
+    throw new Error(error?.message || "Không thể đối soát dữ liệu tài khoản giáo viên.");
+  }
+  return { ...data, source: "rpc", auth_users_accessible: true };
+}
+
+export async function executeTeacherReconciliation(cutoff?: string): Promise<ReconcileReport> {
+  try {
+    const apiRes = await callAdminApi<ReconcileReport>("reconcile_execute", cutoff ? { cutoff } : {});
+    if (apiRes?.ok) return apiRes;
+  } catch (err: any) {
+    const { data, error } = await (supabase as any).rpc("admin_reconcile_legacy_teachers", {
+      p_apply: true,
+      p_cutoff: cutoff || null,
+    });
+    if (!error && data?.ok) return { ...data, source: "rpc", auth_users_accessible: true };
+    throw err;
+  }
+
+  const { data, error } = await (supabase as any).rpc("admin_reconcile_legacy_teachers", {
+    p_apply: true,
+    p_cutoff: cutoff || null,
+  });
+  if (error || !data?.ok) {
+    throw new Error(error?.message || "Không thể đồng bộ tài khoản giáo viên cũ.");
+  }
+  return { ...data, source: "rpc", auth_users_accessible: true };
+}
+

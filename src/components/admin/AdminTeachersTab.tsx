@@ -44,6 +44,8 @@ import {
   Clock,
   Ban,
   Loader2,
+  DatabaseZap,
+  AlertTriangle,
 } from "lucide-react";
 import {
   AdminTeacherRecord,
@@ -53,6 +55,7 @@ import {
   deleteTeacherAccount,
   approveTeacherAccount,
 } from "@/lib/adminService";
+import { AdminReconcileDialog } from "@/components/admin/AdminReconcileDialog";
 import { SUBJECT_LIST } from "@/lib/subjects";
 import { toast } from "sonner";
 
@@ -81,6 +84,7 @@ export function AdminTeachersTab({
   const [lockTarget, setLockTarget] = useState<AdminTeacherRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminTeacherRecord | null>(null);
   const [deleteMode, setDeleteMode] = useState<"archive" | "hard">("archive");
+  const [reconcileOpen, setReconcileOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const filtered = useMemo(() => {
@@ -222,14 +226,25 @@ export function AdminTeachersTab({
           ))}
         </div>
 
-        <div className="relative w-full md:w-72">
-          <Search className="size-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Tìm họ tên, email, trường..."
-            className="pl-9"
-          />
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <div className="relative flex-1 md:w-64">
+            <Search className="size-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Tìm họ tên, email, trường..."
+              className="pl-9"
+            />
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 shrink-0 border-primary/40 text-primary hover:bg-primary/5"
+            onClick={() => setReconcileOpen(true)}
+          >
+            <DatabaseZap className="size-4" />
+            Đối soát &amp; Đồng bộ tài khoản cũ
+          </Button>
         </div>
       </Card>
 
@@ -260,7 +275,18 @@ export function AdminTeachersTab({
                   <TableRow key={t.id}>
                     <TableCell className="tabular-nums text-muted-foreground">{idx + 1}</TableCell>
                     <TableCell>
-                      <div className="font-bold text-sm">{t.full_name}</div>
+                      <div className="font-bold text-sm flex items-center gap-1.5">
+                        <span>{t.full_name}</span>
+                        {t.missing_profile && (
+                          <Badge
+                            variant="outline"
+                            className="border-orange-500/50 text-orange-700 text-[10px] px-1.5 py-0 gap-0.5"
+                            title={t.sync_warning || "Thiếu hồ sơ profiles"}
+                          >
+                            <AlertTriangle className="size-2.5" /> Thiếu profile
+                          </Badge>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground">{t.subject_name || "Chưa cập nhật môn"}</div>
                     </TableCell>
                     <TableCell className="text-sm">{t.email}</TableCell>
@@ -538,6 +564,12 @@ export function AdminTeachersTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AdminReconcileDialog
+        open={reconcileOpen}
+        onOpenChange={setReconcileOpen}
+        onSynced={onRefresh}
+      />
     </div>
   );
 }
