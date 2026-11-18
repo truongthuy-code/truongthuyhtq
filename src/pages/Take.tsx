@@ -1255,6 +1255,11 @@ export default function Take() {
       navigate(`/e/${encodeURIComponent(seg)}`);
       return;
     }
+    const rootNumericMatch = raw.match(/^(?:https?:\/\/[^/?#]+)?\/(\d{6})(?:[/?#]|$)/i);
+    if (rootNumericMatch?.[1]) {
+      navigate(`/${rootNumericMatch[1]}`);
+      return;
+    }
     // Check if it's a URL
     const pathMatch = raw.match(/\/(?:take|exam)\/([^/?#\s]+)/i);
     const codeMatch = raw.match(/[?&](?:code|join)=([^&#\s]+)/i);

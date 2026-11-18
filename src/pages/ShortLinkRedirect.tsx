@@ -4,7 +4,9 @@ import { AlertCircle, KeyRound, Loader2, RefreshCw, WifiOff } from "lucide-react
 import QuizBackground from "@/components/QuizBackground";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { resolveShortLink } from "@/lib/shortLinks";
+import NotFound from "./NotFound";
+import { buildExamTargetPath, resolveShortLink } from "@/lib/shortLinks";
+import { findAssignmentOrExamByCode } from "@/lib/examAssignments";
 import type { ExamAccessErrorType } from "@/lib/examAccessLogger";
 
 export default function ShortLinkRedirect() {
@@ -17,17 +19,23 @@ export default function ShortLinkRedirect() {
   } | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
+  const isLegacyShortRoute = location.pathname.toLowerCase().startsWith("/e/");
+  let decodedCode = "";
+  try {
+    decodedCode = decodeURIComponent(code || "").trim();
+  } catch {
+    decodedCode = String(code || "").trim();
+  }
+  const isInvalidRootRoute = !isLegacyShortRoute && !/^\d{6}$/.test(decodedCode);
+
   useEffect(() => {
+    if (isInvalidRootRoute) return;
+
     let cancelled = false;
     setErrorState(null);
 
     (async () => {
-      let rawCode = "";
-      try {
-        rawCode = decodeURIComponent(code || "").trim();
-      } catch {
-        rawCode = String(code || "").trim();
-      }
+      const rawCode = decodedCode;
 
       if (!rawCode) {
         if (!cancelled) {
@@ -39,13 +47,48 @@ export default function ShortLinkRedirect() {
         return;
       }
 
+      const currentParams = new URLSearchParams(location.search);
+      const hasAutoStart =
+        currentParams.get("autoStart") === "1" || currentParams.get("autoStart") === "true";
+
+      if (!isLegacyShortRoute) {
+        const result = await findAssignmentOrExamByCode(rawCode);
+        if (cancelled) return;
+
+        if (result.success && result.exam) {
+          let finalTarget = buildExamTargetPath({
+            examId: result.exam.id,
+            code: result.assignment?.code || rawCode,
+            className: result.assignment?.className,
+            displayMode: result.exam.display_mode,
+          });
+          if (hasAutoStart) {
+            finalTarget += finalTarget.includes("?") ? "&autoStart=1" : "?autoStart=1";
+          }
+          navigate(finalTarget, {
+            replace: true,
+            state: {
+              exam: result.exam,
+              assignment: result.assignment,
+              shortCode: rawCode,
+            },
+          });
+          return;
+        }
+
+        setErrorState({
+          message: result.error || "Link bài thi không tồn tại, đã hết hạn hoặc bị vô hiệu hóa.",
+          errorType: result.errorType || "not_found",
+        });
+        return;
+      }
+
       const result = await resolveShortLink(rawCode);
       if (cancelled) return;
 
       if (result.success && result.targetUrl) {
         let finalTarget = result.targetUrl;
-        const currentParams = new URLSearchParams(location.search);
-        if (currentParams.get("autoStart") === "1" || currentParams.get("autoStart") === "true") {
+        if (hasAutoStart) {
           finalTarget += finalTarget.includes("?") ? "&autoStart=1" : "?autoStart=1";
         }
         navigate(finalTarget, {
@@ -68,7 +111,11 @@ export default function ShortLinkRedirect() {
     return () => {
       cancelled = true;
     };
-  }, [code, location.search, navigate, retryNonce]);
+  }, [decodedCode, isInvalidRootRoute, isLegacyShortRoute, location.search, navigate, retryNonce]);
+
+  if (isInvalidRootRoute) {
+    return <NotFound />;
+  }
 
   if (errorState) {
     const isTransient =

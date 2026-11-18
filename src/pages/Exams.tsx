@@ -181,9 +181,14 @@ export default function Exams() {
 
   const copyLink = async (examObj: any) => {
     try {
-      await syncExamAssignmentCodes(examObj);
-      const sl = await ensureExamShortLink({ exam: examObj });
-      await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      const syncRes = await syncExamAssignmentCodes(examObj);
+      const primaryCode = syncRes?.primaryCode || getExamPrimaryCode(examObj);
+      if (/^\d{6}$/.test(primaryCode)) {
+        await navigator.clipboard.writeText(getShortExamUrl(primaryCode));
+      } else {
+        const sl = await ensureExamShortLink({ exam: examObj });
+        await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      }
       toast.success("Đã sao chép link ngắn bài thi");
     } catch (err: any) {
       toast.error(err?.message || "Không thể tạo link ngắn bài thi");

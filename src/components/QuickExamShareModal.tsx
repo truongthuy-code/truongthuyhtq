@@ -135,7 +135,13 @@ export default function QuickExamShareModal({
   const mainUrl = primaryCode
     ? `${publicOrigin}/take/${exam.id}?code=${encodeURIComponent(primaryCode)}`
     : `${publicOrigin}/take/${exam.id}`;
-  const shortUrl = shortCode ? getShortExamUrl(shortCode) : "";
+  const primaryLinkCode = /^\d{6}$/.test(primaryCode) ? primaryCode : shortCode;
+  const shortUrl = primaryLinkCode ? getShortExamUrl(primaryLinkCode) : "";
+  const primaryLinkPath = primaryLinkCode
+    ? /^\d{6}$/.test(primaryLinkCode)
+      ? `/${primaryLinkCode}`
+      : `/e/${primaryLinkCode}`
+    : "";
   const qrUrl = shortUrl || mainUrl;
 
   const copyCode = (code: string) => {
@@ -351,7 +357,7 @@ export default function QuickExamShareModal({
                       >
                         <Copy className="size-3" /> Sao chép link ngắn
                       </Button>
-                      {shortCode && (
+                      {primaryLinkPath && (
                         <Button
                           type="button"
                           variant="outline"
@@ -359,7 +365,7 @@ export default function QuickExamShareModal({
                           asChild
                           className="h-9 px-2.5 rounded-xl gap-1 font-bold text-xs border-primary/30 bg-background"
                         >
-                          <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                          <Link to={primaryLinkPath} target="_blank" rel="noopener noreferrer">
                             <ExternalLink className="size-3" /> Mở link
                           </Link>
                         </Button>
@@ -438,7 +444,13 @@ export default function QuickExamShareModal({
                 <div className="divide-y rounded-xl border max-h-48 overflow-y-auto bg-card text-xs">
                   {assignments.map((a) => {
                     const aUrl = getExamShareUrl(a.examId, a.code);
-                    const aShortUrl = a.shortCode ? getShortExamUrl(a.shortCode) : "";
+                    const aLinkCode = /^\d{6}$/.test(a.code) ? a.code : (a.shortCode || "");
+                    const aShortUrl = aLinkCode ? getShortExamUrl(aLinkCode) : "";
+                    const aLinkPath = aLinkCode
+                      ? /^\d{6}$/.test(aLinkCode)
+                        ? `/${aLinkCode}`
+                        : `/e/${aLinkCode}`
+                      : "";
                     const aQrUrl = aShortUrl || aUrl;
                     return (
                       <div key={a.id} className="p-2.5 flex items-center justify-between gap-2 hover:bg-muted/30">
@@ -447,9 +459,9 @@ export default function QuickExamShareModal({
                           <span className="font-mono font-black text-primary px-1.5 py-0.5 rounded bg-primary/10">
                             {a.code}
                           </span>
-                          {a.shortCode && (
+                          {aLinkPath && (
                             <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded bg-emerald-500/10 text-[11px]">
-                              /e/{a.shortCode}
+                              {aLinkPath}
                             </span>
                           )}
                         </div>
@@ -465,7 +477,7 @@ export default function QuickExamShareModal({
                               <Link2 className="size-3" /> Link ngắn
                             </Button>
                           )}
-                          {a.shortCode && (
+                          {aLinkPath && (
                             <Button
                               size="sm"
                               variant="ghost"
@@ -473,7 +485,7 @@ export default function QuickExamShareModal({
                               className="h-7 px-2 text-[11px]"
                               title="Mở link"
                             >
-                              <Link to={`/e/${a.shortCode}`} target="_blank" rel="noopener noreferrer">
+                              <Link to={aLinkPath} target="_blank" rel="noopener noreferrer">
                                 <ExternalLink className="size-3" />
                               </Link>
                             </Button>

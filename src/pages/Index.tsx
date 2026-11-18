@@ -303,8 +303,13 @@ export default function Index() {
         toast.error(syncRes.error || "Chưa thể đồng bộ mã bài thi lên máy chủ.");
         return;
       }
-      const sl = await ensureExamShortLink({ exam: examObj });
-      await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      const primaryCode = syncRes.primaryCode || getExamPrimaryCode(examObj);
+      if (/^\d{6}$/.test(primaryCode)) {
+        await navigator.clipboard.writeText(getShortExamUrl(primaryCode));
+      } else {
+        const sl = await ensureExamShortLink({ exam: examObj });
+        await navigator.clipboard.writeText(getShortExamUrl(sl.shortCode));
+      }
       toast.success("Đã sao chép link ngắn bài thi");
     } catch (err: any) {
       toast.error(err?.message || "Không thể tạo link ngắn bài thi");

@@ -418,7 +418,7 @@ describe("Fix Supabase RLS trên bảng `schools` & Đồng bộ mã bài thi 6 
     expect(lookup.exam?.questions?.partI?.[0]?.answer).toBeUndefined();
   });
 
-  it("Test 3: Học sinh truy cập bằng link ngắn (/e/:code) dẫn tới đúng cùng một bài thi và mã 6 chữ số", async () => {
+  it("Test 3: Học sinh truy cập bằng link ngắn (/:code và /e/:code) dẫn tới đúng cùng một bài thi và mã 6 chữ số", async () => {
     const examA = makeExam();
     rlsMockState.exams.set(EXAM_A_ID, examA);
     await syncExamAssignmentCodes(examA);
@@ -433,7 +433,22 @@ describe("Fix Supabase RLS trên bảng `schools` & Đồng bộ mã bài thi 6 
     expect(resolved.exam?.id).toBe(EXAM_A_ID);
     expect(resolved.targetUrl).toBe(`/take/${EXAM_A_ID}?code=642819`);
 
-    // Kiểm tra trang ShortLinkRedirect điều hướng tới đúng đường dẫn đó
+    // Kiểm tra route mới /:code (mã 6 chữ số)
+    const rootRender = render(
+      <MemoryRouter initialEntries={["/642819"]}>
+        <Routes>
+          <Route path="/:code" element={<ShortLinkRedirect />} />
+          <Route path="/take/:id" element={<div>EXAM_TAKE_ROUTE_NEW_READY</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("EXAM_TAKE_ROUTE_NEW_READY")).toBeInTheDocument();
+    });
+    rootRender.unmount();
+
+    // Kiểm tra trang ShortLinkRedirect với route /e/:code vẫn hoạt động tương thích ngược
     render(
       <MemoryRouter initialEntries={[`/e/${sl.shortCode}`]}>
         <Routes>
@@ -448,11 +463,11 @@ describe("Fix Supabase RLS trên bảng `schools` & Đồng bộ mã bài thi 6 
     });
   });
 
-  it("Test 4: Mã QR chứa đúng link ngắn (hoặc URL đích) khớp 100% cùng bài thi với mã 6 chữ số", async () => {
+  it("Test 4: Mã QR chứa đúng link ngắn 6 chữ số (/<6-digit>) khớp 100% cùng bài thi với mã 6 chữ số", async () => {
     const examA = makeExam();
     rlsMockState.exams.set(EXAM_A_ID, examA);
     await syncExamAssignmentCodes(examA);
-    const sl = await ensureExamShortLink({ exam: examA });
+    await ensureExamShortLink({ exam: examA });
 
     render(
       <MemoryRouter initialEntries={[`/exam/${EXAM_A_ID}/share`]}>
@@ -467,14 +482,15 @@ describe("Fix Supabase RLS trên bảng `schools` & Đồng bộ mã bài thi 6 
     });
 
     const shortInput = screen.getByLabelText("Link làm bài ngắn") as HTMLInputElement;
-    const expectedShortUrl = getShortExamUrl(sl.shortCode);
+    const expectedShortUrl = getShortExamUrl("642819");
     expect(shortInput.value).toBe(expectedShortUrl);
+    expect(shortInput.value).toMatch(/\/642819$/);
 
-    // QR URL luôn dùng shortUrl và trỏ về cùng EXAM_A_ID + code 642819
-    const qrResolved = await resolveShortLink(shortInput.value);
+    // QR URL luôn trỏ về cùng EXAM_A_ID + code 642819
+    const qrResolved = await findAssignmentOrExamByCode(shortInput.value);
     expect(qrResolved.success).toBe(true);
     expect(qrResolved.exam?.id).toBe(EXAM_A_ID);
-    expect(qrResolved.targetUrl).toContain("code=642819");
+    expect(qrResolved.assignment?.code).toBe("642819");
   });
 
   it("Test 5: Cô lập giữa nhiều trường / nhiều giáo viên: Giáo viên B không ghi đè được mã của Giáo viên A và tự đổi sang mã 6 chữ số khác không trùng", async () => {

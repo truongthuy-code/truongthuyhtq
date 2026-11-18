@@ -63,7 +63,7 @@ if (typeof Storage !== "undefined" && Storage.prototype && typeof Storage.protot
 }
 
 /**
- * Normalizes a short code or /e/<CODE> path/URL into an uppercase short code token.
+ * Normalizes a short code, /e/<CODE>, or /<6-DIGIT-CODE> path/URL into an uppercase code token.
  */
 export function normalizeShortCode(raw?: string | null): string {
   if (!raw || typeof raw !== "string") return "";
@@ -74,6 +74,11 @@ export function normalizeShortCode(raw?: string | null): string {
       s = decodeURIComponent(pathMatch[1]);
     } catch {
       s = pathMatch[1];
+    }
+  } else {
+    const rootNumericMatch = s.match(/^(?:https?:\/\/[^/?#]+)?\/(\d{6})(?:[/?#]|$)/i);
+    if (rootNumericMatch?.[1]) {
+      s = rootNumericMatch[1];
     }
   }
   return s.trim().toUpperCase();
@@ -121,12 +126,14 @@ export function generateShortCode(length = DEFAULT_SHORT_CODE_LENGTH): string {
 
 /**
  * Builds the canonical short URL on the current app domain:
- * https://<origin>/e/<SHORT_CODE>
+ * - https://<origin>/<6-DIGIT-CODE> for 6-digit exam codes
+ * - https://<origin>/e/<SHORT_CODE> for legacy alphanumeric short codes
  */
 export function getShortExamUrl(shortCode: string): string {
   const norm = normalizeShortCode(shortCode);
   const origin = getExamPublicOrigin();
-  return origin ? `${origin}/e/${norm}` : `/e/${norm}`;
+  const path = /^\d{6}$/.test(norm) ? `/${norm}` : `/e/${norm}`;
+  return origin ? `${origin}${path}` : path;
 }
 
 export function buildExamTargetPath(params: {

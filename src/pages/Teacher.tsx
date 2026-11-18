@@ -621,8 +621,8 @@ export default function Teacher() {
 
 
   return (
-    <div className="min-h-screen bg-gradient-soft">
-      <header className="border-b bg-background/80 backdrop-blur sticky top-0 z-10">
+    <div className="min-h-screen lg:h-screen lg:flex lg:flex-col lg:overflow-hidden bg-gradient-soft">
+      <header className="border-b bg-background/80 backdrop-blur sticky top-0 z-10 shrink-0">
         <div className="container flex items-center justify-between py-4">
           <Link
             to={targetFolderId ? `/?folder=${targetFolderId}` : "/"}
@@ -637,10 +637,10 @@ export default function Teacher() {
         </div>
       </header>
 
-      <main className="container max-w-3xl py-10 space-y-6">
+      <main className="container max-w-[1440px] py-6 sm:py-8 lg:py-6 space-y-6 lg:space-y-4 lg:flex-1 lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden">
         {/* Banner hiển thị ngữ cảnh thư mục đang mở */}
         {(targetFolderPath || targetFolderName) && (
-          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-foreground animate-slide-up shadow-xs">
+          <div className="shrink-0 flex items-center justify-between p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-foreground animate-slide-up shadow-xs">
             <div className="flex items-center gap-3 min-w-0">
               <div className="size-9 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 text-white grid place-items-center shadow-xs shrink-0">
                 <Folder className="size-5" />
@@ -660,20 +660,29 @@ export default function Teacher() {
           </div>
         )}
 
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-lg flex items-center gap-2"><Upload className="size-5 text-primary" /> Tải đề thi</h2>
-            <Button asChild variant="link" size="sm" className="text-primary">
+        <div
+          data-testid="teacher-two-column-layout"
+          className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-6 lg:flex-1 lg:min-h-0 lg:items-stretch"
+        >
+          {/* CỘT BÊN TRÁI (40%): Tải bài thi + Cài đặt bài thi + Các nút thao tác */}
+          <div
+            data-testid="teacher-left-column"
+            className="min-w-0 space-y-6 lg:h-full lg:overflow-y-auto lg:overflow-x-hidden lg:pr-2"
+          >
+        <Card className="p-4 sm:p-5 xl:p-6">
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <h2 className="font-semibold text-lg flex items-center gap-2"><Upload className="size-5 text-primary shrink-0" /> Tải đề thi</h2>
+            <Button asChild variant="link" size="sm" className="text-primary px-0 sm:px-3">
               <a href="/de-mau.docx" download><Download className="size-4 mr-1" /> Tải file mẫu</a>
             </Button>
           </div>
 
           <Tabs defaultValue="docx">
             <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="docx"><FileText className="size-4 mr-1" /> Word</TabsTrigger>
-              <TabsTrigger value="pdf"><FileText className="size-4 mr-1" /> PDF</TabsTrigger>
-              <TabsTrigger value="ocr"><ImageIcon className="size-4 mr-1" /> Ảnh (OCR)</TabsTrigger>
-              <TabsTrigger value="manual"><Keyboard className="size-4 mr-1" /> Nhập tay</TabsTrigger>
+              <TabsTrigger value="docx" className="px-1 sm:px-2 text-[11px] xl:text-sm min-w-0"><FileText className="size-3.5 xl:size-4 mr-1 shrink-0" /> Word</TabsTrigger>
+              <TabsTrigger value="pdf" className="px-1 sm:px-2 text-[11px] xl:text-sm min-w-0"><FileText className="size-3.5 xl:size-4 mr-1 shrink-0" /> PDF</TabsTrigger>
+              <TabsTrigger value="ocr" className="px-1 sm:px-2 text-[11px] xl:text-sm min-w-0"><ImageIcon className="size-3.5 xl:size-4 mr-1 shrink-0" /> Ảnh (OCR)</TabsTrigger>
+              <TabsTrigger value="manual" className="px-1 sm:px-2 text-[11px] xl:text-sm min-w-0"><Keyboard className="size-3.5 xl:size-4 mr-1 shrink-0" /> Nhập tay</TabsTrigger>
             </TabsList>
 
             <TabsContent value="docx">
@@ -728,7 +737,7 @@ export default function Teacher() {
         </Card>
 
         {exam && (
-          <Card className="p-6 space-y-5">
+          <Card className="p-4 sm:p-5 xl:p-6 space-y-5">
             <h2 className="font-semibold text-lg">Cài đặt bài thi</h2>
 
             <div>
@@ -1030,6 +1039,13 @@ export default function Teacher() {
             </Button>
           </Card>
         )}
+          </div>
+
+          {/* CỘT BÊN PHẢI (60%): Xem trước toàn bộ câu hỏi */}
+          <div
+            data-testid="teacher-right-column"
+            className="min-w-0 space-y-6 lg:h-full lg:overflow-y-auto lg:overflow-x-hidden lg:pr-2"
+          >
 
         {exam && missingQuestions.length > 0 && (
           <Card className="p-5 border-amber-500/60 bg-amber-500/10 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
@@ -1076,7 +1092,7 @@ export default function Teacher() {
           </Card>
         )}
 
-        {exam && (
+        {exam ? (
           <Card className="p-6">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">Xem trước toàn bộ câu hỏi</h3>
@@ -1393,7 +1409,19 @@ export default function Teacher() {
 
             </div>
           </Card>
+        ) : (
+          <Card className="p-6 border-dashed">
+            <div className="flex flex-col items-center justify-center text-center py-12 text-muted-foreground space-y-2">
+              <FileText className="size-10 opacity-40" />
+              <h3 className="font-semibold text-foreground">Xem trước toàn bộ câu hỏi</h3>
+              <p className="text-xs max-w-sm">
+                Tải file Word, PDF, Ảnh (OCR) hoặc nhập tay đề thi ở cột bên trái để xem trước danh sách câu hỏi tại đây.
+              </p>
+            </div>
+          </Card>
         )}
+          </div>
+        </div>
       </main>
 
       <MissingAnswersAlertModal

@@ -71,6 +71,7 @@ const App = () => (
             <Route path="/exam/:id/share" element={<ProtectedRoute><Share /></ProtectedRoute>} />
             <Route path="/exam/:id/results" element={<ProtectedRoute><Results /></ProtectedRoute>} />
             <Route path="/exam/:id/edit" element={<ProtectedRoute><EditExam /></ProtectedRoute>} />
+            <Route path="/:code" element={<ShortLinkRedirect />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

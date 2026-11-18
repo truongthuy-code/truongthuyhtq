@@ -1262,6 +1262,12 @@ export async function findAssignmentOrExamByCode(inputRaw: string): Promise<Exam
     };
   }
 
+  // 0.5. Root 6-digit short link URL (https://domain/123456 or /123456)
+  const rootNumericMatch = raw.match(/^(?:https?:\/\/[^/?#]+)?\/(\d{6})(?:[/?#]|$)/i);
+  if (rootNumericMatch?.[1]) {
+    extractedCode = rootNumericMatch[1];
+  }
+
   // 1. Check URL paths like /take/TOKEN or /exam/TOKEN
   const pathMatch = raw.match(/\/(?:take|exam)\/([^/?#\s]+)/i);
   if (pathMatch) {

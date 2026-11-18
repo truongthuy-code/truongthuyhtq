@@ -72,6 +72,7 @@ vi.mock("@/integrations/supabase/client", () => {
       },
       like: () => builder,
       order: () => builder,
+      limit: () => builder,
       maybeSingle: () => {
         isSingle = true;
         return executeSelect();
@@ -261,6 +262,7 @@ import {
   createAssignment,
   deleteAssignment,
   findAssignmentOrExamByCode,
+  syncExamAssignmentCodes,
 } from "@/lib/examAssignments";
 import Share from "@/pages/Share";
 import QuickExamShareModal from "@/components/QuickExamShareModal";
@@ -355,7 +357,9 @@ describe("Short Exam Links (/e/:code)", () => {
 
     const first = await ensureExamShortLink({ exam });
     expect(first.shortCode).toMatch(/^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
+    // Mã ngắn legacy giữ nguyên /e/:code, còn mã 6 chữ số tạo link trực tiếp /:code
     expect(getShortExamUrl(first.shortCode)).toContain(`/e/${first.shortCode}`);
+    expect(getShortExamUrl("583214")).toMatch(/\/583214$/);
 
     // Mở lại từ trình duyệt mới (localStorage trống), chỉ còn dữ liệu trên Supabase
     localStorage.clear();
@@ -369,9 +373,10 @@ describe("Short Exam Links (/e/:code)", () => {
     expect(third.shortCode).toBe(first.shortCode);
   });
 
-  it("4. Giải mã link ngắn không phân biệt hoa/thường, bảo toàn chế độ thi và không làm lộ đáp án", async () => {
+  it("4. Giải mã link ngắn (/e/:code và /123456) không phân biệt hoa/thường, bảo toàn chế độ thi và không làm lộ đáp án", async () => {
     const exam = createSampleTeacherExam();
     mockState.exams.set(EXAM_UUID, exam);
+    await syncExamAssignmentCodes(exam);
 
     const link = await ensureExamShortLink({ exam });
     const lowerCodeRes = await resolveShortLink(link.shortCode.toLowerCase());
@@ -382,11 +387,17 @@ describe("Short Exam Links (/e/:code)", () => {
     expect(lowerCodeRes.exam?.questions?.partI?.[0]?.answer).toBeUndefined();
     expect(lowerCodeRes.exam?.questions?.partI?.[0]?.explanation).toBeUndefined();
 
-    // Học sinh dán nguyên URL link ngắn vào ô nhập mã
+    // Học sinh dán nguyên URL link ngắn legacy hoặc URL 6 chữ số mới vào ô nhập mã
     const fullUrl = `https://ten-app.vercel.app/e/${link.shortCode}`;
     const byUrl = await findAssignmentOrExamByCode(fullUrl);
     expect(byUrl.success).toBe(true);
     expect(byUrl.exam?.id).toBe(EXAM_UUID);
+
+    const newShortUrl = "https://truongthuyhtq.vercel.app/583214";
+    const byNewUrl = await findAssignmentOrExamByCode(newShortUrl);
+    expect(byNewUrl.success).toBe(true);
+    expect(byNewUrl.exam?.id).toBe(EXAM_UUID);
+    expect(byNewUrl.assignment?.code).toBe("583214");
   });
 
   it("5. Hỗ trợ chế độ Đội/Nhóm (/team/:id) và giao bài theo từng lớp", async () => {
@@ -439,7 +450,7 @@ describe("Short Exam Links (/e/:code)", () => {
     expect(getLocalShortLinks().length).toBeGreaterThan(0);
   });
 
-  it("7. Giao diện Share.tsx chỉ hiển thị duy nhất LINK LÀM BÀI NGẮN, không hiển thị link gốc và tạo QR từ link ngắn", async () => {
+  it("7. Giao diện Share.tsx tạo link ngắn dùng trực tiếp mã 6 chữ số (/<6-digit>) và tạo QR từ link đó", async () => {
     const exam = createSampleTeacherExam();
     mockState.exams.set(EXAM_UUID, exam);
 
@@ -457,7 +468,7 @@ describe("Short Exam Links (/e/:code)", () => {
 
     const shortInput = screen.getByLabelText("Link làm bài ngắn") as HTMLInputElement;
     await waitFor(() => {
-      expect(shortInput.value).toMatch(/\/e\/[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
+      expect(shortInput.value).toMatch(/\/583214$/);
     });
 
     // Không hiển thị link gốc hoặc nút sao chép link gốc
@@ -468,14 +479,14 @@ describe("Short Exam Links (/e/:code)", () => {
     expect(screen.getByRole("button", { name: /Sao chép link ngắn/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Mở link/i })).toHaveAttribute(
       "href",
-      expect.stringMatching(/^\/e\/[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/)
+      "/583214"
     );
     expect(screen.getByRole("button", { name: /Tạo QR Code/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Sao chép link ngắn/i }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(shortInput.value);
 
-    // Mở modal QR Code -> link trong modal QR cũng là link ngắn
+    // Mở modal QR Code -> link trong modal QR cũng là link ngắn /583214
     fireEvent.click(screen.getByRole("button", { name: /Tạo QR Code/i }));
     await waitFor(() => {
       const inputs = screen.getAllByLabelText("Link làm bài ngắn") as HTMLInputElement[];
@@ -484,7 +495,7 @@ describe("Short Exam Links (/e/:code)", () => {
     });
   });
 
-  it("8. QuickExamShareModal chỉ hiển thị duy nhất link ngắn, nút Sao chép, Mở link và Tạo QR Code", async () => {
+  it("8. QuickExamShareModal chỉ hiển thị link ngắn dùng mã 6 chữ số (/<6-digit>), nút Sao chép, Mở link và Tạo QR Code", async () => {
     const exam = createSampleTeacherExam();
     mockState.exams.set(EXAM_UUID, exam);
 
@@ -500,7 +511,7 @@ describe("Short Exam Links (/e/:code)", () => {
 
     const shortInput = screen.getByLabelText("Link làm bài ngắn") as HTMLInputElement;
     await waitFor(() => {
-      expect(shortInput.value).toMatch(/\/e\/[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
+      expect(shortInput.value).toMatch(/\/583214$/);
     });
 
     expect(screen.queryByLabelText("Link làm bài gốc")).toBeNull();
@@ -508,33 +519,51 @@ describe("Short Exam Links (/e/:code)", () => {
     expect(container.innerHTML).not.toContain(`/take/${EXAM_UUID}`);
 
     expect(screen.getByRole("button", { name: /Sao chép link ngắn/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Mở link/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Mở link/i })).toHaveAttribute("href", "/583214");
     expect(screen.getByRole("button", { name: /Tạo QR Code/i })).toBeInTheDocument();
   });
 
-  it("9. Route /e/:code điều hướng đúng học sinh vào trang làm bài và báo lỗi rõ ràng khi mã không tồn tại", async () => {
+  it("9. Route /:code (6 chữ số) và legacy /e/:code đều điều hướng đúng học sinh vào trang làm bài; path không phải mã trả về NotFound", async () => {
     const exam = createSampleTeacherExam();
     mockState.exams.set(EXAM_UUID, exam);
+    await syncExamAssignmentCodes(exam);
     const link = await ensureExamShortLink({ exam });
 
-    const { unmount } = render(
-      <MemoryRouter initialEntries={[`/e/${link.shortCode}`]}>
+    // A. Route mới dạng /583214
+    const firstRender = render(
+      <MemoryRouter initialEntries={["/583214"]}>
         <Routes>
-          <Route path="/e/:code" element={<ShortLinkRedirect />} />
-          <Route path="/take/:id" element={<div data-testid="take-landing">Exam Loaded</div>} />
+          <Route path="/:code" element={<ShortLinkRedirect />} />
+          <Route path="/take/:id" element={<div data-testid="take-landing-new">Exam Loaded New</div>} />
         </Routes>
       </MemoryRouter>
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("take-landing")).toBeInTheDocument();
+      expect(screen.getByTestId("take-landing-new")).toBeInTheDocument();
     });
-    unmount();
+    firstRender.unmount();
 
-    render(
-      <MemoryRouter initialEntries={["/e/KHONG9"]}>
+    // B. Route legacy /e/:code vẫn hoạt động bình thường
+    const legacyRender = render(
+      <MemoryRouter initialEntries={[`/e/${link.shortCode}`]}>
         <Routes>
           <Route path="/e/:code" element={<ShortLinkRedirect />} />
+          <Route path="/take/:id" element={<div data-testid="take-landing-legacy">Exam Loaded Legacy</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("take-landing-legacy")).toBeInTheDocument();
+    });
+    legacyRender.unmount();
+
+    // C. Mã 6 chữ số không tồn tại -> báo lỗi Không tìm thấy bài thi
+    const missingRender = render(
+      <MemoryRouter initialEntries={["/999999"]}>
+        <Routes>
+          <Route path="/:code" element={<ShortLinkRedirect />} />
         </Routes>
       </MemoryRouter>
     );
@@ -543,5 +572,17 @@ describe("Short Exam Links (/e/:code)", () => {
       expect(screen.getByText("Không tìm thấy bài thi")).toBeInTheDocument();
     });
     expect(screen.getByRole("link", { name: /Nhập mã bài thi khác/i })).toBeInTheDocument();
+    missingRender.unmount();
+
+    // D. Đường dẫn không phải mã 6 chữ số -> hiển thị trang 404 NotFound
+    render(
+      <MemoryRouter initialEntries={["/khong-phai-ma"]}>
+        <Routes>
+          <Route path="/:code" element={<ShortLinkRedirect />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("404")).toBeInTheDocument();
   });
 });

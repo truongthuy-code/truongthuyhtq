@@ -167,7 +167,13 @@ export default function Share() {
   const mainUrl = primaryCode
     ? `${publicOrigin}/take/${id}?code=${encodeURIComponent(primaryCode)}`
     : `${publicOrigin}/take/${id}`;
-  const shortUrl = shortCode ? getShortExamUrl(shortCode) : "";
+  const primaryLinkCode = /^\d{6}$/.test(primaryCode) ? primaryCode : shortCode;
+  const shortUrl = primaryLinkCode ? getShortExamUrl(primaryLinkCode) : "";
+  const primaryLinkPath = primaryLinkCode
+    ? /^\d{6}$/.test(primaryLinkCode)
+      ? `/${primaryLinkCode}`
+      : `/e/${primaryLinkCode}`
+    : "";
   const qrUrl = shortUrl || mainUrl;
   const lbUrl = `${publicOrigin}/leaderboard/${id}`;
   const isTeam = exam.display_mode === "team";
@@ -442,7 +448,7 @@ export default function Share() {
                     >
                       <Copy className="size-3.5" /> Sao chép link ngắn
                     </Button>
-                    {shortCode && (
+                    {primaryLinkPath && (
                       <Button
                         type="button"
                         variant="outline"
@@ -450,7 +456,7 @@ export default function Share() {
                         asChild
                         className="h-10 px-3 rounded-xl gap-1.5 font-bold text-xs border-primary/30 bg-background"
                       >
-                        <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                        <Link to={primaryLinkPath} target="_blank" rel="noopener noreferrer">
                           <ExternalLink className="size-3.5" /> Mở link
                         </Link>
                       </Button>
@@ -494,9 +500,9 @@ export default function Share() {
                 <BarChart3 className="size-4 mr-1.5" /> Xem kết quả làm bài
               </Link>
             </Button>
-            {shortCode && (
+            {primaryLinkPath && (
               <Button asChild className="rounded-xl font-bold bg-primary text-primary-foreground">
-                <Link to={`/e/${shortCode}`} target="_blank" rel="noopener noreferrer">
+                <Link to={primaryLinkPath} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="size-4 mr-1.5" /> Thử làm bài (Xem trước)
                 </Link>
               </Button>
@@ -603,7 +609,13 @@ export default function Share() {
               <div className="divide-y rounded-2xl border bg-card overflow-hidden">
                 {assignments.map((assign) => {
                   const assignUrl = getExamShareUrl(assign.examId, assign.code);
-                  const assignShortUrl = assign.shortCode ? getShortExamUrl(assign.shortCode) : "";
+                  const assignLinkCode = /^\d{6}$/.test(assign.code) ? assign.code : (assign.shortCode || "");
+                  const assignShortUrl = assignLinkCode ? getShortExamUrl(assignLinkCode) : "";
+                  const assignLinkPath = assignLinkCode
+                    ? /^\d{6}$/.test(assignLinkCode)
+                      ? `/${assignLinkCode}`
+                      : `/e/${assignLinkCode}`
+                    : "";
                   const assignQrUrl = assignShortUrl || assignUrl;
                   return (
                     <div key={assign.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-muted/30 transition-colors">
@@ -617,7 +629,7 @@ export default function Share() {
                             <span className="px-2 py-0.5 rounded-lg bg-primary/10 text-primary font-mono font-black text-xs">
                               {assign.code}
                             </span>
-                            {assign.shortCode && (
+                            {assignShortUrl && (
                               <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-mono font-bold text-xs border border-emerald-500/20">
                                 {assignShortUrl}
                               </span>
@@ -648,14 +660,14 @@ export default function Share() {
                             <Link2 className="size-3" /> Sao chép link
                           </Button>
                         )}
-                        {assign.shortCode && (
+                        {assignLinkPath && (
                           <Button
                             size="sm"
                             variant="outline"
                             asChild
                             className="h-8 rounded-lg text-xs font-semibold gap-1"
                           >
-                            <Link to={`/e/${assign.shortCode}`} target="_blank" rel="noopener noreferrer">
+                            <Link to={assignLinkPath} target="_blank" rel="noopener noreferrer">
                               <ExternalLink className="size-3" /> Mở link
                             </Link>
                           </Button>
